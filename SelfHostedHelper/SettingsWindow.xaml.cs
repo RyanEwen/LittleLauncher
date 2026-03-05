@@ -1,4 +1,5 @@
 using SelfHostedHelper.Classes.Settings;
+using SelfHostedHelper.Models;
 using SelfHostedHelper.Pages;
 using SelfHostedHelper.Services;
 using System.Windows;
@@ -69,6 +70,16 @@ public partial class SettingsWindow : FluentWindow
     public void NavigateTo(Type pageType)
     {
         RootNavigation.Navigate(pageType);
+    }
+
+    /// <summary>
+    /// Open the settings window, navigate to the Launcher Items page, and
+    /// immediately open the edit dialog for the given item.
+    /// </summary>
+    public static void NavigateToEditItem(LauncherItem item)
+    {
+        LauncherItemsPage.PendingEditItem = item;
+        instance?.NavigateTo(typeof(LauncherItemsPage));
     }
 
     private async void SettingsWindow_Loaded(object sender, RoutedEventArgs e)

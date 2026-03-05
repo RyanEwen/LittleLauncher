@@ -179,6 +179,10 @@ public partial class FlyoutWindow : Window
         border.MouseLeave += ItemRow_MouseLeave;
         border.MouseLeftButtonUp += ItemRow_Click;
 
+        var editMenuItem = new MenuItem { Header = "Edit" };
+        editMenuItem.Click += (s, e) => EditItem(item);
+        border.ContextMenu = new ContextMenu { Items = { editMenuItem } };
+
         return border;
     }
 
@@ -281,6 +285,15 @@ public partial class FlyoutWindow : Window
         {
             Logger.Error(ex, $"Failed to launch from flyout: {item.Name} ({item.Path})");
         }
+    }
+
+    private void EditItem(LauncherItem item)
+    {
+        Hide();
+        _lastDismissed = DateTime.UtcNow;
+
+        SettingsWindow.ShowInstance();
+        SettingsWindow.NavigateToEditItem(item);
     }
 
     private void ItemRow_MouseEnter(object sender, MouseEventArgs e)

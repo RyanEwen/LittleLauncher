@@ -15,11 +15,26 @@ namespace SelfHostedHelper.Pages;
 
 public partial class LauncherItemsPage : Page
 {
+    /// <summary>
+    /// When set, the edit dialog for this item opens automatically after the page loads.
+    /// </summary>
+    internal static LauncherItem? PendingEditItem { get; set; }
+
     public LauncherItemsPage()
     {
         InitializeComponent();
         DataContext = SettingsManager.Current;
         RefreshList();
+        Loaded += LauncherItemsPage_Loaded;
+    }
+
+    private async void LauncherItemsPage_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (PendingEditItem is { } item)
+        {
+            PendingEditItem = null;
+            await ShowItemDialog(item);
+        }
     }
 
     private void RefreshList()
