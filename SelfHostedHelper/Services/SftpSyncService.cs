@@ -124,6 +124,9 @@ public static class SftpSyncService
             current.SftpAutoSyncOnClose = savedAutoSyncOnClose;
             SettingsManager.SaveSettings();
 
+            // Fetch missing web icons in the background (fire-and-forget)
+            _ = FetchMissingIconsAsync();
+
             Logger.Info($"Settings downloaded from {remotePath}");
             return (true, $"Settings downloaded from {SettingsManager.Current.SftpHost}. Restart for full effect.");
         }
@@ -287,45 +290,77 @@ public static class SftpSyncService
     }
 
     /// <summary>
-    /// Serialize settings to a MemoryStream with SSH connection fields blanked out.
+    /// Iterates launcher items that are websites and fetches any missing favicons.
+    /// Called after downloading settings so synced items get their icons on this machine.
+    /// </summary>
+    private static async Task FetchMissingIconsAsync()
+    {
+        var items = SettingsManager.Current.LauncherItems;
+        bool changed = false;
+
+        foreach (var item in items)
+        {
+            if (!item.IsWebsite || string.IsNullOrWhiteSpace(item.Path))
+                continue;
+
+            // Already has a valid local icon
+            if (!string.IsNullOrEmpty(item.IconPath) && File.Exists(item.IconPath))
+                continue;
+
+            try
+            {
+                var cached = FaviconService.GetCachedPath(item.Path);
+                if (cached != null)
+                {
+                    item.IconPath = cached;
+                    changed = true;
+                    continue;
+                }
+
+                var iconPath = await FaviconService.FetchAndCacheAsync(item.Path);
+                if (!string.IsNullOrEmpty(iconPath))
+                {
+                    item.IconPath = iconPath;
+                    changed = true;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn(ex, $"Failed to fetch icon for {item.Path}");
+            }
+        }
+
+        if (changed)
+            SettingsManager.SaveSettings();
+    }
+
+    /// <summary>
+    /// Serialize settings to a MemoryStream with SSH connection fields excluded entirely.
     /// These are machine-specific and shouldn't be synced between devices.
     /// </summary>
     private static MemoryStream SerializeWithoutSshSettings(UserSettings settings)
     {
-        // Temporarily blank SSH fields, serialize, then restore
-        string host = settings.SftpHost;
-        int port = settings.SftpPort;
-        string user = settings.SftpUsername;
-        string key = settings.SftpPrivateKeyPath;
-        string remote = settings.SftpRemotePath;
-        bool autoSync = settings.SftpAutoSync;
-        bool autoSyncOnClose = settings.SftpAutoSyncOnClose;
-
-        try
+        // Use XmlAttributeOverrides to completely exclude SFTP properties from the output
+        var overrides = new XmlAttributeOverrides();
+        var ignore = new XmlAttributes { XmlIgnore = true };
+        foreach (var prop in new[]
         {
-            settings.SftpHost = "";
-            settings.SftpPort = 22;
-            settings.SftpUsername = "";
-            settings.SftpPrivateKeyPath = "";
-            settings.SftpRemotePath = "~/.config/TaskbarLauncher/";
-            settings.SftpAutoSync = false;
-            settings.SftpAutoSyncOnClose = false;
-
-            var stream = new MemoryStream();
-            var serializer = new XmlSerializer(typeof(UserSettings));
-            serializer.Serialize(stream, settings);
-            stream.Position = 0;
-            return stream;
-        }
-        finally
+            nameof(UserSettings.SftpHost),
+            nameof(UserSettings.SftpPort),
+            nameof(UserSettings.SftpUsername),
+            nameof(UserSettings.SftpPrivateKeyPath),
+            nameof(UserSettings.SftpRemotePath),
+            nameof(UserSettings.SftpAutoSync),
+            nameof(UserSettings.SftpAutoSyncOnClose),
+        })
         {
-            settings.SftpHost = host;
-            settings.SftpPort = port;
-            settings.SftpUsername = user;
-            settings.SftpPrivateKeyPath = key;
-            settings.SftpRemotePath = remote;
-            settings.SftpAutoSync = autoSync;
-            settings.SftpAutoSyncOnClose = autoSyncOnClose;
+            overrides.Add(typeof(UserSettings), prop, ignore);
         }
+
+        var stream = new MemoryStream();
+        var serializer = new XmlSerializer(typeof(UserSettings), overrides);
+        serializer.Serialize(stream, settings);
+        stream.Position = 0;
+        return stream;
     }
 }
