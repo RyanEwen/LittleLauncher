@@ -3,7 +3,10 @@ using SelfHostedHelper.Classes.Settings;
 using SelfHostedHelper.Windows;
 using SelfHostedHelper.Services;
 using SelfHostedHelper.ViewModels;
+using System.IO;
 using System.Windows;
+using System.Windows.Interop;
+using System.Windows.Threading;
 using static SelfHostedHelper.Classes.NativeMethods;
 
 namespace SelfHostedHelper;
@@ -15,7 +18,8 @@ namespace SelfHostedHelper;
 ///   - This window is never actually displayed (Width/Height = 0, Visibility = Hidden).
 ///   - Its sole purpose is to own the tray NotifyIcon and the TaskbarWindow.
 ///   - A Mutex ("TaskbarLauncher") prevents multiple instances.
-///   - An EventWaitHandle lets a second instance signal the first to open settings.
+///   - A registered window message lets a second instance or LauncherShortcut
+///     signal the first to show the flyout via PostMessage.
 ///   - TaskbarWindow is a child of the real Windows taskbar (Shell_TrayWnd) via SetParent.
 /// </summary>
 public partial class MainWindow : Window
@@ -25,6 +29,8 @@ public partial class MainWindow : Window
     private static readonly Mutex Singleton = new(true, "TaskbarLauncher");
 
     internal TaskbarWindow? taskbarWindow;
+    private static int _wmShowFlyout;
+    private static int _wmShowSettings;
 
     /// <summary>
     /// Set by TaskbarWindow when Explorer is restarting so we can avoid
@@ -37,19 +43,23 @@ public partial class MainWindow : Window
         // ── Singleton check ─────────────────────────────────────────
         if (!Singleton.WaitOne(TimeSpan.Zero, true))
         {
-            // Another instance is running — signal it to show the flyout, then exit.
-            Task.Run(() =>
+            // Another instance is running — signal it and exit.
+            IntPtr target = FindWindow(null, "TaskbarLauncher Host");
+
+            string[] args = Environment.GetCommandLineArgs();
+            if (args.Length > 1 && args[1] == "--settings")
             {
-                try
-                {
-                    using var evt = new EventWaitHandle(false, EventResetMode.AutoReset, "TaskbarLauncher_ShowFlyout");
-                    evt.Set();
-                }
-                catch (Exception ex)
-                {
-                    Logger.Error(ex, "Failed to signal existing instance");
-                }
-            });
+                int msg = RegisterWindowMessage("TaskbarLauncher_ShowSettings");
+                if (target != IntPtr.Zero && msg != 0)
+                    PostMessage(target, msg, IntPtr.Zero, IntPtr.Zero);
+            }
+            else
+            {
+                GetCursorPos(out var pt);
+                int msg = RegisterWindowMessage("TaskbarLauncher_ShowFlyout");
+                if (target != IntPtr.Zero && msg != 0)
+                    PostMessage(target, msg, (IntPtr)pt.X, (IntPtr)pt.Y);
+            }
 
             Environment.Exit(0);
         }
@@ -59,27 +69,9 @@ public partial class MainWindow : Window
 
         Logger.Info("Starting TaskbarLauncher MainWindow");
 
-        // Listen for flyout signals (second instance launch or companion exe)
-        Task.Run(() =>
-        {
-            try
-            {
-                using var evt = new EventWaitHandle(false, EventResetMode.AutoReset, "TaskbarLauncher_ShowFlyout");
-                while (true)
-                {
-                    evt.WaitOne();
-                    Application.Current.Dispatcher.Invoke(() =>
-                    {
-                        GetCursorPos(out var pt);
-                        FlyoutWindow.Toggle(new Point(pt.X, pt.Y));
-                    });
-                }
-            }
-            catch (Exception ex)
-            {
-                Logger.Error(ex, "Flyout event listener error");
-            }
-        });
+        // Register the window message for cross-process flyout signaling
+        _wmShowFlyout = RegisterWindowMessage("TaskbarLauncher_ShowFlyout");
+        _wmShowSettings = RegisterWindowMessage("TaskbarLauncher_ShowSettings");
 
         // ── Restore settings ────────────────────────────────────────
         // Settings are restored in App.OnStartup before MainWindow is created.
@@ -123,11 +115,21 @@ public partial class MainWindow : Window
         int exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
         SetWindowLong(hwnd, GWL_EXSTYLE, exStyle | WS_EX_TOOLWINDOW);
 
+        // Hook WndProc for cross-process PostMessage IPC
+        var source = HwndSource.FromHwnd(hwnd);
+        source?.AddHook(WndProc);
+
         // Now that Application.Current.MainWindow is set, finish init
         ApplyDeferredInit();
 
+        // Ensure Start Menu shortcuts exist
+        EnsureStartMenuShortcuts();
+
         // Create the taskbar widget
         UpdateTaskbar();
+
+        // Pre-create the flyout so the first toggle is instant
+        FlyoutWindow.WarmUp();
 
         // Auto-sync from SFTP if enabled
         if (SettingsManager.Current.SftpAutoSync)
@@ -135,7 +137,14 @@ public partial class MainWindow : Window
             try
             {
                 var (success, message) = await SftpSyncService.DownloadSettingsAsync();
-                if (success) Logger.Info("Auto-synced settings from SFTP");
+                if (success)
+                {
+                    Logger.Info("Auto-synced settings from SFTP");
+                    // RestoreSettings replaces the singleton — rebind and re-apply
+                    DataContext = SettingsManager.Current;
+                    ApplyDeferredInit();
+                    UpdateTaskbar();
+                }
                 else Logger.Warn($"Auto-sync skipped: {message}");
             }
             catch (Exception ex)
@@ -187,11 +196,29 @@ public partial class MainWindow : Window
         taskbarWindow = new TaskbarWindow();
     }
 
+    // ── WndProc — handle cross-process PostMessage IPC ────────────
+
+    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (msg == _wmShowFlyout && _wmShowFlyout != 0)
+        {
+            var anchor = new Point((int)wParam, (int)lParam);
+            Dispatcher.BeginInvoke(() => FlyoutWindow.Toggle(anchor));
+            handled = true;
+        }
+        else if (msg == _wmShowSettings && _wmShowSettings != 0)
+        {
+            Dispatcher.BeginInvoke(() => SettingsWindow.ShowInstance());
+            handled = true;
+        }
+        return IntPtr.Zero;
+    }
+
     // ── Tray icon event handlers ────────────────────────────────────
 
     private void nIcon_LeftClick(object sender, RoutedEventArgs e)
     {
-        NativeMethods.GetCursorPos(out var pt);
+        GetCursorPos(out var pt);
         FlyoutWindow.Toggle(new Point(pt.X, pt.Y));
     }
 
@@ -206,5 +233,82 @@ public partial class MainWindow : Window
         taskbarWindow?.Close();
         nIcon.Dispose();
         Application.Current.Shutdown();
+    }
+
+    // ── Start Menu shortcut ─────────────────────────────────────────
+
+    private static void EnsureStartMenuShortcuts()
+    {
+        try
+        {
+            string startMenuDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.StartMenu),
+                "Programs");
+
+            string exePath = Environment.ProcessPath ?? "";
+            if (string.IsNullOrEmpty(exePath) || !File.Exists(exePath))
+                return;
+
+            Directory.CreateDirectory(startMenuDir);
+
+            string system32 = Environment.GetFolderPath(Environment.SpecialFolder.System);
+
+            // Main app shortcut — globe icon (shell32.dll index 14)
+            CreateShortcutIfMissing(
+                Path.Combine(startMenuDir, "SelfHostedHelper.lnk"),
+                exePath,
+                arguments: null,
+                "SelfHostedHelper",
+                $"{system32}\\shell32.dll,14");
+
+            // Settings shortcut — cog icon (imageres.dll index 109)
+            CreateShortcutIfMissing(
+                Path.Combine(startMenuDir, "SelfHostedHelper Settings.lnk"),
+                exePath,
+                "--settings",
+                "Open SelfHostedHelper Settings",
+                $"{system32}\\imageres.dll,109");
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn(ex, "Failed to create Start Menu shortcuts");
+        }
+    }
+
+    private static void CreateShortcutIfMissing(
+        string shortcutPath, string exePath, string? arguments,
+        string description, string iconLocation)
+    {
+        if (File.Exists(shortcutPath))
+            return;
+
+        var shellType = Type.GetTypeFromProgID("WScript.Shell");
+        if (shellType == null) return;
+
+        dynamic? shell = Activator.CreateInstance(shellType);
+        if (shell == null) return;
+
+        try
+        {
+            dynamic shortcut = shell.CreateShortcut(shortcutPath);
+            try
+            {
+                shortcut.TargetPath = exePath;
+                if (arguments != null)
+                    shortcut.Arguments = arguments;
+                shortcut.WorkingDirectory = Path.GetDirectoryName(exePath);
+                shortcut.Description = description;
+                shortcut.IconLocation = iconLocation;
+                shortcut.Save();
+            }
+            finally
+            {
+                System.Runtime.InteropServices.Marshal.ReleaseComObject(shortcut);
+            }
+        }
+        finally
+        {
+            System.Runtime.InteropServices.Marshal.ReleaseComObject(shell);
+        }
     }
 }

@@ -18,8 +18,16 @@ public static class NativeMethods
     internal const int GWL_EXSTYLE = -20;
     internal const int WS_CHILD = 0x40000000;
     internal const int WS_POPUP = unchecked((int)0x80000000);
+    internal const int WS_OVERLAPPEDWINDOW = 0x00CF0000; // WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX
+    internal const int WS_VISIBLE = 0x10000000;
     internal const int WS_EX_NOACTIVATE = 0x08000000;
     internal const int WS_EX_TOOLWINDOW = 0x00000080;
+
+    // Window Event Hook Constants
+    internal const uint EVENT_OBJECT_DESTROY = 0x8001;
+    internal const uint EVENT_OBJECT_LOCATIONCHANGE = 0x800B;
+    internal const uint WINEVENT_OUTOFCONTEXT = 0x0000;
+    internal const int OBJID_WINDOW = 0;
 
     // SetWindowPos Flags
     internal const int HWND_TOPMOST = -1;
@@ -29,6 +37,7 @@ public static class NativeMethods
     internal const uint SWP_SHOWWINDOW = 0x0040;
     internal const uint SWP_ASYNCWINDOWPOS = 0x4000;
     internal const uint SWP_NOACTIVATE = 0x0010;
+    internal const uint SWP_FRAMECHANGED = 0x0020;
 
     // Monitor Flags
     internal const int MONITOR_DEFAULTTONEAREST = 2;
@@ -140,13 +149,14 @@ public static class NativeMethods
 
     internal delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
     internal delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdcMonitor, ref RECT lprcMonitor, IntPtr dwData);
+    internal delegate void WinEventProc(IntPtr hWinEventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime);
 
     #endregion
 
     #region user32.dll
 
     [DllImport("user32.dll", SetLastError = true)]
-    internal static extern IntPtr FindWindow(string lpClassName, string? lpWindowName);
+    internal static extern IntPtr FindWindow(string? lpClassName, string? lpWindowName);
 
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern IntPtr FindWindowEx(IntPtr parentHandle, IntPtr childAfter, string? className, string? windowTitle);
@@ -170,7 +180,7 @@ public static class NativeMethods
     internal static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
 
     [DllImport("user32.dll", SetLastError = true)]
-    internal static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr lpdwProcessId);
+    internal static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
     [DllImport("user32.dll")]
     internal static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
@@ -212,12 +222,51 @@ public static class NativeMethods
     [DllImport("user32.dll")]
     internal static extern IntPtr MonitorFromPoint(POINT pt, int dwFlags);
 
+    [DllImport("user32.dll")]
+    internal static extern uint GetDoubleClickTime();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool PostMessage(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool IsWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool IsZoomed(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr SetWinEventHook(uint eventMin, uint eventMax, IntPtr hmodWinEventProc, WinEventProc lpfnWinEventProc, uint idProcess, uint idThread, uint dwFlags);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool UnhookWinEvent(IntPtr hWinEventHook);
+
+    internal const int SW_MAXIMIZE = 3;
+
     #endregion
 
     #region shcore.dll
 
     [DllImport("shcore.dll")]
     internal static extern int GetDpiForMonitor(IntPtr hMonitor, MonitorDpiType dpiType, out uint dpiX, out uint dpiY);
+
+    #endregion
+
+    #region shlwapi.dll
+
+    internal const int ASSOCF_NONE = 0;
+    internal const int ASSOCSTR_EXECUTABLE = 2;
+
+    [DllImport("shlwapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern int AssocQueryString(
+        int flags, int str, string pszAssoc, string? pszExtra, StringBuilder pszOut, ref int pcchOut);
 
     #endregion
 }

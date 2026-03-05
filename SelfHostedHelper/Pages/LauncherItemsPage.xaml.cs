@@ -1,9 +1,13 @@
+using SelfHostedHelper.Classes;
 using SelfHostedHelper.Classes.Settings;
 using SelfHostedHelper.Models;
 using SelfHostedHelper.Services;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
+using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Microsoft.Win32;
@@ -13,12 +17,33 @@ using Image = System.Windows.Controls.Image;
 
 namespace SelfHostedHelper.Pages;
 
+/// <summary>
+/// Selects the correct DataTemplate based on whether the item is a category or a launchable item.
+/// </summary>
+public class LauncherItemTemplateSelector : DataTemplateSelector
+{
+    public DataTemplate? LauncherItemTemplate { get; set; }
+    public DataTemplate? CategoryItemTemplate { get; set; }
+
+    public override DataTemplate? SelectTemplate(object item, DependencyObject container)
+    {
+        if (item is LauncherItem { IsCategory: true })
+            return CategoryItemTemplate;
+        return LauncherItemTemplate;
+    }
+}
+
 public partial class LauncherItemsPage : Page
 {
     /// <summary>
     /// When set, the edit dialog for this item opens automatically after the page loads.
     /// </summary>
     internal static LauncherItem? PendingEditItem { get; set; }
+
+    // ── Drag-and-drop state ─────────────────────────────────────────
+    private LauncherItem? _draggedItem;
+    private Border? _dropIndicator;
+    private int _dropTargetIndex = -1;
 
     public LauncherItemsPage()
     {
@@ -33,7 +58,10 @@ public partial class LauncherItemsPage : Page
         if (PendingEditItem is { } item)
         {
             PendingEditItem = null;
-            await ShowItemDialog(item);
+            if (item.IsCategory)
+                await ShowCategoryDialog(item);
+            else
+                await ShowItemDialog(item);
         }
     }
 
@@ -48,10 +76,93 @@ public partial class LauncherItemsPage : Page
         await ShowItemDialog(null);
     }
 
+    private async void ShowAddCategoryDialog_Click(object sender, RoutedEventArgs e)
+    {
+        await ShowCategoryDialog(null);
+    }
+
+    private async Task ShowCategoryDialog(LauncherItem? existingItem)
+    {
+        bool isEdit = existingItem != null;
+
+        var nameBox = new Wpf.Ui.Controls.TextBox
+        {
+            PlaceholderText = "Category name",
+            ClearButtonEnabled = true,
+            Margin = new Thickness(0, 0, 0, 8)
+        };
+
+        if (isEdit)
+            nameBox.Text = existingItem!.Name;
+
+        var validationHint = new System.Windows.Controls.TextBlock
+        {
+            Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Colors.OrangeRed),
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 8, 0, 0)
+        };
+
+        var form = new StackPanel { MinWidth = 400 };
+        form.Children.Add(Label("Name"));
+        form.Children.Add(nameBox);
+        form.Children.Add(validationHint);
+
+        var dialog = new ContentDialog()
+        {
+            DialogHostEx = (Wpf.Ui.Controls.ContentDialogHost)Window.GetWindow(this).FindName("DialogHost"),
+            Title = isEdit ? "Edit Category" : "Add Category",
+            Content = form,
+            PrimaryButtonText = isEdit ? "Save" : "Add",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary
+        };
+
+        void ValidateForm()
+        {
+            if (string.IsNullOrWhiteSpace(nameBox.Text))
+            {
+                validationHint.Text = "Name is required.";
+                validationHint.Visibility = Visibility.Visible;
+                dialog.IsPrimaryButtonEnabled = false;
+            }
+            else
+            {
+                validationHint.Visibility = Visibility.Collapsed;
+                dialog.IsPrimaryButtonEnabled = true;
+            }
+        }
+
+        nameBox.TextChanged += (s, ev) => ValidateForm();
+        ValidateForm();
+
+        var result = await dialog.ShowAsync();
+        if (result != ContentDialogResult.Primary) return;
+
+        var name = nameBox.Text.Trim();
+
+        if (isEdit)
+        {
+            existingItem!.Name = name;
+        }
+        else
+        {
+            SettingsManager.Current.LauncherItems.Add(LauncherItem.CreateCategory(name));
+        }
+
+        RefreshList();
+        SaveAndUpdateTaskbar();
+    }
+
     private async void EditItem_Click(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement fe && fe.Tag is LauncherItem item)
-            await ShowItemDialog(item);
+        {
+            if (item.IsCategory)
+                await ShowCategoryDialog(item);
+            else
+                await ShowItemDialog(item);
+        }
     }
 
     private async Task ShowItemDialog(LauncherItem? existingItem)
@@ -61,6 +172,9 @@ public partial class LauncherItemsPage : Page
         // Track state for this dialog session
         string fetchedIconPath = existingItem?.IconPath ?? "";
         bool isWebsite = existingItem?.IsWebsite ?? true; // default to website
+        bool openInAppWindow = existingItem?.OpenInAppWindow ?? false;
+        string appWindowBrowser = existingItem?.AppWindowBrowser ?? "";
+        string appWindowBrowserProfile = existingItem?.AppWindowBrowserProfile ?? "";
 
         // ── 1. Type selector ────────────────────────────────────────
         var typeCombo = new ComboBox { Margin = new Thickness(0, 0, 0, 8) };
@@ -121,7 +235,184 @@ public partial class LauncherItemsPage : Page
             Margin = new Thickness(0, 0, 0, 8)
         };
 
-        // ── 4. Name ─────────────────────────────────────────────────
+        // ── 4. Web app window mode (Website only) ──────────────────
+        var appWindowToggle = new Wpf.Ui.Controls.ToggleSwitch
+        {
+            Content = "Open as app window",
+            OffContent = "Use normal browser tab",
+            OnContent = "Open in standalone window",
+            IsChecked = openInAppWindow,
+            Margin = new Thickness(0, 0, 0, 8)
+        };
+
+        // ── 4a. Browser picker (visible when app window enabled) ────
+        var browserLabel = Label("Browser");
+        var browserCombo = new ComboBox { Margin = new Thickness(0, 0, 0, 8), MinWidth = 340 };
+        var installedBrowsers = GetInstalledBrowsers();
+        browserCombo.Items.Add(new ComboBoxItem { Content = "Default browser", Tag = "" });
+        foreach (var browser in installedBrowsers)
+            browserCombo.Items.Add(new ComboBoxItem { Content = browser.DisplayName, Tag = browser.ExePath });
+        browserCombo.Items.Add(new ComboBoxItem { Content = "Custom\u2026", Tag = "__custom__" });
+
+        // ── 4b. Profile picker (visible when app window enabled) ────
+        var profileLabel = Label("Profile");
+        var profileCombo = new ComboBox { Margin = new Thickness(0, 0, 0, 8), MinWidth = 340 };
+
+        void PopulateProfileCombo()
+        {
+            profileCombo.Items.Clear();
+
+            // Determine engine for label purposes
+            BrowserEngine currentEngine;
+            if (string.IsNullOrEmpty(appWindowBrowser))
+            {
+                string? defaultExe = GetDefaultBrowserExePath();
+                currentEngine = defaultExe != null ? DetectEngine(defaultExe) : BrowserEngine.Chromium;
+            }
+            else
+            {
+                var match = installedBrowsers.FirstOrDefault(b =>
+                    string.Equals(b.ExePath, appWindowBrowser, StringComparison.OrdinalIgnoreCase));
+                currentEngine = match?.Engine ?? DetectEngine(appWindowBrowser);
+            }
+
+            string sandboxLabel = "App sandbox (isolated)";
+            profileCombo.Items.Add(new ComboBoxItem { Content = sandboxLabel, Tag = "" });
+
+            // Gecko always uses an isolated sandbox (userChrome.css is profile-wide),
+            // so only Chromium gets additional profile options.
+            if (currentEngine != BrowserEngine.Gecko)
+            {
+                if (string.IsNullOrEmpty(appWindowBrowser))
+                {
+                    // Default browser: only offer sandbox or default profile
+                    profileCombo.Items.Add(new ComboBoxItem { Content = "Default profile", Tag = "__default__" });
+                }
+                else
+                {
+                    // Specific browser selected: enumerate its real profiles
+                    var match = installedBrowsers.FirstOrDefault(b =>
+                        string.Equals(b.ExePath, appWindowBrowser, StringComparison.OrdinalIgnoreCase));
+                    string profileDataDir = match?.ProfileDataDir ?? "";
+
+                    foreach (var profile in GetBrowserProfiles(profileDataDir, currentEngine))
+                    {
+                        string label = profile.DisplayName == profile.DirectoryName
+                            ? profile.DisplayName
+                            : $"{profile.DisplayName} ({Path.GetFileName(profile.DirectoryName)})";
+                        profileCombo.Items.Add(new ComboBoxItem { Content = label, Tag = profile.DirectoryName });
+                    }
+                }
+            }
+
+            // Restore previous selection
+            int selectedIndex = 0;
+            if (!string.IsNullOrEmpty(appWindowBrowserProfile))
+            {
+                for (int i = 1; i < profileCombo.Items.Count; i++)
+                {
+                    if (profileCombo.Items[i] is ComboBoxItem ci &&
+                        string.Equals(ci.Tag as string, appWindowBrowserProfile, StringComparison.OrdinalIgnoreCase))
+                    {
+                        selectedIndex = i;
+                        break;
+                    }
+                }
+            }
+            profileCombo.SelectedIndex = selectedIndex;
+        }
+
+        profileCombo.SelectionChanged += (s, ev) =>
+        {
+            if (profileCombo.SelectedItem is ComboBoxItem selected)
+                appWindowBrowserProfile = selected.Tag as string ?? "";
+        };
+
+        // Select existing browser
+        int selectedBrowserIndex = 0;
+        if (!string.IsNullOrEmpty(appWindowBrowser))
+        {
+            for (int i = 1; i < browserCombo.Items.Count - 1; i++)
+            {
+                if (browserCombo.Items[i] is ComboBoxItem ci &&
+                    string.Equals(ci.Tag as string, appWindowBrowser, StringComparison.OrdinalIgnoreCase))
+                {
+                    selectedBrowserIndex = i;
+                    break;
+                }
+            }
+            // If not found in known list, add it as a custom entry
+            if (selectedBrowserIndex == 0 && appWindowBrowser != "")
+            {
+                var customItem = new ComboBoxItem
+                {
+                    Content = System.IO.Path.GetFileNameWithoutExtension(appWindowBrowser),
+                    Tag = appWindowBrowser
+                };
+                browserCombo.Items.Insert(browserCombo.Items.Count - 1, customItem);
+                selectedBrowserIndex = browserCombo.Items.Count - 2;
+            }
+        }
+        browserCombo.SelectedIndex = selectedBrowserIndex;
+
+        browserCombo.SelectionChanged += (s, ev) =>
+        {
+            if (browserCombo.SelectedItem is ComboBoxItem selected)
+            {
+                string tag = selected.Tag as string ?? "";
+                if (tag == "__custom__")
+                {
+                    var dlg = new OpenFileDialog
+                    {
+                        Filter = "Browser executable (*.exe)|*.exe",
+                        Title = "Select a browser"
+                    };
+                    if (dlg.ShowDialog() == true)
+                    {
+                        appWindowBrowser = dlg.FileName;
+                        var customItem = new ComboBoxItem
+                        {
+                            Content = System.IO.Path.GetFileNameWithoutExtension(dlg.FileName),
+                            Tag = dlg.FileName
+                        };
+                        browserCombo.Items.Insert(browserCombo.Items.Count - 1, customItem);
+                        browserCombo.SelectedItem = customItem;
+                    }
+                    else
+                    {
+                        browserCombo.SelectedIndex = 0;
+                        appWindowBrowser = "";
+                    }
+                }
+                else
+                {
+                    appWindowBrowser = tag;
+                }
+
+                // Refresh profile list when browser changes
+                PopulateProfileCombo();
+            }
+        };
+
+        PopulateProfileCombo();
+
+        // ── App window sub-options panel ────────────────────────────
+        var appWindowOptionsPanel = new StackPanel { Margin = new Thickness(16, 0, 0, 0) };
+        appWindowOptionsPanel.Children.Add(browserLabel);
+        appWindowOptionsPanel.Children.Add(browserCombo);
+        appWindowOptionsPanel.Children.Add(profileLabel);
+        appWindowOptionsPanel.Children.Add(profileCombo);
+
+        void UpdateAppWindowOptionsVisibility()
+        {
+            appWindowOptionsPanel.Visibility = openInAppWindow && isWebsite
+                ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        appWindowToggle.Checked += (s, ev) => { openInAppWindow = true; UpdateAppWindowOptionsVisibility(); };
+        appWindowToggle.Unchecked += (s, ev) => { openInAppWindow = false; UpdateAppWindowOptionsVisibility(); };
+
+        // ── 5. Name ─────────────────────────────────────────────────
         var nameBox = new Wpf.Ui.Controls.TextBox
         {
             PlaceholderText = "Auto-detected",
@@ -129,7 +420,7 @@ public partial class LauncherItemsPage : Page
             Margin = new Thickness(0, 0, 0, 8)
         };
 
-        // ── 5. Icon ─────────────────────────────────────────────────
+        // ── 6. Icon ─────────────────────────────────────────────────
         var iconPreview = new Image
         {
             Width = 32,
@@ -175,6 +466,8 @@ public partial class LauncherItemsPage : Page
             appPathRow.Visibility = isWebsite ? Visibility.Collapsed : Visibility.Visible;
             argsLabel.Visibility = isWebsite ? Visibility.Collapsed : Visibility.Visible;
             argsBox.Visibility = isWebsite ? Visibility.Collapsed : Visibility.Visible;
+            appWindowToggle.Visibility = isWebsite ? Visibility.Visible : Visibility.Collapsed;
+            UpdateAppWindowOptionsVisibility();
 
             // Clear form when switching type (but not on initial setup)
             if (wasWebsite != isWebsite && !populating)
@@ -188,6 +481,11 @@ public partial class LauncherItemsPage : Page
                 iconPreview.Source = null;
                 iconStatus.Text = "Auto-detected";
                 lastFetchedPath = "";
+                appWindowToggle.IsChecked = false;
+                browserCombo.SelectedIndex = 0;
+                appWindowBrowser = "";
+                profileCombo.SelectedIndex = 0;
+                appWindowBrowserProfile = "";
                 populating = false;
             }
         }
@@ -360,7 +658,7 @@ public partial class LauncherItemsPage : Page
         }
 
         // ── Build form ──────────────────────────────────────────────
-        var form = new StackPanel();
+        var form = new StackPanel { MinWidth = 400 };
         form.Children.Add(Label("Type"));
         form.Children.Add(typeCombo);
         form.Children.Add(pathLabel);
@@ -368,6 +666,8 @@ public partial class LauncherItemsPage : Page
         form.Children.Add(appPathRow);
         form.Children.Add(argsLabel);
         form.Children.Add(argsBox);
+        form.Children.Add(appWindowToggle);
+        form.Children.Add(appWindowOptionsPanel);
         form.Children.Add(Label("Name"));
         form.Children.Add(nameBox);
         form.Children.Add(Label("Icon"));
@@ -439,11 +739,16 @@ public partial class LauncherItemsPage : Page
             existingItem.IconGlyph = glyph;
             existingItem.IconPath = fetchedIconPath;
             existingItem.IsWebsite = isWebsite;
+            existingItem.OpenInAppWindow = isWebsite && openInAppWindow;
+            existingItem.AppWindowBrowser = isWebsite && openInAppWindow ? appWindowBrowser : "";
+            existingItem.AppWindowBrowserProfile = isWebsite && openInAppWindow ? appWindowBrowserProfile : "";
         }
         else
         {
-            SettingsManager.Current.LauncherItems.Add(
-                new LauncherItem(name, finalPath, glyph, isWebsite, args, fetchedIconPath));
+            var newItem = new LauncherItem(name, finalPath, glyph, isWebsite, args, fetchedIconPath, isWebsite && openInAppWindow);
+            newItem.AppWindowBrowser = isWebsite && openInAppWindow ? appWindowBrowser : "";
+            newItem.AppWindowBrowserProfile = isWebsite && openInAppWindow ? appWindowBrowserProfile : "";
+            SettingsManager.Current.LauncherItems.Add(newItem);
         }
 
         RefreshList();
@@ -488,33 +793,434 @@ public partial class LauncherItemsPage : Page
         Margin = new Thickness(0, 0, 0, 4)
     };
 
-    private void MoveUp_Click(object sender, RoutedEventArgs e)
+    // ── Drag-and-drop handlers ──────────────────────────────────────
+
+    private enum BrowserEngine { Chromium, Gecko }
+
+    private record KnownBrowser(string DisplayName, string ExePath, string ProfileDataDir, BrowserEngine Engine);
+
+    private static BrowserEngine DetectEngine(string exePath)
     {
-        if (sender is FrameworkElement fe && fe.Tag is LauncherItem item)
+        // Check for Chromium marker DLLs beside the exe
+        string? dir = Path.GetDirectoryName(exePath);
+        if (dir != null && (File.Exists(Path.Combine(dir, "chrome.dll")) ||
+                            File.Exists(Path.Combine(dir, "msedge.dll"))))
+            return BrowserEngine.Chromium;
+
+        // Check the exe name for known Gecko browsers
+        string name = Path.GetFileNameWithoutExtension(exePath).ToLowerInvariant();
+        if (name is "firefox" or "zen" or "waterfox" or "librewolf" or "floorp" or "mercury" or "firedragon")
+            return BrowserEngine.Gecko;
+
+        return BrowserEngine.Chromium; // default assumption
+    }
+
+    private static string? GetDefaultBrowserExePath()
+    {
+        try
         {
-            var items = SettingsManager.Current.LauncherItems;
-            int index = items.IndexOf(item);
-            if (index > 0)
+            int size = 512;
+            var sb = new System.Text.StringBuilder(size);
+            int hr = NativeMethods.AssocQueryString(
+                NativeMethods.ASSOCF_NONE, NativeMethods.ASSOCSTR_EXECUTABLE,
+                "https", "open", sb, ref size);
+            if (hr == 0)
             {
-                items.Move(index, index - 1);
-                RefreshList();
-                SaveAndUpdateTaskbar();
+                string exePath = sb.ToString();
+                if (File.Exists(exePath))
+                    return exePath;
             }
+        }
+        catch { }
+
+        return null;
+    }
+
+    private static List<KnownBrowser> GetInstalledBrowsers()
+    {
+        var browsers = new List<KnownBrowser>();
+        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+
+        var candidates = new (string Name, string[] Paths, string ProfileDataDir, BrowserEngine Engine)[]
+        {
+            // Chromium-based
+            ("Microsoft Edge", [
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft", "Edge", "Application", "msedge.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Microsoft", "Edge", "Application", "msedge.exe")
+            ], Path.Combine(localAppData, "Microsoft", "Edge", "User Data"), BrowserEngine.Chromium),
+            ("Google Chrome", [
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Google", "Chrome", "Application", "chrome.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Google", "Chrome", "Application", "chrome.exe"),
+                Path.Combine(localAppData, "Google", "Chrome", "Application", "chrome.exe")
+            ], Path.Combine(localAppData, "Google", "Chrome", "User Data"), BrowserEngine.Chromium),
+            ("Brave", [
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+                Path.Combine(localAppData, "BraveSoftware", "Brave-Browser", "Application", "brave.exe")
+            ], Path.Combine(localAppData, "BraveSoftware", "Brave-Browser", "User Data"), BrowserEngine.Chromium),
+            ("Vivaldi", [
+                Path.Combine(localAppData, "Vivaldi", "Application", "vivaldi.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Vivaldi", "Application", "vivaldi.exe")
+            ], Path.Combine(localAppData, "Vivaldi", "User Data"), BrowserEngine.Chromium),
+            ("Chromium", [
+                Path.Combine(localAppData, "Chromium", "Application", "chrome.exe")
+            ], Path.Combine(localAppData, "Chromium", "User Data"), BrowserEngine.Chromium),
+            // Gecko-based
+            ("Firefox", [
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Mozilla Firefox", "firefox.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Mozilla Firefox", "firefox.exe")
+            ], Path.Combine(appData, "Mozilla", "Firefox"), BrowserEngine.Gecko),
+            ("Zen", [
+                Path.Combine(localAppData, "Programs", "zen", "zen.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Zen Browser", "zen.exe"),
+                Path.Combine(localAppData, "zen", "zen.exe"),
+            ], Path.Combine(appData, "zen"), BrowserEngine.Gecko),
+            ("Waterfox", [
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Waterfox", "waterfox.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Waterfox", "waterfox.exe")
+            ], Path.Combine(appData, "Waterfox"), BrowserEngine.Gecko),
+            ("LibreWolf", [
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "LibreWolf", "librewolf.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "LibreWolf", "librewolf.exe")
+            ], Path.Combine(appData, "librewolf"), BrowserEngine.Gecko),
+        };
+
+        foreach (var (name, paths, profileDataDir, engine) in candidates)
+        {
+            foreach (var path in paths)
+            {
+                if (File.Exists(path))
+                {
+                    browsers.Add(new KnownBrowser(name, path, profileDataDir, engine));
+                    break;
+                }
+            }
+        }
+
+        return browsers;
+    }
+
+    private record BrowserProfile(string DirectoryName, string DisplayName);
+
+    private static List<BrowserProfile> GetBrowserProfiles(string profileDataDir, BrowserEngine engine)
+    {
+        if (string.IsNullOrEmpty(profileDataDir) || !Directory.Exists(profileDataDir))
+            return [];
+
+        return engine == BrowserEngine.Gecko
+            ? GetGeckoProfiles(profileDataDir)
+            : GetChromiumProfiles(profileDataDir);
+    }
+
+    private static List<BrowserProfile> GetChromiumProfiles(string userDataDir)
+    {
+        var profiles = new List<BrowserProfile>();
+        if (string.IsNullOrEmpty(userDataDir) || !Directory.Exists(userDataDir))
+            return profiles;
+
+        // Read the Local State file which contains profile info
+        string localStatePath = Path.Combine(userDataDir, "Local State");
+        if (File.Exists(localStatePath))
+        {
+            try
+            {
+                string json = File.ReadAllText(localStatePath);
+                using var doc = System.Text.Json.JsonDocument.Parse(json);
+                if (doc.RootElement.TryGetProperty("profile", out var profileRoot) &&
+                    profileRoot.TryGetProperty("info_cache", out var infoCache))
+                {
+                    foreach (var entry in infoCache.EnumerateObject())
+                    {
+                        string dirName = entry.Name;
+                        string displayName = dirName;
+                        if (entry.Value.TryGetProperty("name", out var nameProp))
+                            displayName = nameProp.GetString() ?? dirName;
+
+                        // Verify the profile directory actually exists
+                        if (Directory.Exists(Path.Combine(userDataDir, dirName)))
+                            profiles.Add(new BrowserProfile(dirName, displayName));
+                    }
+                }
+            }
+            catch
+            {
+                // Fall back to directory enumeration
+            }
+        }
+
+        // Fallback: if Local State didn't work, scan for directories with a Preferences file
+        if (profiles.Count == 0)
+        {
+            try
+            {
+                foreach (var dir in Directory.GetDirectories(userDataDir))
+                {
+                    if (File.Exists(Path.Combine(dir, "Preferences")))
+                    {
+                        string dirName = Path.GetFileName(dir);
+                        profiles.Add(new BrowserProfile(dirName, dirName));
+                    }
+                }
+            }
+            catch { }
+        }
+
+        return profiles.OrderBy(p => p.DirectoryName != "Default")
+                       .ThenBy(p => p.DisplayName)
+                       .ToList();
+    }
+
+    private static List<BrowserProfile> GetGeckoProfiles(string profileDataDir)
+    {
+        var profiles = new List<BrowserProfile>();
+        string iniPath = Path.Combine(profileDataDir, "profiles.ini");
+        if (!File.Exists(iniPath))
+            return profiles;
+
+        try
+        {
+            string? currentName = null;
+            string? currentPath = null;
+            bool isRelative = true;
+
+            foreach (string rawLine in File.ReadLines(iniPath))
+            {
+                string line = rawLine.Trim();
+
+                if (line.StartsWith('['))
+                {
+                    // Flush previous profile
+                    if (currentPath != null)
+                    {
+                        string fullPath = isRelative
+                            ? Path.Combine(profileDataDir, currentPath.Replace('/', '\\'))
+                            : currentPath;
+
+                        if (Directory.Exists(fullPath))
+                            profiles.Add(new BrowserProfile(fullPath, currentName ?? Path.GetFileName(fullPath)));
+                    }
+
+                    currentName = null;
+                    currentPath = null;
+                    isRelative = true;
+
+                    // Only process [Profile*] sections
+                    if (!line.StartsWith("[Profile", StringComparison.OrdinalIgnoreCase))
+                    {
+                        currentPath = null; // skip non-profile sections
+                    }
+                    continue;
+                }
+
+                int eq = line.IndexOf('=');
+                if (eq < 0) continue;
+
+                string key = line[..eq].Trim();
+                string value = line[(eq + 1)..].Trim();
+
+                if (key.Equals("Name", StringComparison.OrdinalIgnoreCase))
+                    currentName = value;
+                else if (key.Equals("Path", StringComparison.OrdinalIgnoreCase))
+                    currentPath = value;
+                else if (key.Equals("IsRelative", StringComparison.OrdinalIgnoreCase))
+                    isRelative = value == "1";
+            }
+
+            // Flush last profile
+            if (currentPath != null)
+            {
+                string fullPath = isRelative
+                    ? Path.Combine(profileDataDir, currentPath.Replace('/', '\\'))
+                    : currentPath;
+
+                if (Directory.Exists(fullPath))
+                    profiles.Add(new BrowserProfile(fullPath, currentName ?? Path.GetFileName(fullPath)));
+            }
+        }
+        catch { }
+
+        return profiles;
+    }
+
+    private void DragHandle_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not FrameworkElement handle) return;
+
+        // Walk up to find the ListBoxItem and get the data context
+        var listBoxItem = FindAncestor<ListBoxItem>(handle);
+        if (listBoxItem?.DataContext is not LauncherItem item) return;
+
+        _draggedItem = item;
+        var data = new DataObject(typeof(LauncherItem), item);
+        DragDrop.DoDragDrop(ItemsList, data, DragDropEffects.Move);
+        CleanupDrag();
+        e.Handled = true;
+    }
+
+    private void ItemsList_DragOver(object sender, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(typeof(LauncherItem)))
+        {
+            e.Effects = DragDropEffects.None;
+            e.Handled = true;
+            return;
+        }
+
+        e.Effects = DragDropEffects.Move;
+        e.Handled = true;
+
+        var targetIndex = GetDropTargetIndex(e.GetPosition(ItemsList));
+        if (targetIndex != _dropTargetIndex)
+        {
+            _dropTargetIndex = targetIndex;
+            UpdateDropIndicator(targetIndex);
         }
     }
 
-    private void MoveDown_Click(object sender, RoutedEventArgs e)
+    private void ItemsList_DragLeave(object sender, DragEventArgs e)
     {
-        if (sender is FrameworkElement fe && fe.Tag is LauncherItem item)
+        RemoveDropIndicator();
+        _dropTargetIndex = -1;
+    }
+
+    private void ItemsList_Drop(object sender, DragEventArgs e)
+    {
+        RemoveDropIndicator();
+        _dropTargetIndex = -1;
+
+        if (!e.Data.GetDataPresent(typeof(LauncherItem)))
+            return;
+
+        var draggedItem = (LauncherItem)e.Data.GetData(typeof(LauncherItem));
+        var items = SettingsManager.Current.LauncherItems;
+        int oldIndex = items.IndexOf(draggedItem);
+        if (oldIndex < 0) return;
+
+        int newIndex = GetDropTargetIndex(e.GetPosition(ItemsList));
+        if (newIndex < 0) newIndex = 0;
+        if (newIndex > items.Count) newIndex = items.Count;
+
+        // Adjust target if moving down (removing item shifts indices)
+        if (newIndex > oldIndex) newIndex--;
+        if (newIndex == oldIndex) return;
+
+        items.Move(oldIndex, newIndex);
+        RefreshList();
+        SaveAndUpdateTaskbar();
+    }
+
+    private int GetDropTargetIndex(Point position)
+    {
+        var items = SettingsManager.Current.LauncherItems;
+        if (items.Count == 0) return 0;
+
+        for (int i = 0; i < ItemsList.Items.Count; i++)
         {
-            var items = SettingsManager.Current.LauncherItems;
-            int index = items.IndexOf(item);
-            if (index >= 0 && index < items.Count - 1)
-            {
-                items.Move(index, index + 1);
-                RefreshList();
-                SaveAndUpdateTaskbar();
-            }
+            if (ItemsList.ItemContainerGenerator.ContainerFromIndex(i) is not ListBoxItem container)
+                continue;
+
+            var itemTop = container.TranslatePoint(new Point(0, 0), ItemsList).Y;
+            var itemMid = itemTop + container.ActualHeight / 2;
+
+            if (position.Y < itemMid)
+                return i;
+        }
+
+        return items.Count;
+    }
+
+    private void UpdateDropIndicator(int targetIndex)
+    {
+        RemoveDropIndicator();
+
+        _dropIndicator = new Border
+        {
+            Height = 2,
+            Background = (Brush)Application.Current.FindResource("SystemAccentColorPrimaryBrush"),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            Margin = new Thickness(4, -1, 4, -1),
+            IsHitTestVisible = false
+        };
+
+        // Find the StackPanel that hosts the ListBox inside the page
+        var panel = FindAncestor<StackPanel>(ItemsList);
+        if (panel == null) return;
+
+        // Insert the indicator into the ListBox's internal panel via an adorner approach:
+        // We'll add it to the page-level visual. Instead, we use an overlay approach.
+        // Simpler: Use the ItemsList's adorner layer.
+        var adornerLayer = AdornerLayer.GetAdornerLayer(ItemsList);
+        if (adornerLayer == null) return;
+
+        double y = 0;
+        if (targetIndex < ItemsList.Items.Count)
+        {
+            if (ItemsList.ItemContainerGenerator.ContainerFromIndex(targetIndex) is ListBoxItem container)
+                y = container.TranslatePoint(new Point(0, 0), ItemsList).Y;
+        }
+        else if (ItemsList.Items.Count > 0)
+        {
+            if (ItemsList.ItemContainerGenerator.ContainerFromIndex(ItemsList.Items.Count - 1) is ListBoxItem lastContainer)
+                y = lastContainer.TranslatePoint(new Point(0, lastContainer.ActualHeight), ItemsList).Y;
+        }
+
+        adornerLayer.Add(new DropIndicatorAdorner(ItemsList, y));
+    }
+
+    private void RemoveDropIndicator()
+    {
+        _dropIndicator = null;
+        var adornerLayer = AdornerLayer.GetAdornerLayer(ItemsList);
+        if (adornerLayer == null) return;
+        var adorners = adornerLayer.GetAdorners(ItemsList);
+        if (adorners == null) return;
+        foreach (var adorner in adorners)
+        {
+            if (adorner is DropIndicatorAdorner)
+                adornerLayer.Remove(adorner);
+        }
+    }
+
+    private void CleanupDrag()
+    {
+        _draggedItem = null;
+        _dropTargetIndex = -1;
+        RemoveDropIndicator();
+    }
+
+    private static T? FindAncestor<T>(DependencyObject current) where T : DependencyObject
+    {
+        while (current != null)
+        {
+            if (current is T target) return target;
+            current = VisualTreeHelper.GetParent(current);
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Adorner that draws a horizontal accent-colored line to indicate the drop position.
+    /// </summary>
+    private class DropIndicatorAdorner : Adorner
+    {
+        private readonly double _yPosition;
+        private readonly Pen _pen;
+
+        public DropIndicatorAdorner(UIElement adornedElement, double yPosition) : base(adornedElement)
+        {
+            _yPosition = yPosition;
+            IsHitTestVisible = false;
+            var brush = Application.Current.TryFindResource("SystemAccentColorPrimaryBrush") as Brush
+                        ?? Brushes.DodgerBlue;
+            _pen = new Pen(brush, 2);
+            _pen.Freeze();
+        }
+
+        protected override void OnRender(DrawingContext drawingContext)
+        {
+            var width = AdornedElement.RenderSize.Width;
+            drawingContext.DrawLine(_pen, new Point(4, _yPosition), new Point(width - 4, _yPosition));
         }
     }
 

@@ -192,7 +192,7 @@ public partial class TaskbarWindow : Window
         IntPtr secondHwnd = IntPtr.Zero;
         StringBuilder className = new(256);
 
-        uint threadId = GetWindowThreadProcessId(mainHwnd, IntPtr.Zero);
+        uint threadId = GetWindowThreadProcessId(mainHwnd, out _);
         EnumThreadWindows(threadId, (wnd, param) =>
         {
             GetClassName(wnd, className, className.Capacity);

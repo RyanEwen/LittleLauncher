@@ -4,6 +4,10 @@ using SelfHostedHelper.Models;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Collections.Concurrent;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -25,9 +29,13 @@ namespace SelfHostedHelper.Windows;
 public partial class FlyoutWindow : Window
 {
     private static readonly NLog.Logger Logger = NLog.LogManager.GetCurrentClassLogger();
+    private static readonly object BoundsFileLock = new();
+    private static readonly ConcurrentDictionary<string, WindowBounds> CachedBounds = new(StringComparer.OrdinalIgnoreCase);
 
     private static FlyoutWindow? _instance;
     private DateTime _lastDismissed = DateTime.MinValue;
+    private bool _toolWindowStyleApplied;
+    private int _lastItemsHash;
 
     private FlyoutWindow()
     {
@@ -52,7 +60,7 @@ public partial class FlyoutWindow : Window
             return;
 
         _instance ??= new FlyoutWindow();
-        _instance.RebuildItems();
+        _instance.RebuildItemsIfNeeded();
         _instance.ApplyTheme();
 
         // Show off-screen first so layout runs, then reposition
@@ -60,10 +68,14 @@ public partial class FlyoutWindow : Window
         _instance.Top = -9999;
         _instance.Show();
 
-        // Hide from Alt-Tab
-        var hwnd = new System.Windows.Interop.WindowInteropHelper(_instance).Handle;
-        int exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
-        SetWindowLong(hwnd, GWL_EXSTYLE, exStyle | WS_EX_TOOLWINDOW);
+        // Hide from Alt-Tab (only needs to be done once per window handle)
+        if (!_instance._toolWindowStyleApplied)
+        {
+            var hwnd = new System.Windows.Interop.WindowInteropHelper(_instance).Handle;
+            int exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
+            SetWindowLong(hwnd, GWL_EXSTYLE, exStyle | WS_EX_TOOLWINDOW);
+            _instance._toolWindowStyleApplied = true;
+        }
 
         _instance.PositionAt(screenAnchor);
         _instance.Activate();
@@ -78,7 +90,50 @@ public partial class FlyoutWindow : Window
             _instance.Hide();
     }
 
+    /// <summary>
+    /// Pre-create the singleton so the first Toggle is fast.
+    /// </summary>
+    public static void WarmUp()
+    {
+        if (_instance == null)
+        {
+            _instance = new FlyoutWindow();
+            _instance.RebuildItems();
+            _instance.ApplyTheme();
+        }
+    }
+
     // ── Content ─────────────────────────────────────────────────────
+
+    private static int ComputeItemsHash()
+    {
+        var items = SettingsManager.Current.LauncherItems;
+        if (items == null || items.Count == 0) return 0;
+        var hash = new HashCode();
+        foreach (var item in items)
+        {
+            hash.Add(item.Name);
+            hash.Add(item.Path);
+            hash.Add(item.IconPath);
+            hash.Add(item.IconGlyph);
+            hash.Add(item.IsWebsite);
+            hash.Add(item.OpenInAppWindow);
+            hash.Add(item.AppWindowBrowser);
+            hash.Add(item.AppWindowBrowserProfile);
+            hash.Add(item.IsCategory);
+        }
+        return hash.ToHashCode();
+    }
+
+    private void RebuildItemsIfNeeded()
+    {
+        int currentHash = ComputeItemsHash();
+        if (currentHash == _lastItemsHash && ItemsPanel.Children.Count > 0)
+            return;
+
+        _lastItemsHash = currentHash;
+        RebuildItems();
+    }
 
     private void RebuildItems()
     {
@@ -100,8 +155,30 @@ public partial class FlyoutWindow : Window
 
         foreach (var item in items)
         {
-            ItemsPanel.Children.Add(CreateItemRow(item));
+            if (item.IsCategory)
+                ItemsPanel.Children.Add(CreateCategoryHeading(item));
+            else
+                ItemsPanel.Children.Add(CreateItemRow(item));
         }
+    }
+
+    private UIElement CreateCategoryHeading(LauncherItem item)
+    {
+        bool isDark = IsDarkTheme();
+
+        var heading = new TextBlock
+        {
+            Text = item.Name,
+            FontSize = 12,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = new SolidColorBrush(isDark
+                ? Color.FromArgb(180, 255, 255, 255)
+                : Color.FromArgb(180, 0, 0, 0)),
+            Margin = new Thickness(14, 8, 14, 4),
+            TextTrimming = TextTrimming.CharacterEllipsis
+        };
+
+        return heading;
     }
 
     private Border CreateItemRow(LauncherItem item)
@@ -268,7 +345,7 @@ public partial class FlyoutWindow : Window
             if (item.IsWebsite || item.Path.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
                                || item.Path.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
             {
-                Process.Start(new ProcessStartInfo(item.Path) { UseShellExecute = true });
+                LaunchWebsite(item);
             }
             else
             {
@@ -286,6 +363,374 @@ public partial class FlyoutWindow : Window
             Logger.Error(ex, $"Failed to launch from flyout: {item.Name} ({item.Path})");
         }
     }
+
+    private static void LaunchWebsite(LauncherItem item)
+    {
+        if (!item.OpenInAppWindow)
+        {
+            Process.Start(new ProcessStartInfo(item.Path) { UseShellExecute = true });
+            return;
+        }
+
+        if (TryLaunchInAppWindow(item.Path, item.AppWindowBrowser, item.AppWindowBrowserProfile))
+            return;
+
+        // Fallback: open via default browser if app-mode launch is unavailable.
+        Process.Start(new ProcessStartInfo(item.Path) { UseShellExecute = true });
+    }
+
+    private enum BrowserEngine { Chromium, Gecko }
+
+    private static BrowserEngine DetectEngine(string exePath)
+    {
+        string? dir = Path.GetDirectoryName(exePath);
+        if (dir != null && (File.Exists(Path.Combine(dir, "chrome.dll")) ||
+                            File.Exists(Path.Combine(dir, "msedge.dll"))))
+            return BrowserEngine.Chromium;
+
+        string name = Path.GetFileNameWithoutExtension(exePath).ToLowerInvariant();
+        if (name is "firefox" or "zen" or "waterfox" or "librewolf" or "floorp" or "mercury" or "firedragon")
+            return BrowserEngine.Gecko;
+
+        return BrowserEngine.Chromium;
+    }
+
+    private static bool TryLaunchInAppWindow(string url, string browserPath, string browserProfile)
+    {
+        string profileId = GetAppWindowProfileId(url);
+
+        string browserExe = ResolveBrowserExe(browserPath);
+        if (browserExe == "")
+            return false;
+
+        var engine = DetectEngine(browserExe);
+
+        // Snapshot existing browser windows before launch.
+        var existingWindows = GetBrowserWindows(engine);
+
+        try
+        {
+            string args = engine == BrowserEngine.Gecko
+                ? BuildGeckoArgs(url, profileId)
+                : BuildChromiumArgs(url, browserProfile, profileId);
+
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = browserExe,
+                Arguments = args,
+                UseShellExecute = false
+            });
+
+            _ = RestoreAndTrackWindowBoundsAsync(existingWindows, profileId, engine);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string BuildChromiumArgs(string url, string browserProfile, string profileId)
+    {
+        string args = $"--app=\"{url}\"";
+
+        if (string.IsNullOrEmpty(browserProfile))
+        {
+            string appProfileDir = GetAppWindowProfileDirectory(profileId);
+            Directory.CreateDirectory(appProfileDir);
+            args += $" --user-data-dir=\"{appProfileDir}\"";
+        }
+        else if (browserProfile != "__default__")
+        {
+            args += $" --profile-directory=\"{browserProfile}\"";
+        }
+
+        return args;
+    }
+
+    private static string BuildGeckoArgs(string url, string profileId)
+    {
+        // Gecko's userChrome.css is profile-wide (affects all windows), so app-window
+        // mode always uses an isolated sandbox profile with --no-remote.
+        string appProfileDir = GetAppWindowProfileDirectory(profileId);
+        Directory.CreateDirectory(appProfileDir);
+        EnsureGeckoAppWindowProfile(appProfileDir);
+        return $"--new-window \"{url}\" --profile \"{appProfileDir}\" --no-remote";
+    }
+
+    /// <summary>
+    /// Ensures a Gecko sandbox profile has userChrome.css to hide browser UI
+    /// and user.js prefs to enable it and suppress first-run dialogs.
+    /// </summary>
+    private static void EnsureGeckoAppWindowProfile(string profileDir)
+    {
+        string chromeDir = Path.Combine(profileDir, "chrome");
+        Directory.CreateDirectory(chromeDir);
+
+        string userChromePath = Path.Combine(chromeDir, "userChrome.css");
+        if (!File.Exists(userChromePath))
+        {
+            File.WriteAllText(userChromePath,
+                """@namespace url("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"); #navigator-toolbox { visibility: collapse !important; }""");
+        }
+
+        string userJsPath = Path.Combine(profileDir, "user.js");
+        if (!File.Exists(userJsPath))
+        {
+            File.WriteAllText(userJsPath,
+                "user_pref(\"toolkit.legacyUserProfileCustomizations.stylesheets\", true);\n" +
+                "user_pref(\"browser.shell.checkDefaultBrowser\", false);\n" +
+                "user_pref(\"datareporting.policy.dataSubmissionPolicyBypassNotification\", true);\n" +
+                "user_pref(\"trailhead.firstrun.didSeeAboutWelcome\", true);\n");
+        }
+    }
+
+    private static string ResolveBrowserExe(string browserPath)
+    {
+        if (!string.IsNullOrEmpty(browserPath))
+            return File.Exists(browserPath) ? browserPath : "";
+
+        // Use the OS default browser
+        return GetDefaultBrowserExePath() ?? "";
+    }
+
+    private static string? GetDefaultBrowserExePath()
+    {
+        try
+        {
+            int size = 512;
+            var sb = new StringBuilder(size);
+            int hr = AssocQueryString(ASSOCF_NONE, ASSOCSTR_EXECUTABLE, "https", "open", sb, ref size);
+            if (hr == 0)
+            {
+                string exePath = sb.ToString();
+                if (File.Exists(exePath))
+                    return exePath;
+            }
+        }
+        catch { }
+
+        return null;
+    }
+
+    private static string GetAppWindowProfileId(string url)
+    {
+        byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(url.Trim().ToLowerInvariant()));
+        return Convert.ToHexString(hash.AsSpan(0, 8));
+    }
+
+    private static string GetAppWindowProfileDirectory(string profileId)
+    {
+        string baseDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "SelfHostedHelper",
+            "AppWindowProfiles");
+
+        return Path.Combine(baseDir, profileId);
+    }
+
+    private static string GetBoundsFilePath()
+    {
+        return Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "SelfHostedHelper",
+            "edge-window-bounds.json");
+    }
+
+    private static async Task RestoreAndTrackWindowBoundsAsync(HashSet<IntPtr> existingWindows, string profileId, BrowserEngine engine)
+    {
+        IntPtr hwnd = await WaitForNewBrowserWindowAsync(existingWindows, engine, TimeSpan.FromSeconds(10));
+        if (hwnd == IntPtr.Zero)
+            return;
+
+        if (TryGetSavedBounds(profileId, out var savedBounds))
+        {
+            SetWindowPos(
+                hwnd,
+                0,
+                savedBounds.Left,
+                savedBounds.Top,
+                savedBounds.Width,
+                savedBounds.Height,
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+
+            if (savedBounds.IsMaximized)
+                ShowWindow(hwnd, SW_MAXIMIZE);
+        }
+
+        InstallBoundsTrackingHooks(hwnd, profileId);
+    }
+
+    /// <summary>
+    /// Prevents GC of WinEventProc delegates while their hooks are active.
+    /// </summary>
+    private static readonly HashSet<WinEventProc> ActiveHookDelegates = [];
+
+    private static void InstallBoundsTrackingHooks(IntPtr hwnd, string profileId)
+    {
+        uint threadId = GetWindowThreadProcessId(hwnd, out uint processId);
+
+        WindowBounds? lastBounds = null;
+        IntPtr hookLocation = IntPtr.Zero;
+        IntPtr hookDestroy = IntPtr.Zero;
+        WinEventProc? handler = null;
+
+        handler = (hHook, eventType, eventHwnd, idObject, idChild, eventThread, time) =>
+        {
+            if (eventHwnd != hwnd || idObject != OBJID_WINDOW)
+                return;
+
+            if (eventType == EVENT_OBJECT_LOCATIONCHANGE)
+            {
+                if (GetWindowRect(hwnd, out RECT rect))
+                {
+                    bool maximized = IsZoomed(hwnd);
+                    int w = rect.Right - rect.Left;
+                    int h = rect.Bottom - rect.Top;
+                    if (w >= 320 && h >= 240)
+                        lastBounds = new WindowBounds(rect.Left, rect.Top, w, h, maximized);
+                }
+            }
+            else if (eventType == EVENT_OBJECT_DESTROY)
+            {
+                if (lastBounds is not null)
+                    SaveBounds(profileId, lastBounds);
+
+                if (hookLocation != IntPtr.Zero) UnhookWinEvent(hookLocation);
+                if (hookDestroy != IntPtr.Zero) UnhookWinEvent(hookDestroy);
+
+                lock (ActiveHookDelegates)
+                    ActiveHookDelegates.Remove(handler!);
+            }
+        };
+
+        lock (ActiveHookDelegates)
+            ActiveHookDelegates.Add(handler);
+
+        hookLocation = SetWinEventHook(
+            EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE,
+            IntPtr.Zero, handler, processId, threadId, WINEVENT_OUTOFCONTEXT);
+        hookDestroy = SetWinEventHook(
+            EVENT_OBJECT_DESTROY, EVENT_OBJECT_DESTROY,
+            IntPtr.Zero, handler, processId, threadId, WINEVENT_OUTOFCONTEXT);
+    }
+
+    private static async Task<IntPtr> WaitForNewBrowserWindowAsync(HashSet<IntPtr> existingWindows, BrowserEngine engine, TimeSpan timeout)
+    {
+        var sw = Stopwatch.StartNew();
+
+        while (sw.Elapsed < timeout)
+        {
+            var currentWindows = GetBrowserWindows(engine);
+            foreach (var hwnd in currentWindows)
+            {
+                if (existingWindows.Contains(hwnd))
+                    continue;
+
+                // Verify it's a real visible window with reasonable size.
+                if (!GetWindowRect(hwnd, out RECT rect))
+                    continue;
+
+                int width = rect.Right - rect.Left;
+                int height = rect.Bottom - rect.Top;
+                if (width >= 200 && height >= 120)
+                    return hwnd;
+            }
+
+            await Task.Delay(200);
+        }
+
+        return IntPtr.Zero;
+    }
+
+    private static readonly string[] ChromiumWindowClasses = ["Chrome_WidgetWin_1"];
+    private static readonly string[] GeckoWindowClasses = ["MozillaWindowClass", "MozillaDialogClass"];
+
+    private static HashSet<IntPtr> GetBrowserWindows(BrowserEngine engine)
+    {
+        var windowClasses = engine == BrowserEngine.Gecko ? GeckoWindowClasses : ChromiumWindowClasses;
+        var windows = new HashSet<IntPtr>();
+        var className = new StringBuilder(256);
+
+        EnumWindows((hWnd, _) =>
+        {
+            className.Clear();
+            GetClassName(hWnd, className, className.Capacity);
+            string cls = className.ToString();
+            foreach (string target in windowClasses)
+            {
+                if (cls == target)
+                {
+                    windows.Add(hWnd);
+                    break;
+                }
+            }
+            return true;
+        }, IntPtr.Zero);
+
+        return windows;
+    }
+
+    private static bool TryGetSavedBounds(string profileId, out WindowBounds bounds)
+    {
+        bounds = default!;
+
+        lock (BoundsFileLock)
+        {
+            if (CachedBounds.TryGetValue(profileId, out var cachedBounds))
+            {
+                bounds = cachedBounds;
+                return true;
+            }
+
+            var all = LoadAllBounds();
+            foreach (var kv in all)
+                CachedBounds[kv.Key] = kv.Value;
+
+            if (CachedBounds.TryGetValue(profileId, out var loadedBounds))
+            {
+                bounds = loadedBounds;
+                return true;
+            }
+
+            return false;
+        }
+    }
+
+    private static void SaveBounds(string profileId, WindowBounds bounds)
+    {
+        lock (BoundsFileLock)
+        {
+            CachedBounds[profileId] = bounds;
+            var all = LoadAllBounds();
+            all[profileId] = bounds;
+
+            string filePath = GetBoundsFilePath();
+            Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+            string json = JsonSerializer.Serialize(all, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(filePath, json);
+        }
+    }
+
+    private static Dictionary<string, WindowBounds> LoadAllBounds()
+    {
+        string filePath = GetBoundsFilePath();
+        if (!File.Exists(filePath))
+            return new Dictionary<string, WindowBounds>(StringComparer.OrdinalIgnoreCase);
+
+        try
+        {
+            string json = File.ReadAllText(filePath);
+            return JsonSerializer.Deserialize<Dictionary<string, WindowBounds>>(json)
+                ?? new Dictionary<string, WindowBounds>(StringComparer.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return new Dictionary<string, WindowBounds>(StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    private sealed record WindowBounds(int Left, int Top, int Width, int Height, bool IsMaximized = false);
 
     private void EditItem(LauncherItem item)
     {

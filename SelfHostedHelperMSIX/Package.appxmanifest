@@ -5,58 +5,37 @@
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
   xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
-  xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
   IgnorableNamespaces="uap rescap">
 
   <Identity
-    Name="unchihugo.SelfHostedHelper"
-    Publisher="CN=unchihugo"
-    Version="2.8.0.0" />
+    Name="RyanEwen.SelfHostedHelper"
+    Publisher="CN=RyanEwen"
+    Version="1.0.0.0" />
 
   <Properties>
     <DisplayName>SelfHostedHelper</DisplayName>
-    <PublisherDisplayName>unchihugo</PublisherDisplayName>
+    <PublisherDisplayName>RyanEwen</PublisherDisplayName>
     <Logo>Images\StoreLogo.png</Logo>
   </Properties>
 
   <Dependencies>
-    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.0.0" MaxVersionTested="10.0.0.0" />
-    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.14393.0" MaxVersionTested="10.0.14393.0" />
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.22000.0" MaxVersionTested="10.0.26100.0" />
   </Dependencies>
 
   <Resources>
-      <Resource Language="en-US"/>
-	  <Resource Language="ar"/>
-	  <Resource Language="zh-CN"/>
-	  <Resource Language="zh-TW"/>
-	  <Resource Language="hr"/>
-	  <Resource Language="cs"/>
-	  <Resource Language="nl"/>
-	  <Resource Language="fi"/>
-	  <Resource Language="fr"/>
-	  <Resource Language="de"/>
-	  <Resource Language="he"/>
-	  <Resource Language="id"/>
-	  <Resource Language="it"/>
-	  <Resource Language="ja"/>
-	  <Resource Language="ko"/>
-	  <Resource Language="pl"/>
-	  <Resource Language="pt-BR"/>
-	  <Resource Language="ru"/>
-	  <Resource Language="es"/>
-	  <Resource Language="tr"/>
-	  <Resource Language="uk"/>
-	  <Resource Language="vi"/>
+    <Resource Language="en-US" />
   </Resources>
 
   <Applications>
     <Application Id="App"
-      Executable="$targetnametoken$.exe"
-      EntryPoint="$targetentrypoint$">
+      Executable="TaskbarLauncher.exe"
+      EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
         DisplayName="SelfHostedHelper"
         BackgroundColor="transparent"
-        Square150x150Logo="Images\Square150x150Logo.png" Square44x44Logo="Images\SelfHostedHelper.png" Description="SelfHostedHelper is a simple and modern audio flyout for Windows, built with Fluent 2 Design principles. The UI seemingly blends in with Windows 10/11, providing you an uninterrupted, clean, and native-like experience when controlling your media.">
+        Square150x150Logo="Images\Square150x150Logo.png"
+        Square44x44Logo="Images\SelfHostedHelper.png"
+        Description="A launcher widget embedded in the Windows 11 taskbar with SSH/SFTP settings sync.">
         <uap:DefaultTile Wide310x150Logo="Images\Wide310x150Logo.png"  ShortName="SelfHostedHelper" Square71x71Logo="Images\SmallTile.png" Square310x310Logo="Images\LargeTile.png">
           <uap:ShowNameOnTiles>
             <uap:ShowOn Tile="wide310x150Logo"/>
@@ -65,27 +44,14 @@
         </uap:DefaultTile >
         <uap:SplashScreen Image="Images\SplashScreen.png" />
       </uap:VisualElements>
-		<Extensions>
-			<desktop:Extension Category="windows.startupTask">
-				<desktop:StartupTask
-				  TaskId="SelfHostedHelperStartup"
-				  Enabled="true"
-				  DisplayName="SelfHostedHelper"/>
-			</desktop:Extension>
-
-			<desktop:Extension Category="windows.toastNotificationActivation">
-				<desktop:ToastNotificationActivation
-				  ToastActivatorCLSID="4B7E5CC5-B3D3-45B9-AA7D-06BB1CF86BDE"/>
-			</desktop:Extension>
-			
-			<com:Extension Category="windows.comServer">
-				<com:ComServer>
-					<com:ExeServer Executable="SelfHostedHelper\SelfHostedHelper.exe" Arguments="-ToastActivated" DisplayName="View Changes">
-						<com:Class Id="4B7E5CC5-B3D3-45B9-AA7D-06BB1CF86BDE" DisplayName="View Changes"/>
-					</com:ExeServer>
-				</com:ComServer>
-			</com:Extension>
-		</Extensions>
+      <Extensions>
+        <desktop:Extension Category="windows.startupTask">
+          <desktop:StartupTask
+            TaskId="SelfHostedHelperStartup"
+            Enabled="false"
+            DisplayName="SelfHostedHelper" />
+        </desktop:Extension>
+      </Extensions>
     </Application>
   </Applications>
 

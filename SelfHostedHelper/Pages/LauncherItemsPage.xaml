@@ -3,6 +3,7 @@
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
       xmlns:viewModels="clr-namespace:SelfHostedHelper.ViewModels"
+      xmlns:pages="clr-namespace:SelfHostedHelper.Pages"
       d:DesignHeight="900" d:DesignWidth="600"
       xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
       xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
@@ -11,41 +12,90 @@
       d:DataContext="{d:DesignInstance viewModels:UserSettings}"
       Foreground="{DynamicResource TextFillColorPrimaryBrush}">
 
+    <Page.Resources>
+        <!-- Template for regular launcher items -->
+        <DataTemplate x:Key="LauncherItemTemplate">
+            <ui:CardControl Margin="0,0,0,4" Padding="8">
+                <ui:CardControl.Header>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <ui:SymbolIcon Symbol="ReOrderDotsVertical24" FontSize="16" Opacity="0.4" Margin="0,0,8,0"
+                                      Cursor="SizeAll" Tag="DragHandle"
+                                      MouseLeftButtonDown="DragHandle_MouseLeftButtonDown" />
+                        <ui:SymbolIcon x:Name="ItemIcon" FontSize="20" Margin="0,0,10,0" />
+                        <StackPanel>
+                            <TextBlock Text="{Binding Name}" FontWeight="Medium" FontSize="14" />
+                            <TextBlock Text="{Binding Path}" FontSize="12" Opacity="0.5" TextTrimming="CharacterEllipsis" MaxWidth="350" />
+                        </StackPanel>
+                    </StackPanel>
+                </ui:CardControl.Header>
+                <StackPanel Orientation="Horizontal">
+                    <ui:Button Appearance="Secondary" Content="Edit" Margin="0,0,4,0" Click="EditItem_Click" Tag="{Binding}" />
+                    <ui:Button Appearance="Danger" Content="Remove" Click="RemoveItem_Click" Tag="{Binding}" />
+                </StackPanel>
+            </ui:CardControl>
+        </DataTemplate>
+
+        <!-- Template for category headings -->
+        <DataTemplate x:Key="CategoryItemTemplate">
+            <ui:CardControl Margin="0,0,0,4" Padding="8">
+                <ui:CardControl.Header>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <ui:SymbolIcon Symbol="ReOrderDotsVertical24" FontSize="16" Opacity="0.4" Margin="0,0,8,0"
+                                      Cursor="SizeAll" Tag="DragHandle"
+                                      MouseLeftButtonDown="DragHandle_MouseLeftButtonDown" />
+                        <ui:SymbolIcon Symbol="Group24" FontSize="20" Margin="0,0,10,0" />
+                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="14" />
+                    </StackPanel>
+                </ui:CardControl.Header>
+                <StackPanel Orientation="Horizontal">
+                    <ui:Button Appearance="Secondary" Content="Edit" Margin="0,0,4,0" Click="EditItem_Click" Tag="{Binding}" />
+                    <ui:Button Appearance="Danger" Content="Remove" Click="RemoveItem_Click" Tag="{Binding}" />
+                </StackPanel>
+            </ui:CardControl>
+        </DataTemplate>
+
+        <pages:LauncherItemTemplateSelector x:Key="ItemTemplateSelector"
+            LauncherItemTemplate="{StaticResource LauncherItemTemplate}"
+            CategoryItemTemplate="{StaticResource CategoryItemTemplate}" />
+    </Page.Resources>
+
     <Grid>
         <StackPanel MaxWidth="1000" Margin="16">
             <TextBlock Text="Launcher Items" FontSize="24" FontWeight="SemiBold" Margin="0,0,0,8" />
-            <TextBlock Text="Add, edit, or remove apps and websites from your taskbar launcher." FontSize="14" Opacity="0.6" Margin="0,0,0,16" />
+            <TextBlock Text="Add, edit, or remove apps and websites from your taskbar launcher. Drag items to reorder." FontSize="14" Opacity="0.6" Margin="0,0,0,16" />
 
-            <!-- Item list -->
-            <ItemsControl x:Name="ItemsList" Margin="0,0,0,8">
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                        <ui:CardControl Margin="0,0,0,4" Padding="8">
-                            <ui:CardControl.Header>
-                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                    <ui:SymbolIcon x:Name="ItemIcon" FontSize="20" Margin="0,0,10,0" />
-                                    <StackPanel>
-                                        <TextBlock Text="{Binding Name}" FontWeight="Medium" FontSize="14" />
-                                        <TextBlock Text="{Binding Path}" FontSize="12" Opacity="0.5" TextTrimming="CharacterEllipsis" MaxWidth="350" />
-                                    </StackPanel>
-                                </StackPanel>
-                            </ui:CardControl.Header>
-                            <StackPanel Orientation="Horizontal">
-                                <ui:Button Appearance="Transparent" ToolTip="Move up" Padding="4" Margin="0,0,2,0" Click="MoveUp_Click" Tag="{Binding}">
-                                    <ui:SymbolIcon Symbol="ChevronUp24" FontSize="14" />
-                                </ui:Button>
-                                <ui:Button Appearance="Transparent" ToolTip="Move down" Padding="4" Margin="0,0,4,0" Click="MoveDown_Click" Tag="{Binding}">
-                                    <ui:SymbolIcon Symbol="ChevronDown24" FontSize="14" />
-                                </ui:Button>
-                                <ui:Button Appearance="Secondary" Content="Edit" Margin="0,0,4,0" Click="EditItem_Click" Tag="{Binding}" />
-                                <ui:Button Appearance="Danger" Content="Remove" Click="RemoveItem_Click" Tag="{Binding}" />
-                            </StackPanel>
-                        </ui:CardControl>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
+            <!-- Item list with drag-and-drop reordering -->
+            <ListBox x:Name="ItemsList" Margin="0,0,0,8"
+                     ItemTemplateSelector="{StaticResource ItemTemplateSelector}"
+                     AllowDrop="True"
+                     Background="Transparent"
+                     BorderThickness="0"
+                     HorizontalContentAlignment="Stretch"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     DragOver="ItemsList_DragOver"
+                     DragLeave="ItemsList_DragLeave"
+                     Drop="ItemsList_Drop">
+                <ListBox.ItemContainerStyle>
+                    <Style TargetType="ListBoxItem">
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        <Setter Property="Padding" Value="0" />
+                        <Setter Property="Margin" Value="0" />
+                        <Setter Property="Background" Value="Transparent" />
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="ListBoxItem">
+                                    <ContentPresenter />
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Style>
+                </ListBox.ItemContainerStyle>
+            </ListBox>
 
-            <ui:Button Appearance="Primary" Content="Add Item" Click="ShowAddDialog_Click" Icon="{ui:SymbolIcon Add24}" Margin="0,8,0,0" />
+            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                <ui:Button Appearance="Primary" Content="Add Item" Click="ShowAddDialog_Click" Icon="{ui:SymbolIcon Add24}" Margin="0,0,8,0" />
+                <ui:Button Appearance="Secondary" Content="Add Category" Click="ShowAddCategoryDialog_Click" Icon="{ui:SymbolIcon Group24}" />
+            </StackPanel>
         </StackPanel>
     </Grid>
 </Page>
