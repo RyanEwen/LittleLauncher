@@ -92,6 +92,9 @@
             <ui:Button Content="Download Settings" Appearance="Secondary" Click="Download_Click" Margin="0,0,8,0" />
         </StackPanel>
 
+        <!-- Status display -->
+        <ui:InfoBar x:Name="StatusBar" IsOpen="False" IsClosable="True" Margin="0,0,0,8" />
+
         <TextBlock Text="Connection Profile" FontSize="14" FontWeight="SemiBold" Margin="0,8,0,6" />
         <TextBlock Text="Export or import just the SSH connection settings for use on other machines." FontSize="13" Opacity="0.6" Margin="0,0,0,8" TextWrapping="Wrap" />
         <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
@@ -109,8 +112,5 @@
                 <ui:Button Content="OK" Click="PasswordOk_Click" />
             </StackPanel>
         </ui:CardControl>
-
-        <!-- Status display -->
-        <ui:InfoBar x:Name="StatusBar" IsOpen="False" IsClosable="True" Margin="0,4,0,0" />
     </StackPanel>
 </Page>
