@@ -43,6 +43,26 @@ public partial class TaskbarLauncherControl : UserControl
         FlyoutWindow.Toggle(new Point(pt.X, pt.Y));
     }
 
+    private void IconButton_RightClick(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is Border border && border.ContextMenu != null)
+        {
+            border.ContextMenu.IsOpen = true;
+            e.Handled = true;
+        }
+    }
+
+    private void ContextMenu_Settings_Click(object sender, RoutedEventArgs e)
+    {
+        SettingsWindow.ShowInstance();
+    }
+
+    private void ContextMenu_Exit_Click(object sender, RoutedEventArgs e)
+    {
+        Classes.Settings.SettingsManager.SaveSettings();
+        Application.Current.Shutdown();
+    }
+
     private void IconButton_MouseEnter(object sender, MouseEventArgs e)
     {
         if (sender is not Border border) return;

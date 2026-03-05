@@ -23,7 +23,23 @@
                 VerticalAlignment="Center" Margin="4,0,4,0"
                 MouseEnter="IconButton_MouseEnter"
                 MouseLeave="IconButton_MouseLeave"
-                MouseLeftButtonUp="IconButton_Click">
+                MouseLeftButtonUp="IconButton_Click"
+                MouseRightButtonUp="IconButton_RightClick">
+            <Border.ContextMenu>
+                <ContextMenu>
+                    <MenuItem Header="Settings" Click="ContextMenu_Settings_Click">
+                        <MenuItem.Icon>
+                            <ui:SymbolIcon Symbol="Settings20" />
+                        </MenuItem.Icon>
+                    </MenuItem>
+                    <Separator />
+                    <MenuItem Header="Exit" Click="ContextMenu_Exit_Click">
+                        <MenuItem.Icon>
+                            <ui:SymbolIcon Symbol="ArrowExit20" />
+                        </MenuItem.Icon>
+                    </MenuItem>
+                </ContextMenu>
+            </Border.ContextMenu>
             <ui:SymbolIcon Name="GlobeIcon" Symbol="Globe24" FontSize="16"
                           Foreground="#CCCCCC" />
         </Border>
