@@ -37,12 +37,12 @@ public partial class MainWindow : Window
         // ── Singleton check ─────────────────────────────────────────
         if (!Singleton.WaitOne(TimeSpan.Zero, true))
         {
-            // Another instance is running — tell it to open settings then exit.
+            // Another instance is running — signal it to show the flyout, then exit.
             Task.Run(() =>
             {
                 try
                 {
-                    using var evt = new EventWaitHandle(false, EventResetMode.AutoReset, "TaskbarLauncher_OpenSettings");
+                    using var evt = new EventWaitHandle(false, EventResetMode.AutoReset, "TaskbarLauncher_ShowFlyout");
                     evt.Set();
                 }
                 catch (Exception ex)
@@ -59,21 +59,25 @@ public partial class MainWindow : Window
 
         Logger.Info("Starting TaskbarLauncher MainWindow");
 
-        // Listen for second-instance "open settings" signals
+        // Listen for flyout signals (second instance launch or companion exe)
         Task.Run(() =>
         {
             try
             {
-                using var evt = new EventWaitHandle(false, EventResetMode.AutoReset, "TaskbarLauncher_OpenSettings");
+                using var evt = new EventWaitHandle(false, EventResetMode.AutoReset, "TaskbarLauncher_ShowFlyout");
                 while (true)
                 {
                     evt.WaitOne();
-                    Application.Current.Dispatcher.Invoke(() => SettingsWindow.ShowInstance());
+                    Application.Current.Dispatcher.Invoke(() =>
+                    {
+                        GetCursorPos(out var pt);
+                        FlyoutWindow.Toggle(new Point(pt.X, pt.Y));
+                    });
                 }
             }
             catch (Exception ex)
             {
-                Logger.Error(ex, "Settings event listener error");
+                Logger.Error(ex, "Flyout event listener error");
             }
         });
 
