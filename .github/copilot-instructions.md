@@ -41,9 +41,10 @@ SelfHostedHelper is a .NET 10 WPF desktop application that embeds a launcher wid
 ## Build
 
 ```bash
-cd SelfHostedHelper
-dotnet build -c Debug -p:Platform=x64
+dotnet build SelfHostedHelper/SelfHostedHelper.csproj -c Debug
 ```
+
+`Directory.Build.props` auto-detects the platform from `PROCESSOR_ARCHITECTURE` (ARM64 → ARM64, otherwise x64). To override: `-p:Platform=x64` or `-p:Platform=ARM64`.
 
 Target: `net10.0-windows10.0.22000.0`, platforms `x64` and `ARM64`.
 
