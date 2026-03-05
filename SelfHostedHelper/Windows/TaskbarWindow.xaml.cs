@@ -48,6 +48,8 @@ public partial class TaskbarWindow : Window
     private AutomationElement? _widgetElement;
     private AutomationElement? _trayElement;
     private AutomationElement? _taskbarFrameElement;
+    private AutomationElement? _startButtonElement;
+    private AutomationElement? _taskListContainerElement;
     private int _lastSelectedMonitor = -1;
     private bool _positionUpdateInProgress;
     private readonly Dictionary<string, Task> _pendingAutomationTasks = [];
@@ -126,6 +128,8 @@ public partial class TaskbarWindow : Window
                     _widgetElement = null;
                     _trayElement = null;
                     _taskbarFrameElement = null;
+                    _startButtonElement = null;
+                    _taskListContainerElement = null;
                     _trayHandle = IntPtr.Zero;
                     SetupWindow();
                 }
@@ -446,6 +450,38 @@ public partial class TaskbarWindow : Window
                 break;
         }
 
+        // Overlap avoidance: shift the widget away from pinned apps and the Start button
+        if (SettingsManager.Current.TaskbarWidgetPadding)
+        {
+            (bool occupiedFound, Rect occupiedBounds) = GetTaskbarOccupiedBounds(taskbarHandle);
+            if (occupiedFound)
+            {
+                int widgetScreenLeft = taskbarRect.Left + widgetLeft;
+                int widgetScreenRight = widgetScreenLeft + physicalWidth;
+                int occupiedLeft = (int)occupiedBounds.Left;
+                int occupiedRight = (int)occupiedBounds.Right;
+
+                if (widgetScreenLeft < occupiedRight && widgetScreenRight > occupiedLeft)
+                {
+                    switch (SettingsManager.Current.TaskbarWidgetPosition)
+                    {
+                        case 0: // Left — push right of occupied area
+                            widgetLeft = occupiedRight - taskbarRect.Left + 4;
+                            break;
+                        case 1: // Center — push left of occupied area, or right if no room
+                            int leftCandidate = occupiedLeft - taskbarRect.Left - physicalWidth - 4;
+                            widgetLeft = leftCandidate >= 4
+                                ? leftCandidate
+                                : occupiedRight - taskbarRect.Left + 4;
+                            break;
+                        case 2: // Right — push left of occupied area
+                            widgetLeft = occupiedLeft - taskbarRect.Left - physicalWidth - 4;
+                            break;
+                    }
+                }
+            }
+        }
+
         return widgetLeft;
     }
 
@@ -511,4 +547,87 @@ public partial class TaskbarWindow : Window
     private (bool, Rect) GetTaskbarWidgetRect(IntPtr h) => GetTaskbarXamlElementRect(h, ref _widgetElement, "WidgetsButton");
     private (bool, Rect) GetSystemTrayRect(IntPtr h) => GetTaskbarXamlElementRect(h, ref _trayElement, "SystemTrayIcon");
     private (bool, Rect) GetTaskbarFrameRect(IntPtr h) => GetTaskbarXamlElementRect(h, ref _taskbarFrameElement, "TaskbarFrame");
+    private (bool, Rect) GetStartButtonRect(IntPtr h) => GetTaskbarXamlElementRect(h, ref _startButtonElement, "StartButton");
+
+    /// <summary>
+    /// Find the task list container (pinned/running apps) by ControlType.List.
+    /// Follows the same caching pattern as GetTaskbarXamlElementRect.
+    /// </summary>
+    private (bool, Rect) GetTaskListContainerRect(IntPtr taskbarHandle)
+    {
+        if (taskbarHandle == IntPtr.Zero) return (false, Rect.Empty);
+
+        try
+        {
+            if (_lastSelectedMonitor != SettingsManager.Current.TaskbarWidgetSelectedMonitor)
+                _taskListContainerElement = null;
+
+            if (_taskListContainerElement == null)
+            {
+                if (_pendingAutomationTasks.TryGetValue("TaskListContainer", out var pending) && !pending.IsCompleted)
+                    return (false, Rect.Empty);
+
+                AutomationElement? found = null;
+                var findTask = Task.Run(() =>
+                {
+                    var root = AutomationElement.FromHandle(taskbarHandle);
+                    found = root.FindFirst(TreeScope.Descendants,
+                        new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.List));
+                });
+                _pendingAutomationTasks["TaskListContainer"] = findTask;
+
+                if (!findTask.Wait(1000)) return (false, Rect.Empty);
+                findTask.GetAwaiter().GetResult();
+                _taskListContainerElement = found;
+            }
+
+            if (_taskListContainerElement == null) return (false, Rect.Empty);
+
+            try
+            {
+                if (_pendingAutomationTasks.TryGetValue("TaskListContainerBounds", out var pending) && !pending.IsCompleted)
+                {
+                    _taskListContainerElement = null;
+                    return (false, Rect.Empty);
+                }
+
+                var cached = _taskListContainerElement;
+                var boundsTask = Task.Run(() => cached.Current.BoundingRectangle);
+                _pendingAutomationTasks["TaskListContainerBounds"] = boundsTask;
+
+                if (!boundsTask.Wait(500)) { _taskListContainerElement = null; return (false, Rect.Empty); }
+                Rect r = boundsTask.GetAwaiter().GetResult();
+                if (r == Rect.Empty) { _taskListContainerElement = null; return (false, Rect.Empty); }
+                return (true, r);
+            }
+            catch (ElementNotAvailableException) { _taskListContainerElement = null; return (false, Rect.Empty); }
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn(ex, "Error finding task list container");
+            _taskListContainerElement = null;
+            return (false, Rect.Empty);
+        }
+    }
+
+    /// <summary>
+    /// Get the combined bounding rectangle of the Start button and pinned/running app icons.
+    /// Used for overlap avoidance so the widget doesn't cover interactive taskbar elements.
+    /// </summary>
+    private (bool, Rect) GetTaskbarOccupiedBounds(IntPtr taskbarHandle)
+    {
+        Rect union = Rect.Empty;
+
+        (bool startFound, Rect startRect) = GetStartButtonRect(taskbarHandle);
+        if (startFound) union = startRect;
+
+        (bool listFound, Rect listRect) = GetTaskListContainerRect(taskbarHandle);
+        if (listFound)
+        {
+            if (union == Rect.Empty) union = listRect;
+            else union.Union(listRect);
+        }
+
+        return (union != Rect.Empty, union);
+    }
 }
