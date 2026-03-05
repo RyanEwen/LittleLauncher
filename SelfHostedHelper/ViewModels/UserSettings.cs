@@ -28,11 +28,6 @@ public partial class UserSettings : ObservableObject
     [ObservableProperty]
     public partial bool NIconHide { get; set; }
 
-    /// <summary>Use Windows 11 symbol-style tray icon.</summary>
-    [ObservableProperty]
-    [XmlElement(ElementName = "nIconSymbol")]
-    public partial bool NIconSymbol { get; set; }
-
     /// <summary>Last known app version string.</summary>
     [ObservableProperty]
     public partial string LastKnownVersion { get; set; }
@@ -138,12 +133,11 @@ public partial class UserSettings : ObservableObject
         AppTheme = 0;
         Startup = false;
         NIconHide = false;
-        NIconSymbol = false;
         LastKnownVersion = "";
         FlowDirection = FlowDirection.LeftToRight;
         FontFamily = "Segoe UI Variable";
 
-        TaskbarWidgetEnabled = true;
+        TaskbarWidgetEnabled = false;
         TaskbarWidgetSelectedMonitor = 0;
         TaskbarWidgetPosition = 0;
         TaskbarWidgetPadding = true;
@@ -182,12 +176,6 @@ public partial class UserSettings : ObservableObject
     {
         if (oldValue == newValue || _initializing) return;
         SelfHostedHelper.Classes.ThemeManager.ApplyAndSaveTheme(newValue);
-    }
-
-    partial void OnNIconSymbolChanged(bool oldValue, bool newValue)
-    {
-        if (oldValue == newValue || _initializing) return;
-        SelfHostedHelper.Classes.ThemeManager.UpdateTrayIcon();
     }
 
     partial void OnTaskbarWidgetEnabledChanged(bool oldValue, bool newValue)

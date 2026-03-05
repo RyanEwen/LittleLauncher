@@ -52,15 +52,6 @@ public partial class SystemPage : Page
         }
     }
 
-    private void ToggleSwitch_Click(object sender, RoutedEventArgs e)
-    {
-        if (Application.Current.MainWindow is MainWindow mainWindow)
-        {
-            bool hide = NIconHideSwitch.IsChecked ?? false;
-            mainWindow.nIcon.Visibility = hide ? Visibility.Collapsed : Visibility.Visible;
-        }
-    }
-
     private void UpdateMonitorList()
     {
         MonitorUtil.UpdateMonitorList(

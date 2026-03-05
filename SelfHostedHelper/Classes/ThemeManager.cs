@@ -97,18 +97,10 @@ internal static class ThemeManager
         {
             if (Application.Current.MainWindow?.FindName("nIcon") is NotifyIcon nIcon)
             {
-                if (SettingsManager.Current.NIconSymbol == true)
-                {
-                    var iconUri = new Uri(WindowsThemeHelper.GetCurrentWindowsTheme() == WindowsTheme.Dark
-                        ? "pack://application:,,,/Resources/TrayIcons/TrayWhite.png"
-                        : "pack://application:,,,/Resources/TrayIcons/TrayBlack.png");
-                    nIcon.Icon = new BitmapImage(iconUri);
-                }
-                else
-                {
-                    var iconUi = new Uri("pack://application:,,,/Resources/SelfHostedHelper.ico");
-                    nIcon.Icon = new BitmapImage(iconUi);
-                }
+                var iconUri = new Uri(WindowsThemeHelper.GetCurrentWindowsTheme() == WindowsTheme.Dark
+                    ? "pack://application:,,,/Resources/TrayIcons/TrayWhite.png"
+                    : "pack://application:,,,/Resources/TrayIcons/TrayBlack.png");
+                nIcon.Icon = new BitmapImage(iconUri);
             }
         });
     }

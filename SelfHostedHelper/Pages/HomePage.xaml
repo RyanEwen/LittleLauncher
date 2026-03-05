@@ -3,7 +3,6 @@
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
       xmlns:viewModels="clr-namespace:SelfHostedHelper.ViewModels"
-      xmlns:utils="clr-namespace:SelfHostedHelper.Classes.Utils"
       xmlns:controls="clr-namespace:MicaWPF.Controls;assembly=MicaWPF"
       d:DesignHeight="800" d:DesignWidth="600"
       xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
@@ -12,10 +11,6 @@
       Title="HomePage"
       d:DataContext="{d:DesignInstance viewModels:UserSettings}"
       Foreground="{DynamicResource TextFillColorPrimaryBrush}">
-
-    <Page.Resources>
-        <utils:BoolToEnabledDisabledConverter x:Key="BoolToEnabledDisabledConverter" />
-    </Page.Resources>
 
     <StackPanel MaxWidth="1000" Margin="16">
         <!-- Header -->
@@ -59,16 +54,37 @@
             </ui:CardAction>
         </Grid>
 
-        <!-- Widget status -->
-        <TextBlock Text="Taskbar Widget" FontSize="14" FontWeight="SemiBold" Margin="0,24,0,6" />
+        <!-- Ways to access the flyout -->
+        <TextBlock Text="Flyout Access" FontSize="14" FontWeight="SemiBold" Margin="0,24,0,6" />
+
+        <ui:CardControl Icon="{ui:SymbolIcon Alert24}" Margin="0,0,0,3">
+            <ui:CardControl.Header>
+                <StackPanel>
+                    <TextBlock Text="Show Tray Icon" FontSize="14" />
+                    <TextBlock Text="Click the system tray icon to open the flyout" FontSize="12" Opacity="0.5" />
+                </StackPanel>
+            </ui:CardControl.Header>
+            <controls:ToggleSwitch x:Name="TrayIconSwitch" Click="TrayIconSwitch_Click" />
+        </ui:CardControl>
+
         <ui:CardControl Icon="{ui:SymbolIcon TextboxAlignBottom24}" Margin="0,0,0,3">
             <ui:CardControl.Header>
                 <StackPanel>
-                    <TextBlock Text="Enable Taskbar Widget" FontSize="14" FontWeight="Regular" />
-                    <TextBlock Text="Show the launcher widget on the taskbar" FontSize="12" Opacity="0.5" />
+                    <TextBlock Text="Show Taskbar Widget" FontSize="14" />
+                    <TextBlock Text="Embed a launcher widget directly in the taskbar" FontSize="12" Opacity="0.5" />
                 </StackPanel>
             </ui:CardControl.Header>
             <controls:ToggleSwitch IsChecked="{Binding TaskbarWidgetEnabled, Mode=TwoWay}" />
+        </ui:CardControl>
+
+        <ui:CardControl Icon="{ui:SymbolIcon Pin24}" Margin="0,0,0,3">
+            <ui:CardControl.Header>
+                <StackPanel>
+                    <TextBlock Text="Pin to Taskbar" FontSize="14" />
+                    <TextBlock Text="Pin a shortcut to the taskbar that opens the flyout" FontSize="12" Opacity="0.5" />
+                </StackPanel>
+            </ui:CardControl.Header>
+            <ui:Button Content="Pin to Taskbar" Click="PinToTaskbar_Click" />
         </ui:CardControl>
     </StackPanel>
 </Page>

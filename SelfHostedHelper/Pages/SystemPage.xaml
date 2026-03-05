@@ -63,8 +63,8 @@
         <ui:CardControl Icon="{ui:SymbolIcon PaddingLeft24}" Margin="0,0,0,3">
             <ui:CardControl.Header>
                 <StackPanel>
-                    <TextBlock Text="Auto-Padding for Windows Widgets" FontSize="14" />
-                    <TextBlock Text="Offset the widget to avoid the native Widgets button" FontSize="12" Opacity="0.5" />
+                    <TextBlock Text="Smart Positioning" FontSize="14" />
+                    <TextBlock Text="Automatically offset the widget to avoid overlapping the Start button, pinned apps, and Widgets button" FontSize="12" Opacity="0.5" />
                 </StackPanel>
             </ui:CardControl.Header>
             <controls:ToggleSwitch IsChecked="{Binding TaskbarWidgetPadding, Mode=TwoWay}" />
@@ -78,29 +78,6 @@
                 </StackPanel>
             </ui:CardControl.Header>
             <ui:TextBox Text="{Binding TaskbarWidgetManualPaddingText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="80" />
-        </ui:CardControl>
-
-        <!-- Tray Icon -->
-        <TextBlock Text="Tray Icon" FontSize="14" FontWeight="SemiBold" Margin="0,16,0,6" />
-
-        <ui:CardControl Icon="{ui:SymbolIcon PaintBrush24}" Margin="0,0,0,3">
-            <ui:CardControl.Header>
-                <StackPanel>
-                    <TextBlock Text="Windows 11 Style Tray Icon" FontSize="14" />
-                    <TextBlock Text="Use the monochrome symbol icon" FontSize="12" Opacity="0.5" />
-                </StackPanel>
-            </ui:CardControl.Header>
-            <controls:ToggleSwitch IsChecked="{Binding NIconSymbol, Mode=TwoWay}" />
-        </ui:CardControl>
-
-        <ui:CardControl Icon="{ui:SymbolIcon EyeOff24}" Margin="0,0,0,3">
-            <ui:CardControl.Header>
-                <StackPanel>
-                    <TextBlock Text="Hide Tray Icon" FontSize="14" />
-                    <TextBlock Text="The taskbar widget will still be visible" FontSize="12" Opacity="0.5" />
-                </StackPanel>
-            </ui:CardControl.Header>
-            <controls:ToggleSwitch x:Name="NIconHideSwitch" IsChecked="{Binding NIconHide, Mode=TwoWay}" Click="ToggleSwitch_Click" />
         </ui:CardControl>
 
         <!-- Backup & Restore -->
