@@ -1,0 +1,118 @@
+<Page x:Class="SelfHostedHelper.Pages.SystemPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+      xmlns:controls="clr-namespace:MicaWPF.Controls;assembly=MicaWPF"
+      xmlns:viewModels="clr-namespace:SelfHostedHelper.ViewModels"
+      d:DesignHeight="900" d:DesignWidth="600"
+      xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+      xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+      mc:Ignorable="d"
+      Title="SystemPage"
+      d:DataContext="{d:DesignInstance viewModels:UserSettings}"
+      Foreground="{DynamicResource TextFillColorPrimaryBrush}">
+
+    <StackPanel MaxWidth="1000" Margin="16">
+        <TextBlock Text="Settings" FontSize="24" FontWeight="SemiBold" Margin="0,0,0,24" />
+
+        <!-- Appearance -->
+        <TextBlock Text="Appearance" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,6" />
+
+        <ui:CardControl Icon="{ui:SymbolIcon ColorFill24}" Margin="0,0,0,3">
+            <ui:CardControl.Header>
+                <TextBlock Text="App Theme" FontSize="14" FontWeight="Regular" VerticalAlignment="Center" />
+            </ui:CardControl.Header>
+            <ComboBox SelectedIndex="{Binding AppTheme, Mode=TwoWay}">
+                <ComboBoxItem Content="System Default" />
+                <ComboBoxItem Content="Light" />
+                <ComboBoxItem Content="Dark" />
+            </ComboBox>
+        </ui:CardControl>
+
+        <ui:CardControl Icon="{ui:SymbolIcon ShareScreenStart24}" Margin="0,0,0,3">
+            <ui:CardControl.Header>
+                <StackPanel>
+                    <TextBlock Text="Launch on Startup" FontSize="14" FontWeight="Regular" />
+                    <TextBlock Text="Start minimized to the system tray" FontSize="12" Opacity="0.5" />
+                </StackPanel>
+            </ui:CardControl.Header>
+            <controls:ToggleSwitch x:Name="StartupSwitch" Click="StartupSwitch_Click" IsChecked="{Binding Startup, Mode=TwoWay}" />
+        </ui:CardControl>
+
+        <!-- Taskbar Widget Settings -->
+        <TextBlock Text="Taskbar Widget" FontSize="14" FontWeight="SemiBold" Margin="0,16,0,6" />
+
+        <ui:CardControl Icon="{ui:SymbolIcon ProjectionScreen24}" Margin="0,0,0,3">
+            <ui:CardControl.Header>
+                <TextBlock Text="Widget Target Display" FontSize="14" />
+            </ui:CardControl.Header>
+            <ComboBox x:Name="WidgetMonitorComboBox" SelectedIndex="{Binding TaskbarWidgetSelectedMonitor, Mode=TwoWay}" />
+        </ui:CardControl>
+
+        <ui:CardControl Icon="{ui:SymbolIcon TextAlignLeft24}" Margin="0,0,0,3">
+            <ui:CardControl.Header>
+                <TextBlock Text="Widget Position" FontSize="14" />
+            </ui:CardControl.Header>
+            <ComboBox SelectedIndex="{Binding TaskbarWidgetPosition, Mode=TwoWay}">
+                <ComboBoxItem Content="Left" />
+                <ComboBoxItem Content="Center" />
+                <ComboBoxItem Content="Right" />
+            </ComboBox>
+        </ui:CardControl>
+
+        <ui:CardControl Icon="{ui:SymbolIcon PaddingLeft24}" Margin="0,0,0,3">
+            <ui:CardControl.Header>
+                <StackPanel>
+                    <TextBlock Text="Auto-Padding for Windows Widgets" FontSize="14" />
+                    <TextBlock Text="Offset the widget to avoid the native Widgets button" FontSize="12" Opacity="0.5" />
+                </StackPanel>
+            </ui:CardControl.Header>
+            <controls:ToggleSwitch IsChecked="{Binding TaskbarWidgetPadding, Mode=TwoWay}" />
+        </ui:CardControl>
+
+        <ui:CardControl Icon="{ui:SymbolIcon TextIndentDecrease24}" Margin="0,0,0,3">
+            <ui:CardControl.Header>
+                <StackPanel>
+                    <TextBlock Text="Custom Padding" FontSize="14" />
+                    <TextBlock Text="Extra pixel offset (default: 0)" FontSize="12" Opacity="0.5" />
+                </StackPanel>
+            </ui:CardControl.Header>
+            <ui:TextBox Text="{Binding TaskbarWidgetManualPaddingText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="80" />
+        </ui:CardControl>
+
+        <!-- Tray Icon -->
+        <TextBlock Text="Tray Icon" FontSize="14" FontWeight="SemiBold" Margin="0,16,0,6" />
+
+        <ui:CardControl Icon="{ui:SymbolIcon PaintBrush24}" Margin="0,0,0,3">
+            <ui:CardControl.Header>
+                <StackPanel>
+                    <TextBlock Text="Windows 11 Style Tray Icon" FontSize="14" />
+                    <TextBlock Text="Use the monochrome symbol icon" FontSize="12" Opacity="0.5" />
+                </StackPanel>
+            </ui:CardControl.Header>
+            <controls:ToggleSwitch IsChecked="{Binding NIconSymbol, Mode=TwoWay}" />
+        </ui:CardControl>
+
+        <ui:CardControl Icon="{ui:SymbolIcon EyeOff24}" Margin="0,0,0,3">
+            <ui:CardControl.Header>
+                <StackPanel>
+                    <TextBlock Text="Hide Tray Icon" FontSize="14" />
+                    <TextBlock Text="The taskbar widget will still be visible" FontSize="12" Opacity="0.5" />
+                </StackPanel>
+            </ui:CardControl.Header>
+            <controls:ToggleSwitch x:Name="NIconHideSwitch" IsChecked="{Binding NIconHide, Mode=TwoWay}" Click="ToggleSwitch_Click" />
+        </ui:CardControl>
+
+        <!-- Backup & Restore -->
+        <TextBlock Text="Backup &amp; Restore" FontSize="14" FontWeight="SemiBold" Margin="0,16,0,6" />
+        <ui:CardControl Icon="{ui:SymbolIcon ArrowUndo24}" Margin="0,0,0,60">
+            <ui:CardControl.Header>
+                <TextBlock Text="Export / Import Settings" FontSize="14" />
+            </ui:CardControl.Header>
+            <StackPanel Orientation="Horizontal">
+                <ui:Button Content="Export" Click="ExportButton_Click" Margin="0,0,8,0" />
+                <ui:Button Content="Import" Click="ImportButton_Click" />
+            </StackPanel>
+        </ui:CardControl>
+    </StackPanel>
+</Page>

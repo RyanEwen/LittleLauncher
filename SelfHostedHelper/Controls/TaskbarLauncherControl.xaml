@@ -1,0 +1,31 @@
+<UserControl x:Class="SelfHostedHelper.Controls.TaskbarLauncherControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             xmlns:viewModels="clr-namespace:SelfHostedHelper.ViewModels"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance viewModels:UserSettings}"
+             Height="40" Width="Auto"
+             TextOptions.TextRenderingMode="ClearType" TextOptions.TextFormattingMode="Ideal"
+             FontFamily="Segoe UI Variable">
+    <!--
+        TaskbarLauncherControl
+        =======================
+        This control is parented inside the Windows taskbar via TaskbarWindow.
+        It displays a single globe icon that opens the launcher flyout on click.
+    -->
+    <!-- Alpha=1 (not 0) so the layered window is hit-testable for mouse events -->
+    <Border Name="MainBorder" CornerRadius="6" ClipToBounds="True" Background="#01000000">
+        <Border Name="IconButton" Width="32" Height="32" CornerRadius="6"
+                Background="#01000000" Cursor="Hand" ToolTip="Launcher"
+                VerticalAlignment="Center" Margin="4,0,4,0"
+                MouseEnter="IconButton_MouseEnter"
+                MouseLeave="IconButton_MouseLeave"
+                MouseLeftButtonUp="IconButton_Click">
+            <ui:SymbolIcon Name="GlobeIcon" Symbol="Globe24" FontSize="16"
+                          Foreground="#CCCCCC" />
+        </Border>
+    </Border>
+</UserControl>

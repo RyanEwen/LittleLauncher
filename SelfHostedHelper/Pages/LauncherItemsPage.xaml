@@ -1,0 +1,51 @@
+<Page x:Class="SelfHostedHelper.Pages.LauncherItemsPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+      xmlns:viewModels="clr-namespace:SelfHostedHelper.ViewModels"
+      d:DesignHeight="900" d:DesignWidth="600"
+      xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+      xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+      mc:Ignorable="d"
+      Title="LauncherItemsPage"
+      d:DataContext="{d:DesignInstance viewModels:UserSettings}"
+      Foreground="{DynamicResource TextFillColorPrimaryBrush}">
+
+    <Grid>
+        <StackPanel MaxWidth="1000" Margin="16">
+            <TextBlock Text="Launcher Items" FontSize="24" FontWeight="SemiBold" Margin="0,0,0,8" />
+            <TextBlock Text="Add, edit, or remove apps and websites from your taskbar launcher." FontSize="14" Opacity="0.6" Margin="0,0,0,16" />
+
+            <!-- Item list -->
+            <ItemsControl x:Name="ItemsList" Margin="0,0,0,8">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <ui:CardControl Margin="0,0,0,4" Padding="8">
+                            <ui:CardControl.Header>
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <ui:SymbolIcon x:Name="ItemIcon" FontSize="20" Margin="0,0,10,0" />
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Name}" FontWeight="Medium" FontSize="14" />
+                                        <TextBlock Text="{Binding Path}" FontSize="12" Opacity="0.5" TextTrimming="CharacterEllipsis" MaxWidth="350" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </ui:CardControl.Header>
+                            <StackPanel Orientation="Horizontal">
+                                <ui:Button Appearance="Transparent" ToolTip="Move up" Padding="4" Margin="0,0,2,0" Click="MoveUp_Click" Tag="{Binding}">
+                                    <ui:SymbolIcon Symbol="ChevronUp24" FontSize="14" />
+                                </ui:Button>
+                                <ui:Button Appearance="Transparent" ToolTip="Move down" Padding="4" Margin="0,0,4,0" Click="MoveDown_Click" Tag="{Binding}">
+                                    <ui:SymbolIcon Symbol="ChevronDown24" FontSize="14" />
+                                </ui:Button>
+                                <ui:Button Appearance="Secondary" Content="Edit" Margin="0,0,4,0" Click="EditItem_Click" Tag="{Binding}" />
+                                <ui:Button Appearance="Danger" Content="Remove" Click="RemoveItem_Click" Tag="{Binding}" />
+                            </StackPanel>
+                        </ui:CardControl>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <ui:Button Appearance="Primary" Content="Add Item" Click="ShowAddDialog_Click" Icon="{ui:SymbolIcon Add24}" Margin="0,8,0,0" />
+        </StackPanel>
+    </Grid>
+</Page>

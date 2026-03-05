@@ -1,0 +1,43 @@
+<Page x:Class="SelfHostedHelper.Pages.AboutPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+      d:DesignHeight="500" d:DesignWidth="600"
+      xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+      xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+      mc:Ignorable="d"
+      Title="AboutPage"
+      Foreground="{DynamicResource TextFillColorPrimaryBrush}">
+
+    <StackPanel MaxWidth="1000" Margin="16">
+        <TextBlock Text="About" FontSize="24" FontWeight="SemiBold" Margin="0,0,0,16" />
+
+        <ui:CardControl Icon="{ui:SymbolIcon InfoSparkle24}" Margin="0,0,0,8">
+            <ui:CardControl.Header>
+                <StackPanel>
+                    <TextBlock Text="Taskbar Launcher" FontSize="16" FontWeight="Medium" />
+                    <TextBlock Text="A customizable application and website launcher that lives in your Windows taskbar." FontSize="13" Opacity="0.6" TextWrapping="Wrap" />
+                </StackPanel>
+            </ui:CardControl.Header>
+        </ui:CardControl>
+
+        <ui:CardControl Icon="{ui:SymbolIcon CodeBlock24}" Margin="0,0,0,8">
+            <ui:CardControl.Header>
+                <StackPanel>
+                    <TextBlock Text="Built With" FontSize="14" FontWeight="Medium" />
+                    <TextBlock Text="WPF · .NET 10 · WPF-UI · MicaWPF · CommunityToolkit.Mvvm · SSH.NET · NLog" FontSize="12" Opacity="0.5" />
+                </StackPanel>
+            </ui:CardControl.Header>
+        </ui:CardControl>
+
+        <ui:CardControl Icon="{ui:SymbolIcon HeartCircle24}" Margin="0,0,0,8">
+            <ui:CardControl.Header>
+                <StackPanel>
+                    <TextBlock Text="Credits" FontSize="14" FontWeight="Medium" />
+                    <TextBlock FontSize="12" Opacity="0.5" TextWrapping="Wrap"
+                               Text="Based on the architecture of SelfHostedHelper by unchihugo. Stripped down and repurposed as a learning template." />
+                </StackPanel>
+            </ui:CardControl.Header>
+        </ui:CardControl>
+    </StackPanel>
+</Page>

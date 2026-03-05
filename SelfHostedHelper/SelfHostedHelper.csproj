@@ -1,0 +1,58 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.22000.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>False</UseWindowsForms>
+    <RootNamespace>SelfHostedHelper</RootNamespace>
+    <StartupObject>SelfHostedHelper.App</StartupObject>
+    <AssemblyName>TaskbarLauncher</AssemblyName>
+    <Platforms>x64;ARM64</Platforms>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <LangVersion>preview</LangVersion>
+    <Configurations>Debug;Release</Configurations>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <!-- NuGet packages ────────────────────────────────────────────── -->
+  <ItemGroup>
+    <!-- Fluent Design UI controls for WPF -->
+    <PackageReference Include="WPF-UI" Version="4.2.0" />
+    <PackageReference Include="WPF-UI.Tray" Version="4.2.0" />
+
+    <!-- Mica backdrop support -->
+    <PackageReference Include="MicaWPF" Version="6.3.2" />
+
+    <!-- MVVM source generators (ObservableProperty, RelayCommand) -->
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
+
+    <!-- SSH/SFTP client for settings cloud sync -->
+    <PackageReference Include="SSH.NET" Version="2025.1.0" />
+
+    <!-- Structured logging -->
+    <PackageReference Include="NLog" Version="6.1.1" />
+  </ItemGroup>
+
+  <!-- Content files to copy to output ────────────────────────────── -->
+  <ItemGroup>
+    <None Remove="NLog.config" />
+    <None Remove="Resources\SelfHostedHelper.ico" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="NLog.config">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Resources\SelfHostedHelper.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Resources\TrayIcons\TrayBlack.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Resources\TrayIcons\TrayWhite.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+</Project>

@@ -1,0 +1,116 @@
+<Page x:Class="SelfHostedHelper.Pages.SyncPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+      xmlns:controls="clr-namespace:MicaWPF.Controls;assembly=MicaWPF"
+      xmlns:viewModels="clr-namespace:SelfHostedHelper.ViewModels"
+      d:DesignHeight="900" d:DesignWidth="600"
+      xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+      xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+      mc:Ignorable="d"
+      Title="SyncPage"
+      d:DataContext="{d:DesignInstance viewModels:UserSettings}"
+      Foreground="{DynamicResource TextFillColorPrimaryBrush}">
+
+    <StackPanel MaxWidth="1000" Margin="16">
+        <TextBlock Text="Cloud Sync (SSH/SFTP)" FontSize="24" FontWeight="SemiBold" Margin="0,0,0,8" />
+        <TextBlock Text="Sync your settings to a remote server via SFTP. Uses SSH key or password authentication."
+                   FontSize="14" Opacity="0.6" Margin="0,0,0,16" TextWrapping="Wrap" />
+
+        <!-- Connection settings -->
+        <TextBlock Text="Connection" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,6" />
+
+        <ui:CardControl Icon="{ui:SymbolIcon Server24}" Margin="0,0,0,3">
+            <ui:CardControl.Header>
+                <TextBlock Text="Host" FontSize="14" />
+            </ui:CardControl.Header>
+            <ui:TextBox Text="{Binding SftpHost, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" PlaceholderText="e.g. 192.168.1.100" Width="200" />
+        </ui:CardControl>
+
+        <ui:CardControl Icon="{ui:SymbolIcon PlugConnected24}" Margin="0,0,0,3">
+            <ui:CardControl.Header>
+                <TextBlock Text="Port" FontSize="14" />
+            </ui:CardControl.Header>
+            <ui:TextBox x:Name="PortBox" Text="{Binding SftpPort, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="80" />
+        </ui:CardControl>
+
+        <ui:CardControl Icon="{ui:SymbolIcon PersonAdd24}" Margin="0,0,0,3">
+            <ui:CardControl.Header>
+                <TextBlock Text="Username" FontSize="14" />
+            </ui:CardControl.Header>
+            <ui:TextBox Text="{Binding SftpUsername, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" PlaceholderText="Default: Windows user" Width="200" />
+        </ui:CardControl>
+
+        <ui:CardControl Icon="{ui:SymbolIcon KeyMultiple24}" Margin="0,0,0,3">
+            <ui:CardControl.Header>
+                <StackPanel>
+                    <TextBlock Text="Private Key Path" FontSize="14" />
+                    <TextBlock Text="Auto-detected from ~/.ssh/ if empty" FontSize="12" Opacity="0.5" />
+                </StackPanel>
+            </ui:CardControl.Header>
+            <StackPanel Orientation="Horizontal">
+                <ui:TextBox Text="{Binding SftpPrivateKeyPath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" PlaceholderText="~/.ssh/id_rsa" Width="200" Margin="0,0,8,0" />
+                <ui:Button Content="Browse..." Click="BrowseKey_Click" />
+            </StackPanel>
+        </ui:CardControl>
+
+        <ui:CardControl Icon="{ui:SymbolIcon FolderOpen24}" Margin="0,0,0,3">
+            <ui:CardControl.Header>
+                <StackPanel>
+                    <TextBlock Text="Remote Path" FontSize="14" />
+                    <TextBlock Text="Directory on the server to store settings" FontSize="12" Opacity="0.5" />
+                </StackPanel>
+            </ui:CardControl.Header>
+            <ui:TextBox Text="{Binding SftpRemotePath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="250" />
+        </ui:CardControl>
+
+        <ui:CardControl Icon="{ui:SymbolIcon ArrowSync24}" Margin="0,0,0,3">
+            <ui:CardControl.Header>
+                <StackPanel>
+                    <TextBlock Text="Auto-Sync on Startup" FontSize="14" />
+                    <TextBlock Text="Download settings from server when the app starts" FontSize="12" Opacity="0.5" />
+                </StackPanel>
+            </ui:CardControl.Header>
+            <controls:ToggleSwitch IsChecked="{Binding SftpAutoSync, Mode=TwoWay}" />
+        </ui:CardControl>
+
+        <ui:CardControl Icon="{ui:SymbolIcon CloudArrowUp24}" Margin="0,0,0,3">
+            <ui:CardControl.Header>
+                <StackPanel>
+                    <TextBlock Text="Sync on Settings Close" FontSize="14" />
+                    <TextBlock Text="Upload settings to server when you close the settings window" FontSize="12" Opacity="0.5" />
+                </StackPanel>
+            </ui:CardControl.Header>
+            <controls:ToggleSwitch IsChecked="{Binding SftpAutoSyncOnClose, Mode=TwoWay}" />
+        </ui:CardControl>
+
+        <!-- Actions -->
+        <TextBlock Text="Actions" FontSize="14" FontWeight="SemiBold" Margin="0,16,0,6" />
+        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+            <ui:Button Content="Test Connection" Appearance="Secondary" Click="TestConnection_Click" Margin="0,0,8,0" />
+            <ui:Button Content="Upload Settings" Appearance="Primary" Click="Upload_Click" Margin="0,0,8,0" />
+            <ui:Button Content="Download Settings" Appearance="Secondary" Click="Download_Click" Margin="0,0,8,0" />
+        </StackPanel>
+
+        <TextBlock Text="Connection Profile" FontSize="14" FontWeight="SemiBold" Margin="0,8,0,6" />
+        <TextBlock Text="Export or import just the SSH connection settings for use on other machines." FontSize="13" Opacity="0.6" Margin="0,0,0,8" TextWrapping="Wrap" />
+        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+            <ui:Button Content="Export Connection..." Appearance="Secondary" Click="ExportSshConfig_Click" Margin="0,0,8,0" />
+            <ui:Button Content="Import Connection..." Appearance="Secondary" Click="ImportSshConfig_Click" />
+        </StackPanel>
+
+        <!-- Password prompt (shown when needed) -->
+        <ui:CardControl x:Name="PasswordCard" Icon="{ui:SymbolIcon Password24}" Margin="0,0,0,8" Visibility="Collapsed">
+            <ui:CardControl.Header>
+                <TextBlock Text="Password / Key Passphrase" FontSize="14" />
+            </ui:CardControl.Header>
+            <StackPanel Orientation="Horizontal">
+                <PasswordBox x:Name="PasswordBox" Width="200" Margin="0,0,8,0" />
+                <ui:Button Content="OK" Click="PasswordOk_Click" />
+            </StackPanel>
+        </ui:CardControl>
+
+        <!-- Status display -->
+        <ui:InfoBar x:Name="StatusBar" IsOpen="False" IsClosable="True" Margin="0,4,0,0" />
+    </StackPanel>
+</Page>

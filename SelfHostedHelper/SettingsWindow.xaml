@@ -1,0 +1,62 @@
+<ui:FluentWindow
+    x:Class="SelfHostedHelper.SettingsWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+    xmlns:pages="clr-namespace:SelfHostedHelper.Pages"
+    Height="700" MinHeight="300" MinWidth="750" Width="900"
+    Title="Taskbar Launcher" Icon="/Resources/SelfHostedHelper.ico"
+    TextOptions.TextRenderingMode="ClearType" TextOptions.TextFormattingMode="Ideal"
+    FontFamily="{Binding FontFamily}"
+    Closing="SettingsWindow_Closing"
+    xmlns:viewModels="clr-namespace:SelfHostedHelper.ViewModels"
+    d:DataContext="{d:DesignInstance viewModels:UserSettings}"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    ui:Design.Background="{DynamicResource ApplicationBackgroundBrush}"
+    ui:Design.Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+    ExtendsContentIntoTitleBar="True"
+    WindowBackdropType="Mica"
+    Loaded="SettingsWindow_Loaded">
+    <!--
+        SettingsWindow.xaml
+        ===================
+        The main settings UI. Uses WPF-UI's FluentWindow with Mica backdrop.
+        NavigationView provides a left-pane menu with page-based navigation:
+          - Home: dashboard with quick actions
+          - Launcher Items: add/edit/remove shortcuts
+          - Cloud Sync: SSH/SFTP settings sync
+          - Settings: theme, startup, widget position, tray icon
+          - About: credits and tech stack
+    -->
+    <Grid>
+        <ui:NavigationView x:Name="RootNavigation"
+                           PaneDisplayMode="Left"
+                           TransitionDuration="100"
+                           IsPaneToggleVisible="True"
+                           Margin="0, 40, 0, 0"
+                           FrameMargin="0, 0, 0, 0"
+                           OpenPaneLength="250"
+                           IsTopSeparatorVisible="False"
+                           IsFooterSeparatorVisible="False">
+            <ui:NavigationView.MenuItems>
+                <ui:NavigationViewItem Content="Home" Icon="{ui:SymbolIcon HomeMore24}" TargetPageType="{x:Type pages:HomePage}" />
+                <ui:NavigationViewItem Content="Launcher Items" Icon="{ui:SymbolIcon AppsList24}" TargetPageType="{x:Type pages:LauncherItemsPage}" />
+                <ui:NavigationViewItem Content="Cloud Sync" Icon="{ui:SymbolIcon CloudSync24}" TargetPageType="{x:Type pages:SyncPage}" />
+                <ui:NavigationViewItem Content="Settings" Icon="{ui:SymbolIcon Settings24}" TargetPageType="{x:Type pages:SystemPage}" />
+            </ui:NavigationView.MenuItems>
+            <ui:NavigationView.FooterMenuItems>
+                <ui:NavigationViewItem Content="About" Icon="{ui:SymbolIcon InfoSparkle24}" TargetPageType="{x:Type pages:AboutPage}" />
+            </ui:NavigationView.FooterMenuItems>
+        </ui:NavigationView>
+
+        <ui:TitleBar x:Name="TitleBar" Title="Taskbar Launcher" Grid.Row="0">
+            <ui:TitleBar.Icon>
+                <ui:ImageIcon Source="/Resources/SelfHostedHelper.ico" />
+            </ui:TitleBar.Icon>
+        </ui:TitleBar>
+
+        <ui:ContentDialogHost x:Name="DialogHost" />
+    </Grid>
+</ui:FluentWindow>
