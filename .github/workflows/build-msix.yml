@@ -1,34 +1,49 @@
-name: Build and Package MSIX
+name: Build and Package
 
 on:
   workflow_dispatch:
   push:
     branches:
-      - master
-    paths:
-      - 'LittleLauncherMSIX/Package.appxmanifest'
+      - main
 
 jobs:
   build:
     runs-on: windows-latest
-    
+
     strategy:
       matrix:
         configuration: ["GitHub Release", "Release"]
+        platform: [x64, ARM64]
 
     env:
       SOLUTION_PATH: LittleLauncher.sln
       WAP_PROJECT_PATH: LittleLauncherMSIX\LittleLauncherMSIX.wapproj
       CONFIGURATION: ${{ matrix.configuration }}
-      PLATFORM: x64
+      PLATFORM: ${{ matrix.platform }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
+      # ── Regular build ──────────────────────────────────────────
+      - name: Build (dotnet)
+        run: dotnet build LittleLauncher/LittleLauncher.csproj -c Release -p:Platform=$env:PLATFORM
+
+      - name: Upload build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: Build-${{ matrix.configuration == 'GitHub Release' && 'GitHub_Release' || matrix.configuration }}-${{ matrix.platform }}
+          path: LittleLauncher/bin/${{ matrix.platform }}/Release/net10.0-windows10.0.22000.0/
+
+      # ── MSIX build ─────────────────────────────────────────────
       - name: Decode signing certificate
         run: |
           $cert = [Convert]::FromBase64String("${{ secrets.MSIX_CERT_BASE64 }}")
@@ -51,5 +66,5 @@ jobs:
       - name: Upload MSIX bundle as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MSIX-${{ env.CONFIGURATION == 'GitHub Release' && 'GitHub_Release' || matrix.configuration }}-${{ env.PLATFORM }}
+          name: MSIX-${{ matrix.configuration == 'GitHub Release' && 'GitHub_Release' || matrix.configuration }}-${{ matrix.platform }}
           path: AppxPackages\*\
