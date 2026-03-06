@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2025
 
     strategy:
       matrix:
@@ -58,6 +58,7 @@ jobs:
             /p:Configuration=$env:CONFIGURATION `
             /p:Platform=$env:PLATFORM `
             /p:UapAppxPackageBuildMode=StoreUpload `
+            /p:AppxBundle=Never `
             /p:AppxPackageDir="$env:GITHUB_WORKSPACE\AppxPackages\\" `
             /p:AppxPackageSigningEnabled=true `
             /p:PackageCertificateKeyFile="$env:RUNNER_TEMP\cert.pfx" `
