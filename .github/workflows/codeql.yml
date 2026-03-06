@@ -84,7 +84,7 @@ jobs:
 
     - name: Restore NuGet packages
       if: matrix.build-mode == 'manual'
-      run: nuget restore SelfHostedHelper.sln
+      run: nuget restore LittleLauncher.sln
 
     # If the analyze step fails for one of the languages you are analyzing with
     # "We were unable to automatically build your code", modify the matrix above
@@ -95,7 +95,7 @@ jobs:
     - name: Run manual build steps
       if: matrix.build-mode == 'manual'
       run: |
-        msbuild SelfHostedHelper.sln
+        msbuild LittleLauncher.sln
 
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v4

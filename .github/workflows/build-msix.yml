@@ -6,7 +6,7 @@ on:
     branches:
       - master
     paths:
-      - 'SelfHostedHelperMSIX/Package.appxmanifest'
+      - 'LittleLauncherMSIX/Package.appxmanifest'
 
 jobs:
   build:
@@ -17,8 +17,8 @@ jobs:
         configuration: ["GitHub Release", "Release"]
 
     env:
-      SOLUTION_PATH: SelfHostedHelper.sln
-      WAP_PROJECT_PATH: SelfHostedHelperMSIX\SelfHostedHelperMSIX.wapproj
+      SOLUTION_PATH: LittleLauncher.sln
+      WAP_PROJECT_PATH: LittleLauncherMSIX\LittleLauncherMSIX.wapproj
       CONFIGURATION: ${{ matrix.configuration }}
       PLATFORM: x64
 

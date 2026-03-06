@@ -26,5 +26,5 @@ applyTo: "**/NativeMethods.cs"
 
 ## Consuming P/Invoke
 
-- Import via `using static SelfHostedHelper.Classes.NativeMethods;`
+- Import via `using static LittleLauncher.Classes.NativeMethods;`
 - Never scatter P/Invoke declarations across multiple files

@@ -1,10 +1,10 @@
-# SelfHostedHelper
+# LittleLauncher
 
 A Windows system-tray launcher and settings-sync utility built with WinUI 3, Windows App SDK, and SSH/SFTP.
 
 ## Overview
 
-SelfHostedHelper lives in the Windows system tray. Clicking the tray icon opens a flyout with app and website shortcuts. It also provides SSH/SFTP-based settings synchronisation so you can keep your launcher configuration in sync across machines.
+LittleLauncher lives in the Windows system tray. Clicking the tray icon opens a flyout with app and website shortcuts. It also provides SSH/SFTP-based settings synchronisation so you can keep your launcher configuration in sync across machines.
 
 **Key features:**
 
@@ -23,7 +23,7 @@ SelfHostedHelper lives in the Windows system tray. Clicking the tray icon opens 
 | `FlyoutWindow` | A popup window that displays launcher items with icons, positioned above the taskbar. Dismissed on focus loss or Escape. |
 | `SettingsWindow` | WinUI 3 window with `MicaBackdrop` and `NavigationView` — pages for Home, Launcher Items, Cloud Sync, Settings, and About. |
 | `SftpSyncService` | Static async methods for upload/download/test-connection using SSH.NET (`Renci.SshNet`). Supports private-key and password auth. |
-| `SettingsManager` | Fully static. Serialises `UserSettings` to `%AppData%\SelfHostedHelper\settings.xml` via `XmlSerializer`. |
+| `SettingsManager` | Fully static. Serialises `UserSettings` to `%AppData%\LittleLauncher\settings.xml` via `XmlSerializer`. |
 | `ThemeManager` | Sets `RequestedTheme` on root `FrameworkElement` of each window. Detects system dark/light mode via cached `UISettings`. |
 
 ## Tech stack
@@ -48,7 +48,7 @@ SelfHostedHelper lives in the Windows system tray. Clicking the tray icon opens 
 ### Build
 
 ```bash
-cd SelfHostedHelper
+cd LittleLauncher
 dotnet build -c Debug
 ```
 
@@ -57,15 +57,15 @@ dotnet build -c Debug
 ### Run
 
 ```bash
-dotnet run --project SelfHostedHelper -c Debug
+dotnet run --project LittleLauncher -c Debug
 ```
 
-Or open `SelfHostedHelper.sln` in Visual Studio / Rider and press F5.
+Or open `LittleLauncher.sln` in Visual Studio / Rider and press F5.
 
 ## Project structure
 
 ```
-SelfHostedHelper/              # WinUI 3 application project
+LittleLauncher/              # WinUI 3 application project
 ├── App.xaml / App.xaml.cs     # Bootstrap, exception handling, settings restore
 ├── MainWindow.xaml/.cs        # Invisible host + tray icon + singleton IPC
 ├── SettingsWindow.xaml/.cs    # WinUI 3 settings UI with Mica backdrop
@@ -93,7 +93,7 @@ SelfHostedHelper/              # WinUI 3 application project
 └── Resources/
     ├── Localization/
     │   └── Dictionary-en-US.xaml
-    └── SelfHostedHelper.ico
+    └── LittleLauncher.ico
 
 LauncherShortcut/              # Companion console exe for pin-to-taskbar helper
 ```

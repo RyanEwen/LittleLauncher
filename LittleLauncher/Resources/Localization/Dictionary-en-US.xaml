@@ -1,0 +1,62 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    >
+
+    <!-- General -->
+    <x:String x:Key="TitleText">Little Launcher Settings</x:String>
+    <x:String x:Key="Enabled">Enabled</x:String>
+    <x:String x:Key="Disabled">Disabled</x:String>
+
+    <!-- Home / Dashboard -->
+    <x:String x:Key="HomeTitle">Home</x:String>
+    <x:String x:Key="HomeDashboardTitle">Dashboard</x:String>
+
+    <!-- Launcher Items -->
+    <x:String x:Key="LauncherItemsTitle">Launcher Items</x:String>
+    <x:String x:Key="LauncherItemsDescription">Add applications or websites that appear in your taskbar widget for quick access.</x:String>
+
+    <!-- Cloud Sync -->
+    <x:String x:Key="CloudSyncTitle">Cloud Sync</x:String>
+    <x:String x:Key="CloudSyncDescription">Synchronise your settings to a remote server using SSH/SFTP.</x:String>
+
+    <!-- System Settings -->
+    <x:String x:Key="SystemSettingsTitle">Settings</x:String>
+    <x:String x:Key="AppearanceBehaviorSectionTitle">Appearance &amp; behaviour</x:String>
+    <x:String x:Key="AppThemeTitle">App Theme</x:String>
+    <x:String x:Key="AppThemeDefault"> Windows Default</x:String>
+    <x:String x:Key="AppThemeLight"> Light</x:String>
+    <x:String x:Key="AppThemeDark"> Dark</x:String>
+    <x:String x:Key="LaunchOnStartupTitle">Launch on Startup</x:String>
+    <x:String x:Key="LaunchOnStartupDescription">Start minimized to tray when you log in to Windows</x:String>
+    <x:String x:Key="StartupAppsHyperlinkText">Startup Apps</x:String>
+    <x:String x:Key="StartupAppsSettingsInfo">If this setting does not work as expected, check</x:String>
+    <x:String x:Key="SystemConfigure">Configure</x:String>
+
+    <!-- Tray Icon -->
+    <x:String x:Key="TrayIconSectionTitle">Tray Icon</x:String>
+    <x:String x:Key="HideTrayIconTitle">Hide Tray Icon Completely</x:String>
+    <x:String x:Key="HideTrayIconDescription">Access settings from launching the program twice</x:String>
+    <x:String x:Key="TrayIcon_SettingsOption">Settings</x:String>
+    <x:String x:Key="TrayIcon_QuitOption">Quit</x:String>
+
+    <!-- Back up and restore -->
+    <x:String x:Key="BackupRestoreSectionTitle">Back up &amp; restore</x:String>
+    <x:String x:Key="BackupRestoreCardTitle">Back up and restore your settings</x:String>
+    <x:String x:Key="ExportSettings">Export Settings</x:String>
+    <x:String x:Key="ImportSettings">Import Settings</x:String>
+    <x:String x:Key="ExportSuccessful">Export Successful</x:String>
+    <x:String x:Key="ExportFailed">Export Failed</x:String>
+    <x:String x:Key="ImportSuccessful">Import Successful</x:String>
+    <x:String x:Key="ImportFailed">Import Failed</x:String>
+    <x:String x:Key="SettingsExportedSuccessfully">Settings exported successfully!</x:String>
+    <x:String x:Key="FailedToExportSettings">Failed to export settings. Check the logs for details.</x:String>
+    <x:String x:Key="SettingsImportedSuccessfully">Settings imported successfully! The application will now restart to apply changes.</x:String>
+    <x:String x:Key="ImportSettingsWarning">This will replace all your current settings. Continue?</x:String>
+    <x:String x:Key="FailedToImportSettings">Failed to import settings. Check the logs for details.</x:String>
+
+    <!-- About -->
+    <x:String x:Key="AboutTitle">About</x:String>
+    <x:String x:Key="GitHubRepoLink">GitHub Repository</x:String>
+    <x:String x:Key="CloseButton">Close</x:String>
+</ResourceDictionary>
+

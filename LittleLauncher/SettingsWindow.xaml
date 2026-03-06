@@ -1,0 +1,65 @@
+<Window
+    x:Class="LittleLauncher.SettingsWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:pages="using:LittleLauncher.Pages"
+    Title="Little Launcher">
+    <!--
+        SettingsWindow.xaml (WinUI 3)
+        =============================
+        The main settings UI. Uses WinUI 3 Window with Mica backdrop.
+        NavigationView provides a left-pane menu with Frame-based navigation.
+    -->
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="48" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Custom title bar area -->
+        <Grid x:Name="AppTitleBar" Grid.Row="0" VerticalAlignment="Top" Height="48">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Image Source="Resources/LittleLauncher.ico" Width="16" Height="16"
+                   Margin="16,0,8,0" VerticalAlignment="Center" />
+            <TextBlock Grid.Column="1" Text="Little Launcher"
+                       VerticalAlignment="Center" Style="{StaticResource CaptionTextBlockStyle}" />
+        </Grid>
+
+        <NavigationView x:Name="RootNavigation" Grid.Row="1"
+                        PaneDisplayMode="Left"
+                        IsPaneToggleButtonVisible="True"
+                        OpenPaneLength="250"
+                        IsBackButtonVisible="Collapsed"
+                        IsSettingsVisible="True"
+                        SelectionChanged="RootNavigation_SelectionChanged">
+            <NavigationView.MenuItems>
+                <NavigationViewItem Content="Home" Tag="HomePage">
+                    <NavigationViewItem.Icon>
+                        <SymbolIcon Symbol="Home" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Launcher Items" Tag="LauncherItemsPage">
+                    <NavigationViewItem.Icon>
+                        <SymbolIcon Symbol="AllApps" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Cloud Sync" Tag="SyncPage">
+                    <NavigationViewItem.Icon>
+                        <SymbolIcon Symbol="Sync" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+            </NavigationView.MenuItems>
+            <NavigationView.FooterMenuItems>
+                <NavigationViewItem Content="About" Tag="AboutPage">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE946;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+            </NavigationView.FooterMenuItems>
+            <Frame x:Name="ContentFrame" />
+        </NavigationView>
+    </Grid>
+</Window>

@@ -1,4 +1,4 @@
-# Architecture — SelfHostedHelper
+# Architecture — LittleLauncher
 
 ## High-level flow
 
@@ -16,16 +16,21 @@ App.xaml  →  MainWindow (invisible, owns tray icon)
 ## Settings persistence
 
 - `UserSettings` (the ViewModel) is an `ObservableObject` with `[ObservableProperty]` attributes.
-- `SettingsManager` (fully static) serialises it to XML at `%AppData%\SelfHostedHelper\settings.xml`.
+- `SettingsManager` (fully static) serialises it to XML at `%AppData%\LittleLauncher\settings.xml`.
 - On startup, `RestoreSettings()` deserialises and calls `CompleteInitialization()` to enable change handlers.
 - `SaveSettings()` is called on settings window close and after SFTP download.
 
 ## SFTP sync
 
-`SftpSyncService` provides three static async methods:
-- `UploadSettingsAsync()` — saves current settings, connects via SSH.NET, uploads `settings.xml`.
-- `DownloadSettingsAsync()` — downloads remote file to temp, swaps it in, reloads settings.
+`SftpSyncService` provides static async methods:
+- `UploadLauncherItemsAsync()` — serializes launcher items and uploads `launcher-items.xml` via SFTP.
+- `DownloadLauncherItemsAsync()` — downloads `launcher-items.xml`, deserializes, and replaces the local launcher items collection on the UI thread.
 - `TestConnectionAsync()` — verifies SSH connectivity and SFTP access.
+
+`AutoSyncService` manages automatic sync triggers:
+- Downloads launcher items on startup.
+- Debounced upload (3 s) when items change.
+- Periodic download on a configurable interval.
 
 Supports both private-key (`PrivateKeyFile`) and password-based authentication.
 

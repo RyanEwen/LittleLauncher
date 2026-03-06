@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Builds the SelfHostedHelper MSIX package.
+    Builds the LittleLauncher MSIX package.
 
 .DESCRIPTION
     1. Publishes the app with dotnet publish (self-contained)
@@ -31,19 +31,19 @@ Set-StrictMode -Version Latest
 
 # ── Paths ──────────────────────────────────────────────────────────
 $repoRoot      = $PSScriptRoot
-$mainProj      = Join-Path $repoRoot "SelfHostedHelper\SelfHostedHelper.csproj"
-$msixDir       = Join-Path $repoRoot "SelfHostedHelperMSIX"
+$mainProj      = Join-Path $repoRoot "LittleLauncher\LittleLauncher.csproj"
+$msixDir       = Join-Path $repoRoot "LittleLauncherMSIX"
 $manifestFile  = Join-Path $msixDir  "Package.appxmanifest"
 $imagesDir     = Join-Path $msixDir  "Images"
-$pfxFile       = Join-Path $msixDir  "SelfHostedHelper.pfx"
+$pfxFile       = Join-Path $msixDir  "LittleLauncher.pfx"
 
 $rid           = if ($Platform -eq "ARM64") { "win-arm64" } else { "win-x64" }
-$publishDir    = Join-Path $repoRoot "SelfHostedHelper\bin\$Platform\$Configuration\net10.0-windows10.0.22000.0\$rid\publish"
+$publishDir    = Join-Path $repoRoot "LittleLauncher\bin\$Platform\$Configuration\net10.0-windows10.0.22000.0\$rid\publish"
 $flyoutProj    = Join-Path $repoRoot "LauncherShortcut\LauncherShortcut.csproj"
 $flyoutPublish = Join-Path $repoRoot "LauncherShortcut\bin\$Platform\$Configuration\net10.0-windows10.0.22000.0\$rid\publish"
 $layoutDir     = Join-Path $repoRoot "build\msix-layout\$Platform"
 $outputDir     = Join-Path $repoRoot "build\msix-output"
-$msixFile      = Join-Path $outputDir "SelfHostedHelper-$Platform.msix"
+$msixFile      = Join-Path $outputDir "LittleLauncher-$Platform.msix"
 
 # Windows SDK tools — use native host architecture binaries
 $sdkHostArch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x64" }
@@ -102,11 +102,11 @@ New-Item $layoutDir -ItemType Directory -Force | Out-Null
 Write-Host "  Copying published files from $publishDir"
 Copy-Item "$publishDir\*" $layoutDir -Recurse -Force
 # Replace managed LauncherShortcut files with Native AOT binary
-$flyoutExe = Join-Path $flyoutPublish "TaskbarLauncherFlyout.exe"
+$flyoutExe = Join-Path $flyoutPublish "LittleLauncherFlyout.exe"
 if (Test-Path $flyoutExe) {
     Write-Host "  Replacing LauncherShortcut with Native AOT binary"
     # Remove managed files that won't exist in AOT output
-    foreach ($f in @("TaskbarLauncherFlyout.dll", "TaskbarLauncherFlyout.deps.json", "TaskbarLauncherFlyout.runtimeconfig.json")) {
+    foreach ($f in @("LittleLauncherFlyout.dll", "LittleLauncherFlyout.deps.json", "LittleLauncherFlyout.runtimeconfig.json")) {
         $managed = Join-Path $layoutDir $f
         if (Test-Path $managed) { Remove-Item $managed -Force }
     }
@@ -160,7 +160,7 @@ if ($LASTEXITCODE -ne 0) {
 # ── Step 6: Sign ──────────────────────────────────────────────────
 Write-Host "`n=== Signing MSIX ===" -ForegroundColor Cyan
 
-& $signtool sign /fd SHA256 /a /f $pfxFile /p "SelfHostedHelper" $msixFile
+& $signtool sign /fd SHA256 /a /f $pfxFile /p "LittleLauncher" $msixFile
 if ($LASTEXITCODE -ne 0) {
     Write-Error "signtool sign failed"
     exit 1
@@ -172,5 +172,5 @@ Write-Host "`n=== SUCCESS ===" -ForegroundColor Green
 Write-Host "  MSIX: $msixFile ($size MB)"
 Write-Host "  To install: double-click the .msix file"
 Write-Host "  NOTE: The signing certificate must be trusted on the target machine."
-Write-Host "        Import SelfHostedHelperMSIX\SelfHostedHelper.cer into"
+Write-Host "        Import LittleLauncherMSIX\LittleLauncher.cer into"
 Write-Host "        'Trusted Root Certification Authorities' (Local Machine) first."

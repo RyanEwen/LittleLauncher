@@ -5,7 +5,7 @@ namespace LauncherShortcut;
 /// <summary>
 /// Tiny companion exe intended to be pinned to the Windows taskbar.
 ///
-/// Default mode:  Signals the main TaskbarLauncher app to show its flyout via
+/// Default mode:  Signals the main LittleLauncher app to show its flyout via
 ///                a registered window message, passing the cursor position, then exits.
 /// --pin mode:    Keeps the process alive with a dialog so the user can right-click
 ///                the taskbar icon and choose "Pin to taskbar", then close the dialog.
@@ -56,10 +56,10 @@ static class Program
 
         GetCursorPos(out var pt);
 
-        var target = FindWindow(null, "TaskbarLauncher Host");
+        var target = FindWindow(null, "LittleLauncher Host");
         if (target == 0) return;
 
-        var msg = (int)RegisterWindowMessage("TaskbarLauncher_ShowFlyout");
+        var msg = (int)RegisterWindowMessage("LittleLauncher_ShowFlyout");
         PostMessage(target, msg, pt.X, pt.Y);
     }
 }

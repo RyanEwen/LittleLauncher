@@ -1,39 +1,39 @@
-# SelfHostedHelper — Copilot Instructions
+# LittleLauncher — Copilot Instructions
 
 ## Project overview
 
-SelfHostedHelper is a .NET 10 WinUI 3 desktop application (unpackaged) that provides a system-tray launcher with a flyout popup for shortcuts. It also syncs settings to a remote server via SSH/SFTP.
+LittleLauncher is a .NET 10 WinUI 3 desktop application (unpackaged) that provides a system-tray launcher with a flyout popup for shortcuts. It also syncs settings to a remote server via SSH/SFTP.
 
 ## Architecture
 
-- **Single-instance app** enforced via a named `Mutex` ("TaskbarLauncher"). A second launch signals the first instance via `PostMessage` with registered window messages (`TaskbarLauncher_ShowFlyout`, `TaskbarLauncher_ShowSettings`).
+- **Single-instance app** enforced via a named `Mutex` ("LittleLauncher"). A second launch signals the first instance via `PostMessage` with registered window messages (`LittleLauncher_ShowFlyout`, `LittleLauncher_ShowSettings`).
 - **MainWindow** is invisible (moved off-screen, 1×1). It owns the system-tray icon (`H.NotifyIcon.TaskbarIcon`). Uses `WS_EX_TOOLWINDOW` to hide from Alt-Tab.
 - **FlyoutWindow** is a popup that displays launcher items with icons. Shown from tray icon click, positioned above the taskbar, dismissed on focus loss or Escape.
 - **SettingsWindow** is a WinUI 3 window with `MicaBackdrop`. It uses `NavigationView` with page-based navigation (Home, Launcher Items, Cloud Sync, Settings, About).
-- **Settings** are serialised to `%AppData%\SelfHostedHelper\settings.xml` via `XmlSerializer`, managed by the fully static `SettingsManager`.
+- **Settings** are serialised to `%AppData%\LittleLauncher\settings.xml` via `XmlSerializer`, managed by the fully static `SettingsManager`.
 - **SftpSyncService** uses SSH.NET for async upload/download of the settings file to a configurable remote server.
 
 ## Key namespaces
 
 | Namespace | Contents |
 |---|---|
-| `SelfHostedHelper` | App, MainWindow, SettingsWindow |
-| `SelfHostedHelper.Classes` | NativeMethods, ThemeManager |
-| `SelfHostedHelper.Classes.Settings` | SettingsManager |
-| `SelfHostedHelper.Models` | LauncherItem, SshConnectionProfile |
-| `SelfHostedHelper.Pages` | All settings pages |
-| `SelfHostedHelper.Services` | SftpSyncService, FaviconService |
-| `SelfHostedHelper.ViewModels` | UserSettings |
-| `SelfHostedHelper.Windows` | FlyoutWindow |
+| `LittleLauncher` | App, MainWindow, SettingsWindow |
+| `LittleLauncher.Classes` | NativeMethods, ThemeManager |
+| `LittleLauncher.Classes.Settings` | SettingsManager |
+| `LittleLauncher.Models` | LauncherItem, SshConnectionProfile |
+| `LittleLauncher.Pages` | All settings pages |
+| `LittleLauncher.Services` | SftpSyncService, FaviconService |
+| `LittleLauncher.ViewModels` | UserSettings |
+| `LittleLauncher.Windows` | FlyoutWindow |
 
-**Note:** The `SelfHostedHelper.Windows` namespace shadows the WinRT `Windows.*` namespace. Use `global::Windows.` prefix when accessing WinRT types (e.g. `global::Windows.Graphics.PointInt32`).
+**Note:** The `LittleLauncher.Windows` namespace shadows the WinRT `Windows.*` namespace. Use `global::Windows.` prefix when accessing WinRT types (e.g. `global::Windows.Graphics.PointInt32`).
 
 ## Conventions
 
 - Use `[ObservableProperty]` from CommunityToolkit.Mvvm for all bindable settings properties.
 - Partial `On<Property>Changed` methods in `UserSettings` handle side-effects (theme changes, taskbar updates).
 - An `_initializing` flag in `UserSettings` suppresses change handlers during XML deserialization.
-- P/Invoke declarations live in `NativeMethods.cs`. Always use `using static SelfHostedHelper.Classes.NativeMethods;` imports.
+- P/Invoke declarations live in `NativeMethods.cs`. Always use `using static LittleLauncher.Classes.NativeMethods;` imports.
 - Use `[LibraryImport]` for new P/Invoke declarations; existing ones use `[DllImport]`.
 - Pages are WinUI 3 `Page` objects navigated via `NavigationView`. No MVVM framework routing — just `TargetPageType` in XAML.
 - String resources live in `Resources/Localization/Dictionary-en-US.xaml`. In code: `Application.Current.Resources.TryGetValue("KeyName", out object value)`.
@@ -42,7 +42,7 @@ SelfHostedHelper is a .NET 10 WinUI 3 desktop application (unpackaged) that prov
 ## Build
 
 ```bash
-dotnet build SelfHostedHelper/SelfHostedHelper.csproj -c Debug
+dotnet build LittleLauncher/LittleLauncher.csproj -c Debug
 ```
 
 `Directory.Build.props` auto-detects the platform from `PROCESSOR_ARCHITECTURE` (ARM64 → ARM64, otherwise x64). To override: `-p:Platform=x64` or `-p:Platform=ARM64`.

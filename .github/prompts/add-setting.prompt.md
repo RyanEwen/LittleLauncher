@@ -3,11 +3,11 @@ description: "Add a new observable setting property to UserSettings with XML ser
 agent: "agent"
 ---
 
-Add a new setting property to the SelfHostedHelper application.
+Add a new setting property to the LittleLauncher application.
 
 ## Steps
 
-1. In `SelfHostedHelper/ViewModels/UserSettings.cs`:
+1. In `LittleLauncher/ViewModels/UserSettings.cs`:
    - Add an `[ObservableProperty]` field in the appropriate category section
    - If the setting needs a side-effect, implement `partial void On{PropertyName}Changed` with `_initializing` guard
 
@@ -18,4 +18,4 @@ Add a new setting property to the SelfHostedHelper application.
    - Bind to `SettingsManager.Current.{PropertyName}` with `Mode=TwoWay`
    - Add localization string keys to `Resources/Localization/Dictionary-en-US.xaml`
 
-4. Build and verify: `dotnet build SelfHostedHelper/SelfHostedHelper.csproj -c Debug -p:Platform=x64`
+4. Build and verify: `dotnet build LittleLauncher/LittleLauncher.csproj -c Debug -p:Platform=x64`
