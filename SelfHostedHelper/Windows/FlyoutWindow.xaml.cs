@@ -1,7 +1,7 @@
 using SelfHostedHelper.Classes;
 using SelfHostedHelper.Classes.Settings;
 using SelfHostedHelper.Models;
-using System.Collections.ObjectModel;
+using SelfHostedHelper.Services;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -25,7 +25,6 @@ public partial class FlyoutWindow : Window
     private static readonly object BoundsFileLock = new();
     private static readonly ConcurrentDictionary<string, WindowBounds> CachedBounds = new(StringComparer.OrdinalIgnoreCase);
     private static FlyoutWindow? _instance;
-    private readonly ObservableCollection<LauncherItem> _flyoutItems = new();
     private DateTime _lastDismissed = DateTime.MinValue;
     private bool _toolWindowStyleApplied;
     private int _lastItemsHash;
@@ -45,7 +44,7 @@ public partial class FlyoutWindow : Window
         presenter.SetBorderAndTitleBar(false, false);
         GetAppWindow().SetPresenter(presenter);
 
-        ItemsListControl.ItemsSource = _flyoutItems;
+        ItemsListControl.ItemsSource = SettingsManager.Current.LauncherItems;
 
         // Desktop Acrylic blurs whatever is behind the window (including other windows),
         // unlike Mica which only samples the wallpaper.
@@ -139,7 +138,7 @@ public partial class FlyoutWindow : Window
         if (_instance == null)
         {
             _instance = new FlyoutWindow(owner);
-            _instance.RebuildItems();
+            _instance._lastItemsHash = ComputeItemsHash();
             // Apply tool window style and hide
             int exStyle = GetWindowLong(_instance._hwnd, GWL_EXSTYLE);
             SetWindowLong(_instance._hwnd, GWL_EXSTYLE, exStyle | WS_EX_TOOLWINDOW);
@@ -184,22 +183,12 @@ public partial class FlyoutWindow : Window
     private void RebuildItemsIfNeeded()
     {
         int currentHash = ComputeItemsHash();
-        if (currentHash == _lastItemsHash && _flyoutItems.Count > 0)
-            return;
-        _lastItemsHash = currentHash;
-        RebuildItems();
-    }
-
-    private void RebuildItems()
-    {
-        _flyoutItems.Clear();
-
-        var items = SettingsManager.Current.LauncherItems;
-        if (items == null || items.Count == 0)
-            return;
-
-        foreach (var item in items)
-            _flyoutItems.Add(item);
+        if (currentHash != _lastItemsHash)
+        {
+            _lastItemsHash = currentHash;
+            // Re-bind in case the collection instance was replaced (e.g. settings reload)
+            ItemsListControl.ItemsSource = SettingsManager.Current.LauncherItems;
+        }
     }
 
 
@@ -264,6 +253,30 @@ public partial class FlyoutWindow : Window
         {
             Logger.Error(ex, $"Failed to launch from flyout: {item.Name} ({item.Path})");
         }
+    }
+
+    private void ItemsListControl_DragItemsCompleted(ListViewBase sender, DragItemsCompletedEventArgs args)
+    {
+        // WinUI 3's CanReorderItems reorders its internal items list but does NOT
+        // call Move() on the source ObservableCollection. Calling Move() while
+        // still bound causes visual duplicates because the ListView reacts to
+        // both its own reorder AND the CollectionChanged events.
+        // Fix: unbind, rebuild collection order, rebind.
+        var settings = SettingsManager.Current.LauncherItems;
+        var reordered = ItemsListControl.Items.OfType<LauncherItem>().ToList();
+
+        if (reordered.Count == settings.Count)
+        {
+            ItemsListControl.ItemsSource = null;
+            settings.Clear();
+            foreach (var item in reordered)
+                settings.Add(item);
+            ItemsListControl.ItemsSource = settings;
+        }
+
+        SettingsManager.SaveSettings();
+        _lastItemsHash = ComputeItemsHash();
+        AutoSyncService.NotifyItemsChanged();
     }
 
     private void ItemsListControl_RightTapped(object sender, RightTappedRoutedEventArgs e)
@@ -579,12 +592,14 @@ public partial class FlyoutWindow : Window
         // via ShowWindow(SW_HIDE) while another WinUI 3 window is active causes a fatal
         // ExecutionEngineException in Microsoft.WinUI.dll.
         const double itemHeight = 32;      // Content ~20px + Border Padding 6+6
-        const double categoryExtra = 4;    // Category template Margin="0,4,0,0"
+        const double categoryExtra = 0;    // Margin="0,4,0,0" is inside the Border padding, not additive
         const double listPadding = 12;     // ListView Padding="8,6,8,6" → 6+6
 
         int itemCount = 0;
         int categoryCount = 0;
-        foreach (var item in _flyoutItems)
+        var items = SettingsManager.Current.LauncherItems;
+        if (items == null) return _lastMeasuredHeight;
+        foreach (var item in items)
         {
             if (item.IsCategory) categoryCount++;
             else itemCount++;

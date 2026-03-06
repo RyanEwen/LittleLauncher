@@ -1201,5 +1201,6 @@ public partial class LauncherItemsPage : Page
     private void SaveAndUpdateTaskbar()
     {
         SettingsManager.SaveSettings();
+        Services.AutoSyncService.NotifyItemsChanged();
     }
 }

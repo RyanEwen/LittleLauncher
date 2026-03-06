@@ -91,7 +91,7 @@ public sealed partial class MainWindow : Window
         ApplyDeferredInit();
         EnsureStartMenuShortcuts();
         FlyoutWindow.WarmUp(this);
-        _ = AutoSyncOnStartupAsync();
+        _ = StartAutoSyncAsync();
     }
 
     private AppWindow GetAppWindow()
@@ -180,28 +180,10 @@ public sealed partial class MainWindow : Window
             nIcon.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private async Task AutoSyncOnStartupAsync()
+    private async Task StartAutoSyncAsync()
     {
-        if (SettingsManager.Current.SftpAutoSync)
-        {
-            try
-            {
-                var (success, message) = await SftpSyncService.DownloadSettingsAsync();
-                if (success)
-                {
-                    Logger.Info("Auto-synced settings from SFTP");
-                    // Only re-apply theme; don't recreate the tray icon (its
-                    // internal WNDPROC delegate would be GC'd, crashing the app).
-                    ThemeManager.ApplySavedTheme(this);
-                    UpdateTrayIconVisibility(!SettingsManager.Current.NIconHide);
-                }
-                else Logger.Warn($"Auto-sync skipped: {message}");
-            }
-            catch (Exception ex)
-            {
-                Logger.Error(ex, "Auto-sync failed");
-            }
-        }
+        await AutoSyncService.SyncOnStartupAsync();
+        AutoSyncService.Start();
     }
 
     // ── WndProc — handle cross-process PostMessage IPC ────────────

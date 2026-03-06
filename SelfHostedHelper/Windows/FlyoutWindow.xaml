@@ -102,7 +102,6 @@
             <!-- Container style for category headers (no hover effect) -->
             <Style x:Key="CategoryItemContainerStyle" TargetType="ListViewItem">
                 <Setter Property="IsTabStop" Value="False" />
-                <Setter Property="IsHitTestVisible" Value="False" />
                 <Setter Property="MinHeight" Value="0" />
                 <Setter Property="Padding" Value="8,6" />
                 <Setter Property="HorizontalContentAlignment" Value="Stretch" />
@@ -166,8 +165,11 @@
             x:Name="ItemsListControl"
             Padding="8,6,8,6"
             IsItemClickEnabled="True"
+            CanReorderItems="True"
+            AllowDrop="True"
             ItemClick="ItemsListControl_ItemClick"
             RightTapped="ItemsListControl_RightTapped"
+            DragItemsCompleted="ItemsListControl_DragItemsCompleted"
             ItemTemplateSelector="{StaticResource ItemTemplateSelector}"
             SelectionMode="None"
             IsTabStop="False"

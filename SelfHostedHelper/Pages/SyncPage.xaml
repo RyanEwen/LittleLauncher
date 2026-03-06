@@ -106,8 +106,8 @@
                 </Grid.ColumnDefinitions>
                 <FontIcon Glyph="&#xE72C;" FontSize="20" Margin="0,0,16,0" VerticalAlignment="Center"/>
                 <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                    <TextBlock Text="Auto-Sync on Startup" FontSize="14"/>
-                    <TextBlock Text="Download settings from server when the app starts" FontSize="12" Opacity="0.5"/>
+                    <TextBlock Text="Auto Sync" FontSize="14"/>
+                    <TextBlock Text="Sync launcher items on startup, on change, and periodically" FontSize="12" Opacity="0.5"/>
                 </StackPanel>
                 <ToggleSwitch Grid.Column="2" IsOn="{Binding SftpAutoSync, Mode=TwoWay}"/>
             </Grid>
@@ -122,12 +122,12 @@
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <FontIcon Glyph="&#xE753;" FontSize="20" Margin="0,0,16,0" VerticalAlignment="Center"/>
+                <FontIcon Glyph="&#xE823;" FontSize="20" Margin="0,0,16,0" VerticalAlignment="Center"/>
                 <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                    <TextBlock Text="Sync on Settings Close" FontSize="14"/>
-                    <TextBlock Text="Upload settings to server when you close the settings window" FontSize="12" Opacity="0.5"/>
+                    <TextBlock Text="Sync Interval (minutes)" FontSize="14"/>
+                    <TextBlock Text="How often to download launcher items from the server" FontSize="12" Opacity="0.5"/>
                 </StackPanel>
-                <ToggleSwitch Grid.Column="2" IsOn="{Binding SftpAutoSyncOnClose, Mode=TwoWay}"/>
+                <NumberBox Grid.Column="2" Value="{Binding SftpAutoSyncInterval, Mode=TwoWay}" Minimum="1" Maximum="1440" SpinButtonPlacementMode="Inline" Width="130"/>
             </Grid>
         </Border>
 
@@ -135,8 +135,8 @@
         <TextBlock Text="Actions" FontSize="14" FontWeight="SemiBold" Margin="0,16,0,6"/>
         <StackPanel Orientation="Horizontal" Margin="0,0,0,8" Spacing="8">
             <Button Content="Test Connection" Click="TestConnection_Click"/>
-            <Button Content="Upload Settings" Style="{ThemeResource AccentButtonStyle}" Click="Upload_Click"/>
-            <Button Content="Download Settings" Click="Download_Click"/>
+            <Button Content="Upload Launcher Items" Click="Upload_Click"/>
+            <Button Content="Download Launcher Items" Click="Download_Click"/>
         </StackPanel>
 
         <!-- Status display -->

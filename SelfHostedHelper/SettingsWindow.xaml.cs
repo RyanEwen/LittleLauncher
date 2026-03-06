@@ -1,7 +1,6 @@
 using SelfHostedHelper.Classes.Settings;
 using SelfHostedHelper.Models;
 using SelfHostedHelper.Pages;
-using SelfHostedHelper.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -153,21 +152,8 @@ public sealed partial class SettingsWindow : Window
         _ => null
     };
 
-    private async void SettingsWindow_Closed(object sender, WindowEventArgs e)
+    private void SettingsWindow_Closed(object sender, WindowEventArgs e)
     {
         SettingsManager.SaveSettings();
-
-        if (SettingsManager.Current.SftpAutoSyncOnClose
-            && !string.IsNullOrWhiteSpace(SettingsManager.Current.SftpHost))
-        {
-            try
-            {
-                await SftpSyncService.UploadSettingsAsync();
-            }
-            catch (Exception ex)
-            {
-                Logger.Warn(ex, "Auto-sync on close failed");
-            }
-        }
     }
 }

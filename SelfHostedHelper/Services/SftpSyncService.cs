@@ -1,6 +1,8 @@
 using SelfHostedHelper.Classes.Settings;
+using SelfHostedHelper.Models;
 using SelfHostedHelper.ViewModels;
 using Renci.SshNet;
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Xml.Serialization;
 
@@ -108,7 +110,7 @@ public static class SftpSyncService
             string savedKeyPath = localSettings.SftpPrivateKeyPath;
             string savedRemotePath = localSettings.SftpRemotePath;
             bool savedAutoSync = localSettings.SftpAutoSync;
-            bool savedAutoSyncOnClose = localSettings.SftpAutoSyncOnClose;
+            int savedAutoSyncInterval = localSettings.SftpAutoSyncInterval;
 
             SettingsManager.RestoreSettings();
 
@@ -120,7 +122,7 @@ public static class SftpSyncService
             current.SftpPrivateKeyPath = savedKeyPath;
             current.SftpRemotePath = savedRemotePath;
             current.SftpAutoSync = savedAutoSync;
-            current.SftpAutoSyncOnClose = savedAutoSyncOnClose;
+            current.SftpAutoSyncInterval = savedAutoSyncInterval;
             SettingsManager.SaveSettings();
 
             // Fetch missing web icons in the background (fire-and-forget)
@@ -156,6 +158,92 @@ public static class SftpSyncService
         {
             Logger.Error(ex, "SFTP connection test failed");
             return (false, $"Connection failed: {ex.Message}");
+        }
+    }
+
+    // ── Launcher-items-only sync ───────────────────────────────────
+
+    /// <summary>
+    /// Upload only the launcher items list to the remote SFTP server.
+    /// The synced file contains no other settings — only launcher items.
+    /// </summary>
+    public static async Task<(bool Success, string Message)> UploadLauncherItemsAsync(string? password = null)
+    {
+        try
+        {
+            SettingsManager.SaveSettings();
+
+            using var client = CreateSftpClient(password);
+            await Task.Run(() => client.Connect());
+
+            string remoteDir = GetRemoteDirectory(client);
+            string remotePath = $"{remoteDir}/launcher-items.xml";
+
+            await Task.Run(() => EnsureRemoteDirectory(client, remoteDir));
+
+            using var stream = SerializeLauncherItems(SettingsManager.Current.LauncherItems);
+            await Task.Run(() => client.UploadFile(stream, remotePath, canOverride: true));
+
+            client.Disconnect();
+
+            Logger.Info($"Launcher items uploaded to {remotePath}");
+            return (true, $"Launcher items uploaded to {SettingsManager.Current.SftpHost}");
+        }
+        catch (Exception ex)
+        {
+            Logger.Error(ex, "Failed to upload launcher items via SFTP");
+            return (false, $"Upload failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Download launcher items from the remote SFTP server and merge into current settings.
+    /// Only replaces the launcher items list — all other settings are preserved.
+    /// </summary>
+    public static async Task<(bool Success, string Message)> DownloadLauncherItemsAsync(string? password = null)
+    {
+        try
+        {
+            using var client = CreateSftpClient(password);
+            await Task.Run(() => client.Connect());
+
+            string remoteDir = GetRemoteDirectory(client);
+            string remotePath = $"{remoteDir}/launcher-items.xml";
+
+            if (!await Task.Run(() => client.Exists(remotePath)))
+            {
+                client.Disconnect();
+                return (false, "No launcher items file found on the remote server.");
+            }
+
+            using var stream = new MemoryStream();
+            await Task.Run(() => client.DownloadFile(remotePath, stream));
+            stream.Position = 0;
+
+            client.Disconnect();
+
+            var items = DeserializeLauncherItems(stream);
+            if (items == null)
+                return (false, "Failed to parse launcher items from server.");
+
+            // Replace the launcher items collection
+            var current = SettingsManager.Current.LauncherItems;
+            current.Clear();
+            foreach (var item in items)
+                current.Add(item);
+
+            SettingsManager.SaveSettings();
+
+            // Fetch missing web icons in the background (fire-and-forget)
+            _ = FetchMissingIconsAsync();
+
+            Logger.Info($"Launcher items downloaded from {remotePath}");
+            return (true, $"Launcher items downloaded from {SettingsManager.Current.SftpHost}");
+        }
+        catch (Exception ex)
+        {
+            Logger.Error(ex, "Failed to download launcher items via SFTP");
+            return (false, $"Download failed: {ex.Message}");
         }
     }
 
@@ -350,7 +438,7 @@ public static class SftpSyncService
             nameof(UserSettings.SftpPrivateKeyPath),
             nameof(UserSettings.SftpRemotePath),
             nameof(UserSettings.SftpAutoSync),
-            nameof(UserSettings.SftpAutoSyncOnClose),
+            nameof(UserSettings.SftpAutoSyncInterval),
         })
         {
             overrides.Add(typeof(UserSettings), prop, ignore);
@@ -361,5 +449,27 @@ public static class SftpSyncService
         serializer.Serialize(stream, settings);
         stream.Position = 0;
         return stream;
+    }
+
+    /// <summary>
+    /// Serialize only the launcher items list to a MemoryStream.
+    /// </summary>
+    private static MemoryStream SerializeLauncherItems(ObservableCollection<LauncherItem> items)
+    {
+        var list = new List<LauncherItem>(items);
+        var stream = new MemoryStream();
+        var serializer = new XmlSerializer(typeof(List<LauncherItem>));
+        serializer.Serialize(stream, list);
+        stream.Position = 0;
+        return stream;
+    }
+
+    /// <summary>
+    /// Deserialize a launcher items list from a stream.
+    /// </summary>
+    private static List<LauncherItem>? DeserializeLauncherItems(MemoryStream stream)
+    {
+        var serializer = new XmlSerializer(typeof(List<LauncherItem>));
+        return serializer.Deserialize(stream) as List<LauncherItem>;
     }
 }

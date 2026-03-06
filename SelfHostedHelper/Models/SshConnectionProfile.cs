@@ -14,7 +14,7 @@ public class SshConnectionProfile
     public string SftpPrivateKeyPath { get; set; } = "";
     public string SftpRemotePath { get; set; } = "~/.config/TaskbarLauncher/";
     public bool SftpAutoSync { get; set; }
-    public bool SftpAutoSyncOnClose { get; set; }
+    public int SftpAutoSyncInterval { get; set; } = 5;
 
     public static SshConnectionProfile FromCurrentSettings()
     {
@@ -27,7 +27,7 @@ public class SshConnectionProfile
             SftpPrivateKeyPath = s.SftpPrivateKeyPath,
             SftpRemotePath = s.SftpRemotePath,
             SftpAutoSync = s.SftpAutoSync,
-            SftpAutoSyncOnClose = s.SftpAutoSyncOnClose
+            SftpAutoSyncInterval = s.SftpAutoSyncInterval
         };
     }
 
@@ -40,6 +40,6 @@ public class SshConnectionProfile
         s.SftpPrivateKeyPath = SftpPrivateKeyPath;
         s.SftpRemotePath = SftpRemotePath;
         s.SftpAutoSync = SftpAutoSync;
-        s.SftpAutoSyncOnClose = SftpAutoSyncOnClose;
+        s.SftpAutoSyncInterval = SftpAutoSyncInterval;
     }
 }

@@ -104,13 +104,13 @@ public partial class UserSettings : ObservableObject
     [ObservableProperty]
     public partial string SftpRemotePath { get; set; }
 
-    /// <summary>Auto-sync settings on application start.</summary>
+    /// <summary>Auto-sync launcher items on startup and periodically.</summary>
     [ObservableProperty]
     public partial bool SftpAutoSync { get; set; }
 
-    /// <summary>Upload settings to server when the settings window closes.</summary>
+    /// <summary>Interval in minutes between periodic sync downloads (default 5).</summary>
     [ObservableProperty]
-    public partial bool SftpAutoSyncOnClose { get; set; }
+    public partial int SftpAutoSyncInterval { get; set; }
 
     // ── Initialisation flag ─────────────────────────────────────────
 
@@ -136,7 +136,7 @@ public partial class UserSettings : ObservableObject
         SftpPrivateKeyPath = "";
         SftpRemotePath = "~/.config/TaskbarLauncher/";
         SftpAutoSync = false;
-        SftpAutoSyncOnClose = false;
+        SftpAutoSyncInterval = 5;
     }
 
     /// <summary>Called after XML deserialization to finalize initialization.</summary>

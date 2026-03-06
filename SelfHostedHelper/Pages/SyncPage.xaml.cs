@@ -162,15 +162,15 @@ public partial class SyncPage : Page
 
     private async Task RunUploadAsync(string? password)
     {
-        ShowStatus("Uploading settings...", InfoBarSeverity.Informational);
-        var (success, message) = await SftpSyncService.UploadSettingsAsync(password);
+        ShowStatus("Uploading launcher items...", InfoBarSeverity.Informational);
+        var (success, message) = await SftpSyncService.UploadLauncherItemsAsync(password);
         ShowStatus(message, success ? InfoBarSeverity.Success : InfoBarSeverity.Error);
     }
 
     private async Task RunDownloadAsync(string? password)
     {
-        ShowStatus("Downloading settings...", InfoBarSeverity.Informational);
-        var (success, message) = await SftpSyncService.DownloadSettingsAsync(password);
+        ShowStatus("Downloading launcher items...", InfoBarSeverity.Informational);
+        var (success, message) = await SftpSyncService.DownloadLauncherItemsAsync(password);
         ShowStatus(message, success ? InfoBarSeverity.Success : InfoBarSeverity.Error);
     }
 
