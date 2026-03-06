@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace LauncherShortcut;
@@ -7,6 +8,8 @@ namespace LauncherShortcut;
 ///
 /// Default mode:  Signals the main LittleLauncher app to show its flyout via
 ///                a registered window message, passing the cursor position, then exits.
+///                If LittleLauncher is not running, launches it first, waits for its
+///                window to appear, then signals the flyout.
 /// --pin mode:    Keeps the process alive with a dialog so the user can right-click
 ///                the taskbar icon and choose "Pin to taskbar", then close the dialog.
 /// </summary>
@@ -57,7 +60,34 @@ static class Program
         GetCursorPos(out var pt);
 
         var target = FindWindow(null, "LittleLauncher Host");
-        if (target == 0) return;
+
+        if (target == 0)
+        {
+            // Main app isn't running — try to launch it.
+            string myDir = AppContext.BaseDirectory;
+            string mainExe = Path.Combine(myDir, "LittleLauncher.exe");
+            if (!File.Exists(mainExe))
+                return;
+
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = mainExe,
+                WorkingDirectory = myDir,
+                UseShellExecute = false
+            });
+
+            // Poll for the host window to appear (up to 10 seconds).
+            for (int i = 0; i < 100; i++)
+            {
+                Thread.Sleep(100);
+                target = FindWindow(null, "LittleLauncher Host");
+                if (target != 0)
+                    break;
+            }
+
+            if (target == 0)
+                return;
+        }
 
         var msg = (int)RegisterWindowMessage("LittleLauncher_ShowFlyout");
         PostMessage(target, msg, pt.X, pt.Y);
