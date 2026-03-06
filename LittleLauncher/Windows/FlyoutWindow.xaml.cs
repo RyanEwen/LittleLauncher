@@ -39,9 +39,11 @@ public partial class FlyoutWindow : Window
         InitializeComponent();
         _hwnd = WindowNative.GetWindowHandle(this);
 
-        // Remove titlebar and make borderless
+        // Remove titlebar and make borderless, always on top so it
+        // renders above the tray overflow popup.
         var presenter = Microsoft.UI.Windowing.OverlappedPresenter.CreateForContextMenu();
         presenter.SetBorderAndTitleBar(false, false);
+        presenter.IsAlwaysOnTop = true;
         GetAppWindow().SetPresenter(presenter);
 
         ItemsListControl.ItemsSource = SettingsManager.Current.LauncherItems;
@@ -210,13 +212,38 @@ public partial class FlyoutWindow : Window
 
         int flyoutWidth = (int)(250 * scale);
         int flyoutHeight = (int)Math.Ceiling(MeasureContentHeight() * scale);
-        int bottomGap = Math.Max(4, (int)Math.Round(8 * scale));
+        int gap = Math.Max(4, (int)Math.Round(8 * scale));
 
         int left = screenX - flyoutWidth / 2;
-        int top = workArea.Bottom - flyoutHeight - bottomGap;
+        int top;
 
+        // Detect whether the click is near a taskbar edge or from the tray
+        // overflow popup (which floats well inside the work area).
+        int edgeThreshold = (int)(16 * scale);
+        bool nearBottom = screenY >= workArea.Bottom - edgeThreshold;
+        bool nearTop = screenY <= workArea.Top + edgeThreshold;
+
+        if (nearBottom)
+        {
+            // Taskbar at bottom (common case): position just above taskbar
+            top = workArea.Bottom - flyoutHeight - gap;
+        }
+        else if (nearTop)
+        {
+            // Taskbar at top: position just below taskbar
+            top = workArea.Top + gap;
+        }
+        else
+        {
+            // Tray overflow or other mid-screen click: place flyout above the
+            // cursor so it doesn't cover the overflow popup the user clicked on.
+            top = screenY - flyoutHeight - gap;
+        }
+
+        // Clamp within work area
         if (left < workArea.Left) left = workArea.Left;
         if (left + flyoutWidth > workArea.Right) left = workArea.Right - flyoutWidth;
+        if (top + flyoutHeight > workArea.Bottom) top = workArea.Bottom - flyoutHeight;
         if (top < workArea.Top) top = workArea.Top;
 
         SetWindowPos(_hwnd, 0, left, top, flyoutWidth, flyoutHeight,
