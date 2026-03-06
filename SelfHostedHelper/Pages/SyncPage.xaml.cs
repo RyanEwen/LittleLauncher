@@ -1,13 +1,12 @@
 using SelfHostedHelper.Classes.Settings;
 using SelfHostedHelper.Models;
 using SelfHostedHelper.Services;
-using Microsoft.Win32;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 using System.IO;
-using System.Windows;
-using System.Windows.Controls;
 using System.Xml.Serialization;
-using Wpf.Ui.Controls;
-using InfoBarSeverity = Wpf.Ui.Controls.InfoBarSeverity;
+using global::Windows.Storage.Pickers;
+using WinRT.Interop;
 
 namespace SelfHostedHelper.Pages;
 
@@ -24,41 +23,36 @@ public partial class SyncPage : Page
         DataContext = SettingsManager.Current;
     }
 
-    // ── Button handlers ─────────────────────────────────────────────
+    // -- Button handlers --
 
-    private void BrowseKey_Click(object sender, RoutedEventArgs e)
+    private async void BrowseKey_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new OpenFileDialog
+        var picker = new FileOpenPicker();
+        picker.FileTypeFilter.Add("*");
+        InitializePicker(picker);
+        var file = await picker.PickSingleFileAsync();
+        if (file != null)
         {
-            Title = "Select SSH Private Key",
-            Filter = "All Files (*.*)|*.*",
-            CheckFileExists = true
-        };
-
-        if (dialog.ShowDialog() == true)
-        {
-            SettingsManager.Current.SftpPrivateKeyPath = dialog.FileName;
+            SettingsManager.Current.SftpPrivateKeyPath = file.Path;
         }
     }
 
-    private void ExportSshConfig_Click(object sender, RoutedEventArgs e)
+    private async void ExportSshConfig_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new SaveFileDialog
-        {
-            Title = "Export SSH Connection Profile",
-            Filter = "XML Files (*.xml)|*.xml",
-            FileName = "ssh-connection.xml"
-        };
-
-        if (dialog.ShowDialog() != true) return;
+        var picker = new FileSavePicker();
+        picker.FileTypeChoices.Add("XML Files", new List<string> { ".xml" });
+        picker.SuggestedFileName = "ssh-connection";
+        InitializePicker(picker);
+        var file = await picker.PickSaveFileAsync();
+        if (file == null) return;
 
         try
         {
             var profile = SshConnectionProfile.FromCurrentSettings();
             var serializer = new XmlSerializer(typeof(SshConnectionProfile));
-            using var writer = new StreamWriter(dialog.FileName);
+            using var writer = new StreamWriter(file.Path);
             serializer.Serialize(writer, profile);
-            ShowStatus($"Connection profile exported to {Path.GetFileName(dialog.FileName)}", InfoBarSeverity.Success);
+            ShowStatus($"Connection profile exported to {Path.GetFileName(file.Path)}", InfoBarSeverity.Success);
         }
         catch (Exception ex)
         {
@@ -67,21 +61,18 @@ public partial class SyncPage : Page
         }
     }
 
-    private void ImportSshConfig_Click(object sender, RoutedEventArgs e)
+    private async void ImportSshConfig_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new OpenFileDialog
-        {
-            Title = "Import SSH Connection Profile",
-            Filter = "XML Files (*.xml)|*.xml",
-            CheckFileExists = true
-        };
-
-        if (dialog.ShowDialog() != true) return;
+        var picker = new FileOpenPicker();
+        picker.FileTypeFilter.Add(".xml");
+        InitializePicker(picker);
+        var file = await picker.PickSingleFileAsync();
+        if (file == null) return;
 
         try
         {
             var serializer = new XmlSerializer(typeof(SshConnectionProfile));
-            using var reader = new StreamReader(dialog.FileName);
+            using var reader = new StreamReader(file.Path);
             if (serializer.Deserialize(reader) is SshConnectionProfile profile)
             {
                 profile.ApplyToCurrentSettings();
@@ -142,7 +133,7 @@ public partial class SyncPage : Page
     {
         string password = PasswordBox.Password;
         PasswordCard.Visibility = Visibility.Collapsed;
-        PasswordBox.Clear();
+        PasswordBox.Password = "";
 
         switch (_pendingAction)
         {
@@ -160,7 +151,7 @@ public partial class SyncPage : Page
         _pendingAction = PendingAction.None;
     }
 
-    // ── Async operations ────────────────────────────────────────────
+    // -- Async operations --
 
     private async Task RunTestAsync(string? password)
     {
@@ -183,23 +174,21 @@ public partial class SyncPage : Page
         ShowStatus(message, success ? InfoBarSeverity.Success : InfoBarSeverity.Error);
     }
 
-    // ── Helpers ─────────────────────────────────────────────────────
+    // -- Helpers --
 
     private bool NeedsPassword()
     {
-        // If an SSH key is explicitly configured or can be auto-detected, no password needed
         string? keyPath = SettingsManager.Current.SftpPrivateKeyPath;
-        if (!string.IsNullOrWhiteSpace(keyPath) && System.IO.File.Exists(keyPath))
+        if (!string.IsNullOrWhiteSpace(keyPath) && File.Exists(keyPath))
             return false;
 
-        // Check auto-detection from ~/.ssh/
-        string sshDir = System.IO.Path.Combine(
+        string sshDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ssh");
-        if (System.IO.Directory.Exists(sshDir))
+        if (Directory.Exists(sshDir))
         {
             foreach (var name in new[] { "id_ed25519", "id_rsa", "id_ecdsa", "id_dsa" })
             {
-                if (System.IO.File.Exists(System.IO.Path.Combine(sshDir, name)))
+                if (File.Exists(Path.Combine(sshDir, name)))
                     return false;
             }
         }
@@ -212,5 +201,13 @@ public partial class SyncPage : Page
         StatusBar.Message = message;
         StatusBar.Severity = severity;
         StatusBar.IsOpen = true;
+    }
+
+    private static void InitializePicker(object picker)
+    {
+        var window = SettingsWindow.GetCurrent();
+        if (window == null) return;
+        var hwnd = WindowNative.GetWindowHandle(window);
+        InitializeWithWindow.Initialize(picker, hwnd);
     }
 }

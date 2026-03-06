@@ -1,10 +1,11 @@
 using SelfHostedHelper.Classes.Settings;
+using SelfHostedHelper.ViewModels;
 using NLog;
 using System.Diagnostics;
 using System.IO;
-using System.Windows;
-using System.Windows.Controls;
-using Windows.UI.Shell;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 
 namespace SelfHostedHelper.Pages;
 
@@ -12,35 +13,32 @@ public partial class HomePage : Page
 {
     private static readonly Logger Logger = LogManager.GetCurrentClassLogger();
 
+    internal UserSettings Settings => SettingsManager.Current;
+
     public HomePage()
     {
         InitializeComponent();
-        DataContext = SettingsManager.Current;
         VersionTextBlock.Text = SettingsManager.Current.LastKnownVersion;
-
-        // Show tray icon toggle is inverted: checked = visible (NIconHide = false)
-        TrayIconSwitch.IsChecked = !SettingsManager.Current.NIconHide;
+        TrayIconSwitch.IsOn = !SettingsManager.Current.NIconHide;
     }
 
-    private void LauncherItems_Click(object sender, RoutedEventArgs e)
+    private void LauncherItems_Click(object sender, PointerRoutedEventArgs e)
     {
-        if (Window.GetWindow(this) is SettingsWindow sw)
-            sw.NavigateTo(typeof(LauncherItemsPage));
+        SettingsWindow.GetCurrent()?.NavigateTo(typeof(LauncherItemsPage));
     }
 
-    private void SyncSettings_Click(object sender, RoutedEventArgs e)
+    private void SyncSettings_Click(object sender, PointerRoutedEventArgs e)
     {
-        if (Window.GetWindow(this) is SettingsWindow sw)
-            sw.NavigateTo(typeof(SyncPage));
+        SettingsWindow.GetCurrent()?.NavigateTo(typeof(SyncPage));
     }
 
-    private void TrayIconSwitch_Click(object sender, RoutedEventArgs e)
+    private void TrayIconSwitch_Toggled(object sender, RoutedEventArgs e)
     {
-        bool show = TrayIconSwitch.IsChecked ?? false;
+        bool show = TrayIconSwitch.IsOn;
         SettingsManager.Current.NIconHide = !show;
 
-        if (Application.Current.MainWindow is MainWindow mainWindow)
-            mainWindow.nIcon.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        if ((Application.Current as App)?.m_window is MainWindow mainWindow)
+            mainWindow.UpdateTrayIconVisibility(show);
     }
 
     private async void PinToTaskbar_Click(object sender, RoutedEventArgs e)
@@ -49,14 +47,19 @@ public partial class HomePage : Page
         {
             try
             {
-                var taskbarManager = TaskbarManager.GetDefault();
+                var taskbarManager = global::Windows.UI.Shell.TaskbarManager.GetDefault();
                 if (taskbarManager.IsSupported && taskbarManager.IsPinningAllowed)
                 {
                     if (await taskbarManager.IsCurrentAppPinnedAsync())
                     {
-                        MessageBox.Show(Window.GetWindow(this),
-                            "This app is already pinned to the taskbar.",
-                            "Already Pinned", MessageBoxButton.OK, MessageBoxImage.Information);
+                        var dialog = new ContentDialog
+                        {
+                            Title = "Already Pinned",
+                            Content = "This app is already pinned to the taskbar.",
+                            CloseButtonText = "OK",
+                            XamlRoot = this.XamlRoot
+                        };
+                        await dialog.ShowAsync();
                         return;
                     }
 
@@ -75,17 +78,11 @@ public partial class HomePage : Page
 
     private static bool HasPackageIdentity()
     {
-        try
-        {
-            return global::Windows.ApplicationModel.Package.Current != null;
-        }
-        catch
-        {
-            return false;
-        }
+        try { return global::Windows.ApplicationModel.Package.Current != null; }
+        catch { return false; }
     }
 
-    private void LaunchCompanionPinMode()
+    private async void LaunchCompanionPinMode()
     {
         try
         {
@@ -94,8 +91,14 @@ public partial class HomePage : Page
 
             if (!File.Exists(flyoutExe))
             {
-                MessageBox.Show("TaskbarLauncherFlyout.exe was not found in the application directory.",
-                    "File Not Found", MessageBoxButton.OK, MessageBoxImage.Warning);
+                var dialog = new ContentDialog
+                {
+                    Title = "File Not Found",
+                    Content = "TaskbarLauncherFlyout.exe was not found in the application directory.",
+                    CloseButtonText = "OK",
+                    XamlRoot = this.XamlRoot
+                };
+                await dialog.ShowAsync();
                 return;
             }
 
@@ -109,8 +112,14 @@ public partial class HomePage : Page
         catch (Exception ex)
         {
             Logger.Error(ex, "Error launching flyout pin helper");
-            MessageBox.Show($"Failed to pin: {ex.Message}",
-                "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            var dialog = new ContentDialog
+            {
+                Title = "Error",
+                Content = $"Failed to pin: {ex.Message}",
+                CloseButtonText = "OK",
+                XamlRoot = this.XamlRoot
+            };
+            await dialog.ShowAsync();
         }
     }
 }

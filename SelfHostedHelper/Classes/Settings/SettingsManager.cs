@@ -10,7 +10,7 @@ namespace SelfHostedHelper.Classes.Settings;
 /// <summary>
 /// Manages the application settings and saves them to a file in \AppData\SelfHostedHelper.
 /// </summary>
-public class SettingsManager
+public static class SettingsManager
 {
     private static readonly NLog.Logger Logger = NLog.LogManager.GetCurrentClassLogger();
 
@@ -40,13 +40,10 @@ public class SettingsManager
     }
 
     /// <summary>
-    /// Checks whether the app has updated, and restores the settings from the previous version if necessary. Only updates in release mode.
-    /// </summary>
-    /// <summary>
-    /// Restores the settings `SettingsManager.Current` from the settings file.
+    /// Restores the settings <see cref="Current"/> from the settings file.
     /// </summary>
     /// <returns>The restored settings.</returns>
-    public UserSettings RestoreSettings(string? filePath = null)
+    public static UserSettings RestoreSettings(string? filePath = null)
     {
         filePath ??= SettingsFilePath;
 

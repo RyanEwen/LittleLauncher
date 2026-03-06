@@ -2,65 +2,73 @@ using SelfHostedHelper.Classes.Settings;
 using SelfHostedHelper.Models;
 using SelfHostedHelper.Pages;
 using SelfHostedHelper.Services;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Media;
-using Wpf.Ui.Controls;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Windowing;
+using WinRT.Interop;
+using static SelfHostedHelper.Classes.NativeMethods;
 
 namespace SelfHostedHelper;
 
 /// <summary>
-/// SettingsWindow — the main user-facing settings UI.
-///
-/// Architecture notes:
-///   - Singleton pattern: only one instance can exist at a time.
-///   - Uses WPF-UI's FluentWindow for Mica backdrop support.
-///   - NavigationView drives page-based navigation (Home, Launcher Items, Sync, Settings, About).
-///   - DataContext is bound to SettingsManager.Current (the global UserSettings instance).
-///   - Settings are saved automatically when the window closes.
+/// SettingsWindow — the main user-facing settings UI (WinUI 3).
 /// </summary>
-public partial class SettingsWindow : FluentWindow
+public sealed partial class SettingsWindow : Window
 {
     private static readonly NLog.Logger Logger = NLog.LogManager.GetCurrentClassLogger();
 
     private static SettingsWindow? instance;
-    private ScrollViewer? _contentScrollViewer;
+    private readonly MainWindow? _owner;
 
-    public SettingsWindow()
+    public SettingsWindow(MainWindow owner)
     {
         if (instance != null)
         {
-            instance.Activate();
-            instance.Focus();
+            SetForegroundWindow(WindowNative.GetWindowHandle(instance));
             Close();
             return;
         }
 
+        _owner = owner;
         InitializeComponent();
         instance = this;
         Closed += (s, e) => instance = null;
-        DataContext = SettingsManager.Current;
 
-        RootNavigation.SetCurrentValue(NavigationView.IsPaneOpenProperty, false);
+        // Mica backdrop
+        SystemBackdrop = new MicaBackdrop();
+
+        // Configure title bar
+        ExtendsContentIntoTitleBar = true;
+        SetTitleBar(AppTitleBar);
+
+        // Set window size (DPI-aware)
+        var hwnd = WindowNative.GetWindowHandle(this);
+        var wndId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
+        var appWindow = AppWindow.GetFromWindowId(wndId);
+        uint dpi = GetDpiForWindow(hwnd);
+        double scale = dpi / 96.0;
+        appWindow.Resize(new global::Windows.Graphics.SizeInt32((int)(900 * scale), (int)(700 * scale)));
+
+        // Navigate to home
+        RootNavigation.SelectedItem = RootNavigation.MenuItems[0];
+        ContentFrame.Navigate(typeof(HomePage));
+
+        Closed += SettingsWindow_Closed;
     }
 
     /// <summary>
     /// Show the singleton settings window (create if needed, activate if exists).
     /// </summary>
-    public static void ShowInstance()
+    public static void ShowInstance(MainWindow owner)
     {
         if (instance == null)
         {
-            new SettingsWindow().Show();
-            instance?.Activate();
+            new SettingsWindow(owner).Activate();
         }
         else
         {
-            if (instance.WindowState == WindowState.Minimized)
-                instance.WindowState = WindowState.Normal;
-
-            instance.Activate();
-            instance.Focus();
+            SetForegroundWindow(WindowNative.GetWindowHandle(instance));
         }
     }
 
@@ -69,34 +77,83 @@ public partial class SettingsWindow : FluentWindow
     /// </summary>
     public void NavigateTo(Type pageType)
     {
-        RootNavigation.Navigate(pageType);
+        ContentFrame.Navigate(pageType);
+
+        // Settings page uses built-in settings button
+        if (pageType == typeof(SystemPage))
+        {
+            RootNavigation.SelectedItem = RootNavigation.SettingsItem;
+            return;
+        }
+
+        // Update selected nav item
+        foreach (var item in RootNavigation.MenuItems.OfType<NavigationViewItem>())
+        {
+            if (item.Tag is string tag && GetPageTypeFromTag(tag) == pageType)
+            {
+                RootNavigation.SelectedItem = item;
+                return;
+            }
+        }
+        foreach (var item in RootNavigation.FooterMenuItems.OfType<NavigationViewItem>())
+        {
+            if (item.Tag is string tag && GetPageTypeFromTag(tag) == pageType)
+            {
+                RootNavigation.SelectedItem = item;
+                return;
+            }
+        }
     }
 
     /// <summary>
     /// Open the settings window, navigate to the Launcher Items page, and
     /// immediately open the edit dialog for the given item.
     /// </summary>
-    public static void NavigateToEditItem(LauncherItem item)
+    public static void NavigateToEditItem(LauncherItem item, MainWindow owner)
     {
         LauncherItemsPage.PendingEditItem = item;
-        instance?.NavigateTo(typeof(LauncherItemsPage));
+        if (instance == null)
+        {
+            var window = new SettingsWindow(owner);
+            window.NavigateTo(typeof(LauncherItemsPage));
+            window.Activate();
+        }
+        else
+        {
+            SetForegroundWindow(WindowNative.GetWindowHandle(instance));
+            instance.NavigateTo(typeof(LauncherItemsPage));
+        }
     }
 
-    private async void SettingsWindow_Loaded(object sender, RoutedEventArgs e)
+    internal MainWindow? GetOwner() => _owner;
+
+    internal static SettingsWindow? GetCurrent() => instance;
+
+    private void RootNavigation_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
     {
-        RootNavigation.IsPaneOpen = false;
-        RootNavigation.Navigate(typeof(HomePage));
-
-        // Workaround for WPF-UI NavigationView theme bug
-        await Task.Delay(50);
-        RootNavigation.IsPaneOpen = true;
-        await Task.Delay(1);
-        RootNavigation.IsPaneOpen = false;
-
-        RootNavigation.Navigated += (s, args) => ResetScrollPosition();
+        if (args.IsSettingsSelected)
+        {
+            ContentFrame.Navigate(typeof(SystemPage));
+        }
+        else if (args.SelectedItem is NavigationViewItem item && item.Tag is string tag)
+        {
+            var pageType = GetPageTypeFromTag(tag);
+            if (pageType != null)
+                ContentFrame.Navigate(pageType);
+        }
     }
 
-    private async void SettingsWindow_Closing(object sender, System.ComponentModel.CancelEventArgs e)
+    private static Type? GetPageTypeFromTag(string tag) => tag switch
+    {
+        "HomePage" => typeof(HomePage),
+        "LauncherItemsPage" => typeof(LauncherItemsPage),
+        "SyncPage" => typeof(SyncPage),
+        "SystemPage" => typeof(SystemPage),
+        "AboutPage" => typeof(AboutPage),
+        _ => null
+    };
+
+    private async void SettingsWindow_Closed(object sender, WindowEventArgs e)
     {
         SettingsManager.SaveSettings();
 
@@ -112,33 +169,5 @@ public partial class SettingsWindow : FluentWindow
                 Logger.Warn(ex, "Auto-sync on close failed");
             }
         }
-    }
-
-    private void ResetScrollPosition()
-    {
-        Dispatcher.BeginInvoke(new Action(() =>
-        {
-            try
-            {
-                _contentScrollViewer ??= FindScrollableScrollViewer(RootNavigation);
-                _contentScrollViewer?.ScrollToVerticalOffset(0);
-            }
-            catch (Exception ex)
-            {
-                Logger.Error(ex, "Error resetting scroll position");
-            }
-        }), System.Windows.Threading.DispatcherPriority.Loaded);
-    }
-
-    private static ScrollViewer? FindScrollableScrollViewer(DependencyObject parent)
-    {
-        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
-        {
-            var child = VisualTreeHelper.GetChild(parent, i);
-            if (child is ScrollViewer sv && sv.ScrollableHeight > 0) return sv;
-            var result = FindScrollableScrollViewer(child);
-            if (result != null) return result;
-        }
-        return null;
     }
 }

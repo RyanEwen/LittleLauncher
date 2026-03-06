@@ -28,4 +28,3 @@ applyTo: "**/NativeMethods.cs"
 
 - Import via `using static SelfHostedHelper.Classes.NativeMethods;`
 - Never scatter P/Invoke declarations across multiple files
-- Wrap complex interop sequences in helper methods in `WindowHelper.cs`

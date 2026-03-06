@@ -1,43 +1,45 @@
 using SelfHostedHelper.Classes;
 using SelfHostedHelper.Classes.Settings;
-using System.Windows;
+using Microsoft.UI.Xaml;
 
 namespace SelfHostedHelper;
 
 /// <summary>
-/// Application entry point.
-///
-/// Architecture notes:
-///   - Registers an unhandled exception logger so crashes are captured in NLog.
-///   - No localization or toast notifications in this stripped-down version.
-///   - The MainWindow is the hidden host; SettingsWindow is shown on demand.
+/// Application entry point (WinUI 3).
 /// </summary>
 public partial class App : Application
 {
-    protected override void OnStartup(StartupEventArgs e)
+    public App()
+    {
+        InitializeComponent();
+    }
+
+    protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
     {
         // Log unhandled exceptions before the process dies
-        AppDomain.CurrentDomain.UnhandledException += (sender, args) =>
+        AppDomain.CurrentDomain.UnhandledException += (sender, a) =>
         {
             NLog.LogManager.GetCurrentClassLogger().Error(
-                args.ExceptionObject as Exception,
+                a.ExceptionObject as Exception,
                 "Unhandled exception occurred");
             NLog.LogManager.Flush();
         };
 
-        // Catch WPF dispatcher (UI thread) exceptions
-        DispatcherUnhandledException += (sender, args) =>
+        UnhandledException += (sender, e) =>
         {
             NLog.LogManager.GetCurrentClassLogger().Error(
-                args.Exception,
+                e.Exception,
                 "Unhandled UI exception");
             NLog.LogManager.Flush();
-            args.Handled = false; // let it crash so the user sees something
+            e.Handled = true;
         };
 
         // Restore settings before any window constructor accesses SettingsManager.Current
-        new SettingsManager().RestoreSettings();
+        SettingsManager.RestoreSettings();
 
-        base.OnStartup(e);
+        m_window = new MainWindow();
+        m_window.Activate();
     }
+
+    internal Window? m_window;
 }

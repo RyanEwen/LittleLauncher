@@ -16,11 +16,8 @@ public static class NativeMethods
     // Window Styles
     internal const int GWL_STYLE = -16;
     internal const int GWL_EXSTYLE = -20;
-    internal const int WS_CHILD = 0x40000000;
-    internal const int WS_POPUP = unchecked((int)0x80000000);
     internal const int WS_OVERLAPPEDWINDOW = 0x00CF0000; // WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX
     internal const int WS_VISIBLE = 0x10000000;
-    internal const int WS_EX_NOACTIVATE = 0x08000000;
     internal const int WS_EX_TOOLWINDOW = 0x00000080;
 
     // Window Event Hook Constants
@@ -41,19 +38,11 @@ public static class NativeMethods
 
     // Monitor Flags
     internal const int MONITOR_DEFAULTTONEAREST = 2;
-    internal const int MONITORINFOF_PRIMARY = 1;
     internal const int S_OK = 0;
 
     #endregion
 
     #region Enums
-
-    public enum MonitorFromWindowFlags : int
-    {
-        DEFAULTTONULL = 0,
-        DEFAULTTOPRIMARY = 1,
-        DEFAULTTONEAREST = 2,
-    }
 
     public enum MonitorDpiType
     {
@@ -61,21 +50,6 @@ public static class NativeMethods
         MDT_ANGULAR_DPI = 1,
         MDT_RAW_DPI = 2,
         MDT_DEFAULT
-    }
-
-    internal enum AccentState
-    {
-        ACCENT_DISABLED = 0,
-        ACCENT_ENABLE_GRADIENT = 1,
-        ACCENT_ENABLE_TRANSPARENTGRADIENT = 2,
-        ACCENT_ENABLE_BLURBEHIND = 3,
-        ACCENT_ENABLE_ACRYLICBLURBEHIND = 4,
-        ACCENT_INVALID_STATE = 5
-    }
-
-    internal enum WindowCompositionAttribute
-    {
-        WCA_ACCENT_POLICY = 19
     }
 
     #endregion
@@ -109,38 +83,13 @@ public static class NativeMethods
         public string szDevice;
     }
 
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    internal struct DISPLAY_DEVICE
-    {
-        [MarshalAs(UnmanagedType.U4)]
-        public int cb;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
-        public string DeviceName;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
-        public string DeviceString;
-        [MarshalAs(UnmanagedType.U4)]
-        public int StateFlags;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
-        public string DeviceID;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
-        public string DeviceKey;
-    }
-
     [StructLayout(LayoutKind.Sequential)]
-    internal struct AccentPolicy
+    internal struct MARGINS
     {
-        public AccentState AccentState;
-        public uint AccentFlags;
-        public uint GradientColor;
-        public uint AnimationId;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    internal struct WindowCompositionAttributeData
-    {
-        public WindowCompositionAttribute Attribute;
-        public IntPtr Data;
-        public int SizeOfData;
+        public int Left;
+        public int Right;
+        public int Top;
+        public int Bottom;
     }
 
     #endregion
@@ -148,8 +97,8 @@ public static class NativeMethods
     #region Delegates
 
     internal delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-    internal delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdcMonitor, ref RECT lprcMonitor, IntPtr dwData);
     internal delegate void WinEventProc(IntPtr hWinEventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime);
+    internal delegate IntPtr SUBCLASSPROC(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam, nuint uIdSubclass, nuint dwRefData);
 
     #endregion
 
@@ -164,17 +113,8 @@ public static class NativeMethods
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern bool EnumWindows(EnumWindowsProc enumProc, IntPtr lParam);
 
-    [DllImport("user32.dll", SetLastError = true)]
-    internal static extern bool EnumThreadWindows(uint dwThreadId, EnumWindowsProc enumProc, IntPtr lParam);
-
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     internal static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    internal static extern IntPtr SetParent(IntPtr hWndChild, IntPtr hWndNewParent);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    internal static extern IntPtr GetParent(IntPtr hWnd);
 
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
@@ -194,23 +134,8 @@ public static class NativeMethods
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern bool SetWindowPos(IntPtr hWnd, int hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
 
-    [DllImport("user32.dll")]
-    internal static extern bool ScreenToClient(IntPtr hWnd, ref POINT lpPoint);
-
-    [DllImport("user32.dll", CharSet = CharSet.Auto)]
-    internal static extern bool EnumDisplayDevices(string? lpDevice, uint iDevNum, ref DISPLAY_DEVICE lpDisplayDevice, uint dwFlags);
-
-    [DllImport("user32.dll")]
-    internal static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr lprcClip, MonitorEnumProc lpfnEnum, IntPtr dwData);
-
     [DllImport("user32.dll", CharSet = CharSet.Auto)]
     internal static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFOEX lpmi);
-
-    [DllImport("user32.dll")]
-    internal static extern IntPtr MonitorFromWindow(IntPtr hwnd, int dwFlags);
-
-    [DllImport("user32.dll")]
-    internal static extern int SetWindowCompositionAttribute(IntPtr hwnd, ref WindowCompositionAttributeData data);
 
     [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
     internal static extern int RegisterWindowMessage(string lpString);
@@ -248,7 +173,26 @@ public static class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool UnhookWinEvent(IntPtr hWinEventHook);
 
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    internal const int SW_HIDE = 0;
     internal const int SW_MAXIMIZE = 3;
+    internal const int SW_SHOWNOACTIVATE = 4;
+
+    #endregion
+
+    #region dwmapi.dll
+
+    [DllImport("dwmapi.dll")]
+    internal static extern int DwmExtendFrameIntoClientArea(IntPtr hwnd, ref MARGINS pMarInset);
+
+    [DllImport("dwmapi.dll")]
+    internal static extern int DwmSetWindowAttribute(IntPtr hwnd, int dwAttribute, ref int pvAttribute, int cbAttribute);
+
+    internal const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+    internal const int DWMWCP_ROUND = 2;
 
     #endregion
 
@@ -256,6 +200,16 @@ public static class NativeMethods
 
     [DllImport("shcore.dll")]
     internal static extern int GetDpiForMonitor(IntPtr hMonitor, MonitorDpiType dpiType, out uint dpiX, out uint dpiY);
+
+    #endregion
+
+    #region comctl32.dll
+
+    [DllImport("comctl32.dll")]
+    internal static extern bool SetWindowSubclass(IntPtr hWnd, SUBCLASSPROC pfnSubclass, nuint uIdSubclass, nuint dwRefData);
+
+    [DllImport("comctl32.dll")]
+    internal static extern IntPtr DefSubclassProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam);
 
     #endregion
 

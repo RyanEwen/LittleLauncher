@@ -2,18 +2,13 @@ using SelfHostedHelper.Classes;
 using SelfHostedHelper.Classes.Settings;
 using SelfHostedHelper.Models;
 using SelfHostedHelper.Services;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media.Imaging;
 using System.IO;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Documents;
-using System.Windows.Input;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
-using System.Windows.Threading;
-using Microsoft.Win32;
-using Wpf.Ui;
-using Wpf.Ui.Controls;
-using Image = System.Windows.Controls.Image;
+using global::Windows.Storage.Pickers;
+using WinRT.Interop;
+using Image = Microsoft.UI.Xaml.Controls.Image;
 
 namespace SelfHostedHelper.Pages;
 
@@ -25,7 +20,7 @@ public class LauncherItemTemplateSelector : DataTemplateSelector
     public DataTemplate? LauncherItemTemplate { get; set; }
     public DataTemplate? CategoryItemTemplate { get; set; }
 
-    public override DataTemplate? SelectTemplate(object item, DependencyObject container)
+    protected override DataTemplate? SelectTemplateCore(object item)
     {
         if (item is LauncherItem { IsCategory: true })
             return CategoryItemTemplate;
@@ -40,15 +35,9 @@ public partial class LauncherItemsPage : Page
     /// </summary>
     internal static LauncherItem? PendingEditItem { get; set; }
 
-    // ── Drag-and-drop state ─────────────────────────────────────────
-    private LauncherItem? _draggedItem;
-    private Border? _dropIndicator;
-    private int _dropTargetIndex = -1;
-
     public LauncherItemsPage()
     {
         InitializeComponent();
-        DataContext = SettingsManager.Current;
         RefreshList();
         Loaded += LauncherItemsPage_Loaded;
     }
@@ -71,6 +60,11 @@ public partial class LauncherItemsPage : Page
         ItemsList.ItemsSource = SettingsManager.Current.LauncherItems;
     }
 
+    private void ItemsList_DragItemsCompleted(ListViewBase sender, DragItemsCompletedEventArgs args)
+    {
+        SaveAndUpdateTaskbar();
+    }
+
     private async void ShowAddDialog_Click(object sender, RoutedEventArgs e)
     {
         await ShowItemDialog(null);
@@ -85,19 +79,19 @@ public partial class LauncherItemsPage : Page
     {
         bool isEdit = existingItem != null;
 
-        var nameBox = new Wpf.Ui.Controls.TextBox
+        var nameBox = new TextBox
         {
             PlaceholderText = "Category name",
-            ClearButtonEnabled = true,
             Margin = new Thickness(0, 0, 0, 8)
         };
 
         if (isEdit)
             nameBox.Text = existingItem!.Name;
 
-        var validationHint = new System.Windows.Controls.TextBlock
+        var validationHint = new TextBlock
         {
-            Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Colors.OrangeRed),
+            Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(
+                global::Windows.UI.Color.FromArgb(255, 255, 69, 0)),
             FontSize = 12,
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 8, 0, 0)
@@ -108,9 +102,9 @@ public partial class LauncherItemsPage : Page
         form.Children.Add(nameBox);
         form.Children.Add(validationHint);
 
-        var dialog = new ContentDialog()
+        var dialog = new ContentDialog
         {
-            DialogHostEx = (Wpf.Ui.Controls.ContentDialogHost)Window.GetWindow(this).FindName("DialogHost"),
+            XamlRoot = this.XamlRoot,
             Title = isEdit ? "Edit Category" : "Add Category",
             Content = form,
             PrimaryButtonText = isEdit ? "Save" : "Add",
@@ -171,28 +165,26 @@ public partial class LauncherItemsPage : Page
 
         // Track state for this dialog session
         string fetchedIconPath = existingItem?.IconPath ?? "";
-        bool isWebsite = existingItem?.IsWebsite ?? true; // default to website
+        bool isWebsite = existingItem?.IsWebsite ?? true;
         bool openInAppWindow = existingItem?.OpenInAppWindow ?? false;
         string appWindowBrowser = existingItem?.AppWindowBrowser ?? "";
         string appWindowBrowserProfile = existingItem?.AppWindowBrowserProfile ?? "";
 
-        // ── 1. Type selector ────────────────────────────────────────
+        // -- 1. Type selector --
         var typeCombo = new ComboBox { Margin = new Thickness(0, 0, 0, 8) };
         typeCombo.Items.Add(new ComboBoxItem { Content = "Website or Web App" });
         typeCombo.Items.Add(new ComboBoxItem { Content = "Application" });
         typeCombo.SelectedIndex = isEdit ? (existingItem!.IsWebsite ? 0 : 1) : 0;
 
-        // ── 2. URL / Path ───────────────────────────────────────────
-        // State variables declared early so combo event handlers can reference them
-        DispatcherTimer? debounceTimer = null;
+        // -- 2. URL / Path --
+        Microsoft.UI.Dispatching.DispatcherQueueTimer? debounceTimer = null;
         string lastFetchedPath = "";
         bool populating = false;
 
         var pathLabel = Label("URL");
-        var pathBox = new Wpf.Ui.Controls.TextBox
+        var pathBox = new TextBox
         {
             PlaceholderText = "https://example.com",
-            ClearButtonEnabled = true,
             Margin = new Thickness(0, 0, 0, 8)
         };
 
@@ -203,15 +195,20 @@ public partial class LauncherItemsPage : Page
             Margin = new Thickness(0, 0, 0, 0),
             DisplayMemberPath = "DisplayName"
         };
-        foreach (var app in GetInstalledApplications())
-            appPathCombo.Items.Add(app);
-        appPathCombo.Items.Add(new InstalledApp("Browse\u2026", "__browse__"));
+        bool appCatalogLoaded = false;
+        void EnsureAppCatalogLoaded()
+        {
+            if (appCatalogLoaded) return;
+            appPathCombo.Items.Clear();
+            foreach (var app in GetInstalledApplications())
+                appPathCombo.Items.Add(app);
+            appPathCombo.Items.Add(new InstalledApp("Browse\u2026", "__browse__"));
+            appCatalogLoaded = true;
+        }
 
-        var browseButton = new Wpf.Ui.Controls.Button
+        var browseButton = new Button
         {
             Content = "Browse",
-            Icon = new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.FolderOpen24),
-            Appearance = Wpf.Ui.Controls.ControlAppearance.Secondary,
             Padding = new Thickness(8, 4, 8, 4),
             FontSize = 12,
             VerticalAlignment = VerticalAlignment.Center,
@@ -226,26 +223,25 @@ public partial class LauncherItemsPage : Page
         appPathRow.Children.Add(appPathCombo);
         appPathRow.Children.Add(browseButton);
 
-        // ── 3. Arguments (Application only) ─────────────────────────
+        // -- 3. Arguments (Application only) --
         var argsLabel = Label("Arguments");
-        var argsBox = new Wpf.Ui.Controls.TextBox
+        var argsBox = new TextBox
         {
             PlaceholderText = "(optional)",
-            ClearButtonEnabled = true,
             Margin = new Thickness(0, 0, 0, 8)
         };
 
-        // ── 4. Web app window mode (Website only) ──────────────────
-        var appWindowToggle = new Wpf.Ui.Controls.ToggleSwitch
+        // -- 4. Web app window mode (Website only) --
+        var appWindowToggle = new ToggleSwitch
         {
-            Content = "Open as app window",
+            Header = "Open as app window",
             OffContent = "Use normal browser tab",
             OnContent = "Open in standalone window",
-            IsChecked = openInAppWindow,
+            IsOn = openInAppWindow,
             Margin = new Thickness(0, 0, 0, 8)
         };
 
-        // ── 4a. Browser picker (visible when app window enabled) ────
+        // -- 4a. Browser picker --
         var browserLabel = Label("Browser");
         var browserCombo = new ComboBox { Margin = new Thickness(0, 0, 0, 8), MinWidth = 340 };
         var installedBrowsers = GetInstalledBrowsers();
@@ -254,7 +250,7 @@ public partial class LauncherItemsPage : Page
             browserCombo.Items.Add(new ComboBoxItem { Content = browser.DisplayName, Tag = browser.ExePath });
         browserCombo.Items.Add(new ComboBoxItem { Content = "Custom\u2026", Tag = "__custom__" });
 
-        // ── 4b. Profile picker (visible when app window enabled) ────
+        // -- 4b. Profile picker --
         var profileLabel = Label("Profile");
         var profileCombo = new ComboBox { Margin = new Thickness(0, 0, 0, 8), MinWidth = 340 };
 
@@ -262,7 +258,6 @@ public partial class LauncherItemsPage : Page
         {
             profileCombo.Items.Clear();
 
-            // Determine engine for label purposes
             BrowserEngine currentEngine;
             if (string.IsNullOrEmpty(appWindowBrowser))
             {
@@ -276,21 +271,16 @@ public partial class LauncherItemsPage : Page
                 currentEngine = match?.Engine ?? DetectEngine(appWindowBrowser);
             }
 
-            string sandboxLabel = "App sandbox (isolated)";
-            profileCombo.Items.Add(new ComboBoxItem { Content = sandboxLabel, Tag = "" });
+            profileCombo.Items.Add(new ComboBoxItem { Content = "App sandbox (isolated)", Tag = "" });
 
-            // Gecko always uses an isolated sandbox (userChrome.css is profile-wide),
-            // so only Chromium gets additional profile options.
             if (currentEngine != BrowserEngine.Gecko)
             {
                 if (string.IsNullOrEmpty(appWindowBrowser))
                 {
-                    // Default browser: only offer sandbox or default profile
                     profileCombo.Items.Add(new ComboBoxItem { Content = "Default profile", Tag = "__default__" });
                 }
                 else
                 {
-                    // Specific browser selected: enumerate its real profiles
                     var match = installedBrowsers.FirstOrDefault(b =>
                         string.Equals(b.ExePath, appWindowBrowser, StringComparison.OrdinalIgnoreCase));
                     string profileDataDir = match?.ProfileDataDir ?? "";
@@ -305,7 +295,6 @@ public partial class LauncherItemsPage : Page
                 }
             }
 
-            // Restore previous selection
             int selectedIndex = 0;
             if (!string.IsNullOrEmpty(appWindowBrowserProfile))
             {
@@ -341,12 +330,11 @@ public partial class LauncherItemsPage : Page
                     break;
                 }
             }
-            // If not found in known list, add it as a custom entry
             if (selectedBrowserIndex == 0 && appWindowBrowser != "")
             {
                 var customItem = new ComboBoxItem
                 {
-                    Content = System.IO.Path.GetFileNameWithoutExtension(appWindowBrowser),
+                    Content = Path.GetFileNameWithoutExtension(appWindowBrowser),
                     Tag = appWindowBrowser
                 };
                 browserCombo.Items.Insert(browserCombo.Items.Count - 1, customItem);
@@ -355,25 +343,24 @@ public partial class LauncherItemsPage : Page
         }
         browserCombo.SelectedIndex = selectedBrowserIndex;
 
-        browserCombo.SelectionChanged += (s, ev) =>
+        browserCombo.SelectionChanged += async (s, ev) =>
         {
             if (browserCombo.SelectedItem is ComboBoxItem selected)
             {
                 string tag = selected.Tag as string ?? "";
                 if (tag == "__custom__")
                 {
-                    var dlg = new OpenFileDialog
+                    var picker = new FileOpenPicker();
+                    picker.FileTypeFilter.Add(".exe");
+                    InitializePicker(picker);
+                    var file = await picker.PickSingleFileAsync();
+                    if (file != null)
                     {
-                        Filter = "Browser executable (*.exe)|*.exe",
-                        Title = "Select a browser"
-                    };
-                    if (dlg.ShowDialog() == true)
-                    {
-                        appWindowBrowser = dlg.FileName;
+                        appWindowBrowser = file.Path;
                         var customItem = new ComboBoxItem
                         {
-                            Content = System.IO.Path.GetFileNameWithoutExtension(dlg.FileName),
-                            Tag = dlg.FileName
+                            Content = Path.GetFileNameWithoutExtension(file.Path),
+                            Tag = file.Path
                         };
                         browserCombo.Items.Insert(browserCombo.Items.Count - 1, customItem);
                         browserCombo.SelectedItem = customItem;
@@ -388,15 +375,13 @@ public partial class LauncherItemsPage : Page
                 {
                     appWindowBrowser = tag;
                 }
-
-                // Refresh profile list when browser changes
                 PopulateProfileCombo();
             }
         };
 
         PopulateProfileCombo();
 
-        // ── App window sub-options panel ────────────────────────────
+        // -- App window sub-options panel --
         var appWindowOptionsPanel = new StackPanel { Margin = new Thickness(16, 0, 0, 0) };
         appWindowOptionsPanel.Children.Add(browserLabel);
         appWindowOptionsPanel.Children.Add(browserCombo);
@@ -409,18 +394,20 @@ public partial class LauncherItemsPage : Page
                 ? Visibility.Visible : Visibility.Collapsed;
         }
 
-        appWindowToggle.Checked += (s, ev) => { openInAppWindow = true; UpdateAppWindowOptionsVisibility(); };
-        appWindowToggle.Unchecked += (s, ev) => { openInAppWindow = false; UpdateAppWindowOptionsVisibility(); };
+        appWindowToggle.Toggled += (s, ev) =>
+        {
+            openInAppWindow = appWindowToggle.IsOn;
+            UpdateAppWindowOptionsVisibility();
+        };
 
-        // ── 5. Name ─────────────────────────────────────────────────
-        var nameBox = new Wpf.Ui.Controls.TextBox
+        // -- 5. Name --
+        var nameBox = new TextBox
         {
             PlaceholderText = "Auto-detected",
-            ClearButtonEnabled = true,
             Margin = new Thickness(0, 0, 0, 8)
         };
 
-        // ── 6. Icon ─────────────────────────────────────────────────
+        // -- 6. Icon --
         var iconPreview = new Image
         {
             Width = 32,
@@ -428,7 +415,7 @@ public partial class LauncherItemsPage : Page
             Margin = new Thickness(0, 0, 8, 0),
             VerticalAlignment = VerticalAlignment.Center
         };
-        var iconStatus = new System.Windows.Controls.TextBlock
+        var iconStatus = new TextBlock
         {
             Text = "Auto-detected",
             FontSize = 12,
@@ -443,11 +430,9 @@ public partial class LauncherItemsPage : Page
         iconRow.Children.Add(iconPreview);
         iconRow.Children.Add(iconStatus);
 
-        var refreshButton = new Wpf.Ui.Controls.Button
+        var refreshButton = new Button
         {
             Content = "Retry",
-            Icon = new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.ArrowSync24),
-            Appearance = Wpf.Ui.Controls.ControlAppearance.Secondary,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(8, 0, 0, 0),
             Padding = new Thickness(8, 4, 8, 4),
@@ -455,13 +440,18 @@ public partial class LauncherItemsPage : Page
         };
         iconRow.Children.Add(refreshButton);
 
-        // ── Type toggle logic ───────────────────────────────────────
+        // -- Type toggle logic --
         void UpdateTypeUI()
         {
             bool wasWebsite = isWebsite;
             isWebsite = typeCombo.SelectedIndex == 0;
+            if (!isWebsite)
+            {
+                // Registry + app scanning is expensive; only load on-demand.
+                EnsureAppCatalogLoaded();
+            }
             pathLabel.Text = isWebsite ? "URL" : "Application";
-            pathBox.PlaceholderText = isWebsite ? "https://example.com" : "e.g. notepad.exe or C:\\Program Files\\...";
+            pathBox.PlaceholderText = isWebsite ? "https://example.com" : @"e.g. notepad.exe or C:\Program Files\...";
             pathBox.Visibility = isWebsite ? Visibility.Visible : Visibility.Collapsed;
             appPathRow.Visibility = isWebsite ? Visibility.Collapsed : Visibility.Visible;
             argsLabel.Visibility = isWebsite ? Visibility.Collapsed : Visibility.Visible;
@@ -469,7 +459,6 @@ public partial class LauncherItemsPage : Page
             appWindowToggle.Visibility = isWebsite ? Visibility.Visible : Visibility.Collapsed;
             UpdateAppWindowOptionsVisibility();
 
-            // Clear form when switching type (but not on initial setup)
             if (wasWebsite != isWebsite && !populating)
             {
                 populating = true;
@@ -481,7 +470,7 @@ public partial class LauncherItemsPage : Page
                 iconPreview.Source = null;
                 iconStatus.Text = "Auto-detected";
                 lastFetchedPath = "";
-                appWindowToggle.IsChecked = false;
+                appWindowToggle.IsOn = false;
                 browserCombo.SelectedIndex = 0;
                 appWindowBrowser = "";
                 profileCombo.SelectedIndex = 0;
@@ -492,12 +481,7 @@ public partial class LauncherItemsPage : Page
 
         typeCombo.SelectionChanged += (s, ev) => UpdateTypeUI();
 
-        // ── Auto-populate on path change (debounced) ────────────────
-        // (populating, debounceTimer, lastFetchedPath declared earlier)
-
-        // Core fetch logic — called by debounce and refresh button.
-        // When force is true, re-fetches even if the path hasn't changed
-        // and overwrites the name field.
+        // -- Auto-populate on path change (debounced) --
         async Task DoFetch(bool force)
         {
             var path = pathBox.Text.Trim();
@@ -583,10 +567,11 @@ public partial class LauncherItemsPage : Page
         {
             if (populating) return;
             debounceTimer?.Stop();
-            debounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(800) };
+            debounceTimer = DispatcherQueue.CreateTimer();
+            debounceTimer.Interval = TimeSpan.FromMilliseconds(800);
+            debounceTimer.IsRepeating = false;
             debounceTimer.Tick += async (s, ev) =>
             {
-                debounceTimer.Stop();
                 await DoFetch(force: false);
             };
             debounceTimer.Start();
@@ -600,25 +585,25 @@ public partial class LauncherItemsPage : Page
             await DoFetch(force: true);
         };
 
-        // ── Wire up app-path combo events (after ScheduleFetch exists) ──
-        void BrowseForApp()
+        // -- Wire up app-path combo events --
+        async Task BrowseForApp()
         {
-            var dlg = new OpenFileDialog
-            {
-                Filter = "Executables (*.exe)|*.exe|All files (*.*)|*.*",
-                Title = "Select an application"
-            };
-            if (dlg.ShowDialog() == true)
+            var picker = new FileOpenPicker();
+            picker.FileTypeFilter.Add(".exe");
+            picker.FileTypeFilter.Add("*");
+            InitializePicker(picker);
+            var file = await picker.PickSingleFileAsync();
+            if (file != null)
             {
                 populating = true;
-                pathBox.Text = dlg.FileName;
+                pathBox.Text = file.Path;
                 populating = false;
                 ScheduleFetch();
             }
         }
 
-        browseButton.Click += (s, ev) => BrowseForApp();
-        appPathCombo.SelectionChanged += (s, ev) =>
+        browseButton.Click += async (s, ev) => await BrowseForApp();
+        appPathCombo.SelectionChanged += async (s, ev) =>
         {
             if (populating) return;
             if (appPathCombo.SelectedItem is InstalledApp app)
@@ -626,7 +611,7 @@ public partial class LauncherItemsPage : Page
                 if (app.ExePath == "__browse__")
                 {
                     appPathCombo.SelectedIndex = -1;
-                    BrowseForApp();
+                    await BrowseForApp();
                     return;
                 }
                 populating = true;
@@ -636,19 +621,22 @@ public partial class LauncherItemsPage : Page
             }
         };
 
-        // ── Populate for edit mode ──────────────────────────────────
+        // -- Populate for edit mode --
         if (isEdit)
         {
             populating = true;
             pathBox.Text = existingItem!.Path;
-            // Try to select the matching installed app in the combo
-            for (int i = 0; i < appPathCombo.Items.Count; i++)
+            if (!existingItem.IsWebsite)
             {
-                if (appPathCombo.Items[i] is InstalledApp ia &&
-                    string.Equals(ia.ExePath, existingItem.Path, StringComparison.OrdinalIgnoreCase))
+                EnsureAppCatalogLoaded();
+                for (int i = 0; i < appPathCombo.Items.Count; i++)
                 {
-                    appPathCombo.SelectedIndex = i;
-                    break;
+                    if (appPathCombo.Items[i] is InstalledApp ia &&
+                        string.Equals(ia.ExePath, existingItem.Path, StringComparison.OrdinalIgnoreCase))
+                    {
+                        appPathCombo.SelectedIndex = i;
+                        break;
+                    }
                 }
             }
             argsBox.Text = existingItem.Arguments;
@@ -657,7 +645,7 @@ public partial class LauncherItemsPage : Page
             populating = false;
         }
 
-        // ── Build form ──────────────────────────────────────────────
+        // -- Build form --
         var form = new StackPanel { MinWidth = 400 };
         form.Children.Add(Label("Type"));
         form.Children.Add(typeCombo);
@@ -673,9 +661,10 @@ public partial class LauncherItemsPage : Page
         form.Children.Add(Label("Icon"));
         form.Children.Add(iconRow);
 
-        var validationHint = new System.Windows.Controls.TextBlock
+        var validationHint = new TextBlock
         {
-            Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Colors.OrangeRed),
+            Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(
+                global::Windows.UI.Color.FromArgb(255, 255, 69, 0)),
             FontSize = 12,
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 8, 0, 0)
@@ -685,9 +674,9 @@ public partial class LauncherItemsPage : Page
 
         UpdateTypeUI();
 
-        var dialog = new ContentDialog()
+        var dialog = new ContentDialog
         {
-            DialogHostEx = (Wpf.Ui.Controls.ContentDialogHost)Window.GetWindow(this).FindName("DialogHost"),
+            XamlRoot = this.XamlRoot,
             Title = isEdit ? "Edit Item" : "Add Item",
             Content = form,
             PrimaryButtonText = isEdit ? "Save" : "Add",
@@ -695,7 +684,6 @@ public partial class LauncherItemsPage : Page
             DefaultButton = ContentDialogButton.Primary
         };
 
-        // Real-time validation: disable Save/Add when required fields are empty
         void ValidateForm()
         {
             var missing = new List<string>();
@@ -727,7 +715,6 @@ public partial class LauncherItemsPage : Page
 
         var name = nameBox.Text.Trim();
         var finalPath = pathBox.Text.Trim();
-
         var args = argsBox.Text.Trim();
         var glyph = isWebsite ? "Globe24" : "Open24";
 
@@ -755,7 +742,7 @@ public partial class LauncherItemsPage : Page
         SaveAndUpdateTaskbar();
     }
 
-    private static void UpdateIconPreview(Image preview, System.Windows.Controls.TextBlock status, string iconPath, bool isWebsite = true)
+    private static void UpdateIconPreview(Image preview, TextBlock status, string iconPath, bool isWebsite = true)
     {
         string iconLabel = isWebsite ? "favicon" : "icon";
 
@@ -763,13 +750,11 @@ public partial class LauncherItemsPage : Page
         {
             try
             {
-                var bitmap = new BitmapImage();
-                bitmap.BeginInit();
-                bitmap.UriSource = new Uri(iconPath, UriKind.Absolute);
-                bitmap.CacheOption = BitmapCacheOption.OnLoad;
-                bitmap.DecodePixelWidth = 32;
-                bitmap.EndInit();
-                bitmap.Freeze();
+                var bitmap = new BitmapImage
+                {
+                    DecodePixelWidth = 32,
+                    UriSource = new Uri(iconPath, UriKind.Absolute)
+                };
                 preview.Source = bitmap;
                 status.Text = $"Auto {iconLabel}";
             }
@@ -786,14 +771,22 @@ public partial class LauncherItemsPage : Page
         }
     }
 
-    private static System.Windows.Controls.TextBlock Label(string text) => new()
+    private static TextBlock Label(string text) => new()
     {
         Text = text,
-        FontWeight = FontWeights.Medium,
+        FontWeight = Microsoft.UI.Text.FontWeights.Medium,
         Margin = new Thickness(0, 0, 0, 4)
     };
 
-    // ── Drag-and-drop handlers ──────────────────────────────────────
+    private static void InitializePicker(object picker)
+    {
+        var window = SettingsWindow.GetCurrent();
+        if (window == null) return;
+        var hwnd = WindowNative.GetWindowHandle(window);
+        InitializeWithWindow.Initialize(picker, hwnd);
+    }
+
+    // -- Browser/app detection helpers --
 
     private enum BrowserEngine { Chromium, Gecko }
 
@@ -801,18 +794,16 @@ public partial class LauncherItemsPage : Page
 
     private static BrowserEngine DetectEngine(string exePath)
     {
-        // Check for Chromium marker DLLs beside the exe
         string? dir = Path.GetDirectoryName(exePath);
         if (dir != null && (File.Exists(Path.Combine(dir, "chrome.dll")) ||
                             File.Exists(Path.Combine(dir, "msedge.dll"))))
             return BrowserEngine.Chromium;
 
-        // Check the exe name for known Gecko browsers
         string name = Path.GetFileNameWithoutExtension(exePath).ToLowerInvariant();
         if (name is "firefox" or "zen" or "waterfox" or "librewolf" or "floorp" or "mercury" or "firedragon")
             return BrowserEngine.Gecko;
 
-        return BrowserEngine.Chromium; // default assumption
+        return BrowserEngine.Chromium;
     }
 
     private static string? GetDefaultBrowserExePath()
@@ -844,7 +835,6 @@ public partial class LauncherItemsPage : Page
 
         var candidates = new (string Name, string[] Paths, string ProfileDataDir, BrowserEngine Engine)[]
         {
-            // Chromium-based
             ("Microsoft Edge", [
                 Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft", "Edge", "Application", "msedge.exe"),
                 Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Microsoft", "Edge", "Application", "msedge.exe")
@@ -866,7 +856,6 @@ public partial class LauncherItemsPage : Page
             ("Chromium", [
                 Path.Combine(localAppData, "Chromium", "Application", "chrome.exe")
             ], Path.Combine(localAppData, "Chromium", "User Data"), BrowserEngine.Chromium),
-            // Gecko-based
             ("Firefox", [
                 Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Mozilla Firefox", "firefox.exe"),
                 Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Mozilla Firefox", "firefox.exe")
@@ -919,7 +908,6 @@ public partial class LauncherItemsPage : Page
         if (string.IsNullOrEmpty(userDataDir) || !Directory.Exists(userDataDir))
             return profiles;
 
-        // Read the Local State file which contains profile info
         string localStatePath = Path.Combine(userDataDir, "Local State");
         if (File.Exists(localStatePath))
         {
@@ -937,19 +925,14 @@ public partial class LauncherItemsPage : Page
                         if (entry.Value.TryGetProperty("name", out var nameProp))
                             displayName = nameProp.GetString() ?? dirName;
 
-                        // Verify the profile directory actually exists
                         if (Directory.Exists(Path.Combine(userDataDir, dirName)))
                             profiles.Add(new BrowserProfile(dirName, displayName));
                     }
                 }
             }
-            catch
-            {
-                // Fall back to directory enumeration
-            }
+            catch { }
         }
 
-        // Fallback: if Local State didn't work, scan for directories with a Preferences file
         if (profiles.Count == 0)
         {
             try
@@ -990,7 +973,6 @@ public partial class LauncherItemsPage : Page
 
                 if (line.StartsWith('['))
                 {
-                    // Flush previous profile
                     if (currentPath != null)
                     {
                         string fullPath = isRelative
@@ -1005,11 +987,9 @@ public partial class LauncherItemsPage : Page
                     currentPath = null;
                     isRelative = true;
 
-                    // Only process [Profile*] sections
                     if (!line.StartsWith("[Profile", StringComparison.OrdinalIgnoreCase))
-                    {
-                        currentPath = null; // skip non-profile sections
-                    }
+                        currentPath = null;
+
                     continue;
                 }
 
@@ -1027,7 +1007,6 @@ public partial class LauncherItemsPage : Page
                     isRelative = value == "1";
             }
 
-            // Flush last profile
             if (currentPath != null)
             {
                 string fullPath = isRelative
@@ -1041,187 +1020,6 @@ public partial class LauncherItemsPage : Page
         catch { }
 
         return profiles;
-    }
-
-    private void DragHandle_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-    {
-        if (sender is not FrameworkElement handle) return;
-
-        // Walk up to find the ListBoxItem and get the data context
-        var listBoxItem = FindAncestor<ListBoxItem>(handle);
-        if (listBoxItem?.DataContext is not LauncherItem item) return;
-
-        _draggedItem = item;
-        var data = new DataObject(typeof(LauncherItem), item);
-        DragDrop.DoDragDrop(ItemsList, data, DragDropEffects.Move);
-        CleanupDrag();
-        e.Handled = true;
-    }
-
-    private void ItemsList_DragOver(object sender, DragEventArgs e)
-    {
-        if (!e.Data.GetDataPresent(typeof(LauncherItem)))
-        {
-            e.Effects = DragDropEffects.None;
-            e.Handled = true;
-            return;
-        }
-
-        e.Effects = DragDropEffects.Move;
-        e.Handled = true;
-
-        var targetIndex = GetDropTargetIndex(e.GetPosition(ItemsList));
-        if (targetIndex != _dropTargetIndex)
-        {
-            _dropTargetIndex = targetIndex;
-            UpdateDropIndicator(targetIndex);
-        }
-    }
-
-    private void ItemsList_DragLeave(object sender, DragEventArgs e)
-    {
-        RemoveDropIndicator();
-        _dropTargetIndex = -1;
-    }
-
-    private void ItemsList_Drop(object sender, DragEventArgs e)
-    {
-        RemoveDropIndicator();
-        _dropTargetIndex = -1;
-
-        if (!e.Data.GetDataPresent(typeof(LauncherItem)))
-            return;
-
-        var draggedItem = (LauncherItem)e.Data.GetData(typeof(LauncherItem));
-        var items = SettingsManager.Current.LauncherItems;
-        int oldIndex = items.IndexOf(draggedItem);
-        if (oldIndex < 0) return;
-
-        int newIndex = GetDropTargetIndex(e.GetPosition(ItemsList));
-        if (newIndex < 0) newIndex = 0;
-        if (newIndex > items.Count) newIndex = items.Count;
-
-        // Adjust target if moving down (removing item shifts indices)
-        if (newIndex > oldIndex) newIndex--;
-        if (newIndex == oldIndex) return;
-
-        items.Move(oldIndex, newIndex);
-        RefreshList();
-        SaveAndUpdateTaskbar();
-    }
-
-    private int GetDropTargetIndex(Point position)
-    {
-        var items = SettingsManager.Current.LauncherItems;
-        if (items.Count == 0) return 0;
-
-        for (int i = 0; i < ItemsList.Items.Count; i++)
-        {
-            if (ItemsList.ItemContainerGenerator.ContainerFromIndex(i) is not ListBoxItem container)
-                continue;
-
-            var itemTop = container.TranslatePoint(new Point(0, 0), ItemsList).Y;
-            var itemMid = itemTop + container.ActualHeight / 2;
-
-            if (position.Y < itemMid)
-                return i;
-        }
-
-        return items.Count;
-    }
-
-    private void UpdateDropIndicator(int targetIndex)
-    {
-        RemoveDropIndicator();
-
-        _dropIndicator = new Border
-        {
-            Height = 2,
-            Background = (Brush)Application.Current.FindResource("SystemAccentColorPrimaryBrush"),
-            HorizontalAlignment = HorizontalAlignment.Stretch,
-            Margin = new Thickness(4, -1, 4, -1),
-            IsHitTestVisible = false
-        };
-
-        // Find the StackPanel that hosts the ListBox inside the page
-        var panel = FindAncestor<StackPanel>(ItemsList);
-        if (panel == null) return;
-
-        // Insert the indicator into the ListBox's internal panel via an adorner approach:
-        // We'll add it to the page-level visual. Instead, we use an overlay approach.
-        // Simpler: Use the ItemsList's adorner layer.
-        var adornerLayer = AdornerLayer.GetAdornerLayer(ItemsList);
-        if (adornerLayer == null) return;
-
-        double y = 0;
-        if (targetIndex < ItemsList.Items.Count)
-        {
-            if (ItemsList.ItemContainerGenerator.ContainerFromIndex(targetIndex) is ListBoxItem container)
-                y = container.TranslatePoint(new Point(0, 0), ItemsList).Y;
-        }
-        else if (ItemsList.Items.Count > 0)
-        {
-            if (ItemsList.ItemContainerGenerator.ContainerFromIndex(ItemsList.Items.Count - 1) is ListBoxItem lastContainer)
-                y = lastContainer.TranslatePoint(new Point(0, lastContainer.ActualHeight), ItemsList).Y;
-        }
-
-        adornerLayer.Add(new DropIndicatorAdorner(ItemsList, y));
-    }
-
-    private void RemoveDropIndicator()
-    {
-        _dropIndicator = null;
-        var adornerLayer = AdornerLayer.GetAdornerLayer(ItemsList);
-        if (adornerLayer == null) return;
-        var adorners = adornerLayer.GetAdorners(ItemsList);
-        if (adorners == null) return;
-        foreach (var adorner in adorners)
-        {
-            if (adorner is DropIndicatorAdorner)
-                adornerLayer.Remove(adorner);
-        }
-    }
-
-    private void CleanupDrag()
-    {
-        _draggedItem = null;
-        _dropTargetIndex = -1;
-        RemoveDropIndicator();
-    }
-
-    private static T? FindAncestor<T>(DependencyObject current) where T : DependencyObject
-    {
-        while (current != null)
-        {
-            if (current is T target) return target;
-            current = VisualTreeHelper.GetParent(current);
-        }
-        return null;
-    }
-
-    /// <summary>
-    /// Adorner that draws a horizontal accent-colored line to indicate the drop position.
-    /// </summary>
-    private class DropIndicatorAdorner : Adorner
-    {
-        private readonly double _yPosition;
-        private readonly Pen _pen;
-
-        public DropIndicatorAdorner(UIElement adornedElement, double yPosition) : base(adornedElement)
-        {
-            _yPosition = yPosition;
-            IsHitTestVisible = false;
-            var brush = Application.Current.TryFindResource("SystemAccentColorPrimaryBrush") as Brush
-                        ?? Brushes.DodgerBlue;
-            _pen = new Pen(brush, 2);
-            _pen.Freeze();
-        }
-
-        protected override void OnRender(DrawingContext drawingContext)
-        {
-            var width = AdornedElement.RenderSize.Width;
-            drawingContext.DrawLine(_pen, new Point(4, _yPosition), new Point(width - 4, _yPosition));
-        }
     }
 
     private void RemoveItem_Click(object sender, RoutedEventArgs e)
@@ -1238,14 +1036,12 @@ public partial class LauncherItemsPage : Page
 
     /// <summary>
     /// Builds a list of installed applications by scanning Start Menu shortcuts
-    /// and the Windows Registry uninstall keys, filtering out non-launchable
-    /// entries like SDKs, runtimes, drivers, and libraries.
+    /// and the Windows Registry uninstall keys.
     /// </summary>
     private static List<InstalledApp> GetInstalledApplications()
     {
         var apps = new Dictionary<string, InstalledApp>(StringComparer.OrdinalIgnoreCase);
 
-        // ── 1. Start Menu shortcuts (most reliable for "launchable" apps) ──
         var startMenuDirs = new[]
         {
             Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu),
@@ -1272,13 +1068,12 @@ public partial class LauncherItemsPage : Page
                         if (!apps.ContainsKey(target))
                             apps[target] = new InstalledApp(name, target);
                     }
-                    catch { /* skip unreadable shortcuts */ }
+                    catch { }
                 }
             }
-            catch { /* access denied */ }
+            catch { }
         }
 
-        // ── 2. Registry uninstall keys (fills gaps Start Menu misses) ──
         var uninstallKeys = new[]
         {
             @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
@@ -1287,7 +1082,7 @@ public partial class LauncherItemsPage : Page
 
         foreach (var keyPath in uninstallKeys)
         {
-            foreach (var root in new[] { Registry.LocalMachine, Registry.CurrentUser })
+            foreach (var root in new[] { Microsoft.Win32.Registry.LocalMachine, Microsoft.Win32.Registry.CurrentUser })
             {
                 try
                 {
@@ -1301,13 +1096,12 @@ public partial class LauncherItemsPage : Page
                             using var sub = key.OpenSubKey(subName);
                             if (sub == null) continue;
 
-                            // Skip system components and updates
                             var systemComponent = sub.GetValue("SystemComponent");
                             if (systemComponent is int sc && sc == 1) continue;
                             var parentName = sub.GetValue("ParentDisplayName") as string;
                             if (!string.IsNullOrEmpty(parentName)) continue;
                             var releaseType = sub.GetValue("ReleaseType") as string;
-                            if (!string.IsNullOrEmpty(releaseType)) continue; // updates, hotfixes, etc.
+                            if (!string.IsNullOrEmpty(releaseType)) continue;
 
                             var displayName = sub.GetValue("DisplayName") as string;
                             if (string.IsNullOrWhiteSpace(displayName)) continue;
@@ -1316,14 +1110,13 @@ public partial class LauncherItemsPage : Page
                             var exePath = ResolveAppExePath(sub);
                             if (string.IsNullOrEmpty(exePath)) continue;
 
-                            // Only add if we don't already have this exe from Start Menu
                             if (!apps.ContainsKey(exePath))
                                 apps[exePath] = new InstalledApp(displayName, exePath);
                         }
-                        catch { /* skip unreadable entries */ }
+                        catch { }
                     }
                 }
-                catch { /* skip inaccessible hives */ }
+                catch { }
             }
         }
 
@@ -1332,7 +1125,6 @@ public partial class LauncherItemsPage : Page
             .ToList();
     }
 
-    /// <summary>Filters out SDKs, runtimes, drivers, libraries, and other non-app entries.</summary>
     private static bool IsNonAppName(string name)
     {
         string[] filters =
@@ -1353,14 +1145,12 @@ public partial class LauncherItemsPage : Page
                 return true;
         }
 
-        // Filter names that are just GUIDs or hex codes
         if (name.StartsWith('{') || name.StartsWith("KB"))
             return true;
 
         return false;
     }
 
-    /// <summary>Resolves a .lnk shortcut to its target path using Shell32 COM.</summary>
     private static string? ResolveShortcutTarget(string lnkPath)
     {
         try
@@ -1380,24 +1170,20 @@ public partial class LauncherItemsPage : Page
         }
     }
 
-    private static string? ResolveAppExePath(RegistryKey sub)
+    private static string? ResolveAppExePath(Microsoft.Win32.RegistryKey sub)
     {
-        // DisplayIcon often points to the main .exe
         var displayIcon = sub.GetValue("DisplayIcon") as string;
         if (!string.IsNullOrEmpty(displayIcon))
         {
-            // Strip icon index like ",0" or ",1"
             var iconPath = displayIcon.Split(',')[0].Trim('"', ' ');
             if (iconPath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) && File.Exists(iconPath))
                 return iconPath;
         }
 
-        // InstallLocation + look for a main exe
         var installLoc = sub.GetValue("InstallLocation") as string;
         if (!string.IsNullOrEmpty(installLoc) && Directory.Exists(installLoc))
         {
             var displayName = sub.GetValue("DisplayName") as string ?? "";
-            // Try exe matching the display name first
             foreach (var exe in Directory.EnumerateFiles(installLoc, "*.exe", SearchOption.TopDirectoryOnly))
             {
                 var fn = Path.GetFileNameWithoutExtension(exe);
@@ -1405,7 +1191,6 @@ public partial class LauncherItemsPage : Page
                     || fn.Contains(displayName.Replace(" ", ""), StringComparison.OrdinalIgnoreCase))
                     return exe;
             }
-            // Fall back to first exe in directory
             var firstExe = Directory.EnumerateFiles(installLoc, "*.exe", SearchOption.TopDirectoryOnly).FirstOrDefault();
             if (firstExe != null) return firstExe;
         }
@@ -1416,10 +1201,5 @@ public partial class LauncherItemsPage : Page
     private void SaveAndUpdateTaskbar()
     {
         SettingsManager.SaveSettings();
-
-        if (Application.Current?.MainWindow is MainWindow mainWindow)
-        {
-            mainWindow.UpdateTaskbar();
-        }
     }
 }

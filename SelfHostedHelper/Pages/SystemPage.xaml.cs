@@ -1,10 +1,10 @@
 using SelfHostedHelper.Classes.Settings;
-using SelfHostedHelper.Classes.Utils;
-using Microsoft.Win32;
 using NLog;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 using System.IO;
-using System.Windows;
-using System.Windows.Controls;
+using global::Windows.Storage.Pickers;
+using WinRT.Interop;
 
 namespace SelfHostedHelper.Pages;
 
@@ -16,19 +16,19 @@ public partial class SystemPage : Page
     {
         InitializeComponent();
         DataContext = SettingsManager.Current;
-        UpdateMonitorList();
     }
 
-    private void StartupSwitch_Click(object sender, RoutedEventArgs e)
+    private void StartupSwitch_Toggled(object sender, RoutedEventArgs e)
     {
-        SetStartup(StartupSwitch.IsChecked ?? false);
+        SetStartup(StartupSwitch.IsOn);
     }
 
     private void SetStartup(bool enable)
     {
         try
         {
-            using var key = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true);
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
+                @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true);
             if (key == null) return;
             const string appName = "TaskbarLauncher";
             var executablePath = Environment.ProcessPath;
@@ -52,28 +52,18 @@ public partial class SystemPage : Page
         }
     }
 
-    private void UpdateMonitorList()
+    private async void ExportButton_Click(object sender, RoutedEventArgs e)
     {
-        MonitorUtil.UpdateMonitorList(
-            WidgetMonitorComboBox,
-            () => SettingsManager.Current.TaskbarWidgetSelectedMonitor,
-            value => SettingsManager.Current.TaskbarWidgetSelectedMonitor = value);
-    }
-
-    private void ExportButton_Click(object sender, RoutedEventArgs e)
-    {
-        var dialog = new SaveFileDialog
-        {
-            FileName = $"TaskbarLauncher_Settings_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}",
-            DefaultExt = ".xml",
-            Filter = "XML Files (*.xml)|*.xml|All Files (*.*)|*.*"
-        };
-
-        if (dialog.ShowDialog() == true)
+        var picker = new FileSavePicker();
+        picker.FileTypeChoices.Add("XML Files", new List<string> { ".xml" });
+        picker.SuggestedFileName = $"TaskbarLauncher_Settings_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}";
+        InitializePicker(picker);
+        var file = await picker.PickSaveFileAsync();
+        if (file != null)
         {
             try
             {
-                SettingsManager.SaveSettings(dialog.FileName);
+                SettingsManager.SaveSettings(file.Path);
             }
             catch (Exception ex)
             {
@@ -82,30 +72,37 @@ public partial class SystemPage : Page
         }
     }
 
-    private void ImportButton_Click(object sender, RoutedEventArgs e)
+    private async void ImportButton_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new OpenFileDialog
-        {
-            DefaultExt = ".xml",
-            Filter = "XML Files (*.xml)|*.xml|All Files (*.*)|*.*"
-        };
-
-        if (dialog.ShowDialog() == true)
+        var picker = new FileOpenPicker();
+        picker.FileTypeFilter.Add(".xml");
+        InitializePicker(picker);
+        var file = await picker.PickSingleFileAsync();
+        if (file != null)
         {
             try
             {
-                var manager = new SettingsManager();
-                manager.RestoreSettings(dialog.FileName);
+                SettingsManager.RestoreSettings(file.Path);
                 SettingsManager.SaveSettings();
 
                 // Restart to apply imported settings
-                Application.Current.Shutdown();
-                System.Diagnostics.Process.Start(System.Diagnostics.Process.GetCurrentProcess().MainModule!.FileName!);
+                var exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
+                if (exePath != null)
+                    System.Diagnostics.Process.Start(exePath);
+                Environment.Exit(0);
             }
             catch (Exception ex)
             {
                 Logger.Error(ex, "Error importing settings");
             }
         }
+    }
+
+    private static void InitializePicker(object picker)
+    {
+        var window = SettingsWindow.GetCurrent();
+        if (window == null) return;
+        var hwnd = WindowNative.GetWindowHandle(window);
+        InitializeWithWindow.Initialize(picker, hwnd);
     }
 }

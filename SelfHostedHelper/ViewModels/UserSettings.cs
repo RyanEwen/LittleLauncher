@@ -2,7 +2,6 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using SelfHostedHelper.Classes.Settings;
 using SelfHostedHelper.Models;
 using System.Collections.ObjectModel;
-using System.Windows;
 using System.Xml.Serialization;
 
 namespace SelfHostedHelper.ViewModels;
@@ -31,14 +30,6 @@ public partial class UserSettings : ObservableObject
     /// <summary>Last known app version string.</summary>
     [ObservableProperty]
     public partial string LastKnownVersion { get; set; }
-
-    [XmlIgnore]
-    [ObservableProperty]
-    public partial FlowDirection FlowDirection { get; set; }
-
-    [XmlIgnore]
-    [ObservableProperty]
-    public partial string FontFamily { get; set; }
 
     // ── Taskbar Widget ──────────────────────────────────────────────
 
@@ -134,14 +125,6 @@ public partial class UserSettings : ObservableObject
         Startup = false;
         NIconHide = false;
         LastKnownVersion = "";
-        FlowDirection = FlowDirection.LeftToRight;
-        FontFamily = "Segoe UI Variable";
-
-        TaskbarWidgetEnabled = false;
-        TaskbarWidgetSelectedMonitor = 0;
-        TaskbarWidgetPosition = 0;
-        TaskbarWidgetPadding = true;
-        TaskbarWidgetManualPadding = 0;
 
         // Do NOT populate defaults here — XmlSerializer calls this constructor
         // then appends deserialized items, which would double the list.
@@ -176,31 +159,5 @@ public partial class UserSettings : ObservableObject
     {
         if (oldValue == newValue || _initializing) return;
         SelfHostedHelper.Classes.ThemeManager.ApplyAndSaveTheme(newValue);
-    }
-
-    partial void OnTaskbarWidgetEnabledChanged(bool oldValue, bool newValue)
-    {
-        if (oldValue == newValue || _initializing) return;
-        UpdateTaskbar();
-    }
-
-    partial void OnTaskbarWidgetPositionChanged(int oldValue, int newValue)
-    {
-        if (oldValue == newValue || _initializing) return;
-        UpdateTaskbar();
-    }
-
-    partial void OnTaskbarWidgetManualPaddingChanged(int oldValue, int newValue)
-    {
-        if (oldValue == newValue || _initializing) return;
-        UpdateTaskbar();
-    }
-
-    private void UpdateTaskbar()
-    {
-        if (Application.Current?.MainWindow is MainWindow mainWindow)
-        {
-            mainWindow.UpdateTaskbar();
-        }
     }
 }

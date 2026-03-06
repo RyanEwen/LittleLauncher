@@ -2,16 +2,15 @@
 
 ## Project overview
 
-SelfHostedHelper is a .NET 10 WPF desktop application that embeds a launcher widget directly into the Windows 11 taskbar. It also syncs settings to a remote server via SSH/SFTP.
+SelfHostedHelper is a .NET 10 WinUI 3 desktop application (unpackaged) that provides a system-tray launcher with a flyout popup for shortcuts. It also syncs settings to a remote server via SSH/SFTP.
 
 ## Architecture
 
-- **Single-instance app** enforced via a named `Mutex` ("TaskbarLauncher"). A second launch signals the first instance to open the settings window through an `EventWaitHandle`.
-- **MainWindow** is invisible (0×0, hidden). It owns the system-tray `NotifyIcon` (WPF-UI Tray) and the `TaskbarWindow`.
-- **TaskbarWindow** is reparented into the native Windows taskbar (`Shell_TrayWnd`) using `SetParent` P/Invoke. It converts its style from `WS_POPUP` to `WS_CHILD` and is tightly sized to the widget area. Position updates are event-driven (`WM_DISPLAYCHANGE`, `WM_SETTINGCHANGE`, `TaskbarCreated`) with a 5 s `DispatcherTimer` fallback.
-- **FlyoutWindow** is a popup that displays launcher items with icons. Shown from the taskbar widget or tray icon click, positioned above the taskbar, dismissed on focus loss or Escape.
-- **SettingsWindow** is a WPF-UI `FluentWindow` with Mica backdrop. It uses `NavigationView` with page-based navigation (Home, Launcher Items, Cloud Sync, Settings, About).
-- **Settings** are serialised to `%AppData%\SelfHostedHelper\settings.xml` via `XmlSerializer`, managed by the singleton `SettingsManager`.
+- **Single-instance app** enforced via a named `Mutex` ("TaskbarLauncher"). A second launch signals the first instance via `PostMessage` with registered window messages (`TaskbarLauncher_ShowFlyout`, `TaskbarLauncher_ShowSettings`).
+- **MainWindow** is invisible (moved off-screen, 1×1). It owns the system-tray icon (`H.NotifyIcon.TaskbarIcon`). Uses `WS_EX_TOOLWINDOW` to hide from Alt-Tab.
+- **FlyoutWindow** is a popup that displays launcher items with icons. Shown from tray icon click, positioned above the taskbar, dismissed on focus loss or Escape.
+- **SettingsWindow** is a WinUI 3 window with `MicaBackdrop`. It uses `NavigationView` with page-based navigation (Home, Launcher Items, Cloud Sync, Settings, About).
+- **Settings** are serialised to `%AppData%\SelfHostedHelper\settings.xml` via `XmlSerializer`, managed by the fully static `SettingsManager`.
 - **SftpSyncService** uses SSH.NET for async upload/download of the settings file to a configurable remote server.
 
 ## Key namespaces
@@ -19,24 +18,26 @@ SelfHostedHelper is a .NET 10 WPF desktop application that embeds a launcher wid
 | Namespace | Contents |
 |---|---|
 | `SelfHostedHelper` | App, MainWindow, SettingsWindow |
-| `SelfHostedHelper.Classes` | NativeMethods, ThemeManager, WindowBlurHelper, WindowHelper |
+| `SelfHostedHelper.Classes` | NativeMethods, ThemeManager |
 | `SelfHostedHelper.Classes.Settings` | SettingsManager |
-| `SelfHostedHelper.Classes.Utils` | MonitorUtil, BoolToEnabledDisabledConverter |
-| `SelfHostedHelper.Controls` | TaskbarLauncherControl |
 | `SelfHostedHelper.Models` | LauncherItem, SshConnectionProfile |
 | `SelfHostedHelper.Pages` | All settings pages |
 | `SelfHostedHelper.Services` | SftpSyncService, FaviconService |
 | `SelfHostedHelper.ViewModels` | UserSettings |
-| `SelfHostedHelper.Windows` | TaskbarWindow, FlyoutWindow |
+| `SelfHostedHelper.Windows` | FlyoutWindow |
+
+**Note:** The `SelfHostedHelper.Windows` namespace shadows the WinRT `Windows.*` namespace. Use `global::Windows.` prefix when accessing WinRT types (e.g. `global::Windows.Graphics.PointInt32`).
 
 ## Conventions
 
 - Use `[ObservableProperty]` from CommunityToolkit.Mvvm for all bindable settings properties.
 - Partial `On<Property>Changed` methods in `UserSettings` handle side-effects (theme changes, taskbar updates).
 - An `_initializing` flag in `UserSettings` suppresses change handlers during XML deserialization.
-- P/Invoke declarations live in `NativeMethods.cs`. Always use `static SelfHostedHelper.Classes.NativeMethods` imports.
-- Pages are WPF `Page` objects navigated via WPF-UI's `NavigationView`. No MVVM framework routing — just `TargetPageType` in XAML.
-- XML resource strings live in `Resources/Localization/Dictionary-en-US.xaml`. Access them via `{DynamicResource KeyName}` in XAML or `Application.Current.TryFindResource("KeyName")` in code.
+- P/Invoke declarations live in `NativeMethods.cs`. Always use `using static SelfHostedHelper.Classes.NativeMethods;` imports.
+- Use `[LibraryImport]` for new P/Invoke declarations; existing ones use `[DllImport]`.
+- Pages are WinUI 3 `Page` objects navigated via `NavigationView`. No MVVM framework routing — just `TargetPageType` in XAML.
+- String resources live in `Resources/Localization/Dictionary-en-US.xaml`. In code: `Application.Current.Resources.TryGetValue("KeyName", out object value)`.
+- Use `CommunityToolkit.Mvvm.Input.RelayCommand` for ICommand implementations.
 
 ## Build
 
@@ -46,12 +47,12 @@ dotnet build SelfHostedHelper/SelfHostedHelper.csproj -c Debug
 
 `Directory.Build.props` auto-detects the platform from `PROCESSOR_ARCHITECTURE` (ARM64 → ARM64, otherwise x64). To override: `-p:Platform=x64` or `-p:Platform=ARM64`.
 
-Target: `net10.0-windows10.0.22000.0`, platforms `x64` and `ARM64`.
+Target: `net10.0-windows10.0.22000.0`, unpackaged (`WindowsPackageType=None`), platforms `x64` and `ARM64`.
 
 ## Dependencies
 
-- WPF-UI 4.2.0, WPF-UI.Tray 4.2.0
-- MicaWPF 6.3.2
+- Microsoft.WindowsAppSDK 1.8.260209005 (WinUI 3)
+- H.NotifyIcon.WinUI 2.4.1 (system tray)
 - CommunityToolkit.Mvvm 8.4.0
 - SSH.NET 2025.1.0
 - NLog 6.1.1
@@ -59,6 +60,5 @@ Target: `net10.0-windows10.0.22000.0`, platforms `x64` and `ARM64`.
 ## Common tasks
 
 - **Add a new settings page:** Create `Pages/FooPage.xaml` + `.cs`, add a `NavigationViewItem` in `SettingsWindow.xaml`, add any new string keys to `Dictionary-en-US.xaml`.
-- **Add a new launcher feature:** Extend `LauncherItem` model, update `TaskbarLauncherControl` to render it, update `LauncherItemsPage` for editing.
+- **Add a new launcher feature:** Extend `LauncherItem` model, update `FlyoutWindow` to render it, update `LauncherItemsPage` for editing.
 - **Add a new setting:** Add an `[ObservableProperty]` to `UserSettings.cs`. It will auto-serialize to XML.
-- **Modify taskbar embedding behaviour:** Edit `TaskbarWindow.xaml.cs` — the `CalculateAndSetPosition`, `SetupWindow`, and `UpdatePosition` methods.

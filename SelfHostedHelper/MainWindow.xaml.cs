@@ -2,41 +2,37 @@ using SelfHostedHelper.Classes;
 using SelfHostedHelper.Classes.Settings;
 using SelfHostedHelper.Windows;
 using SelfHostedHelper.Services;
-using SelfHostedHelper.ViewModels;
+using CommunityToolkit.Mvvm.Input;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Windowing;
 using System.IO;
-using System.Windows;
-using System.Windows.Interop;
-using System.Windows.Threading;
+using WinRT.Interop;
 using static SelfHostedHelper.Classes.NativeMethods;
 
 namespace SelfHostedHelper;
 
 /// <summary>
-/// MainWindow — the invisible host window for the Taskbar Launcher.
+/// MainWindow — the invisible host window for the Taskbar Launcher (WinUI 3).
 ///
 /// Architecture notes:
-///   - This window is never actually displayed (Width/Height = 0, Visibility = Hidden).
-///   - Its sole purpose is to own the tray NotifyIcon and the TaskbarWindow.
+///   - This window is never actually displayed.
+///   - Its sole purpose is to own the tray icon.
 ///   - A Mutex ("TaskbarLauncher") prevents multiple instances.
 ///   - A registered window message lets a second instance or LauncherShortcut
 ///     signal the first to show the flyout via PostMessage.
-///   - TaskbarWindow is a child of the real Windows taskbar (Shell_TrayWnd) via SetParent.
 /// </summary>
-public partial class MainWindow : Window
+public sealed partial class MainWindow : Window
 {
     private static readonly NLog.Logger Logger = NLog.LogManager.GetCurrentClassLogger();
 
     private static readonly Mutex Singleton = new(true, "TaskbarLauncher");
 
-    internal TaskbarWindow? taskbarWindow;
     private static int _wmShowFlyout;
     private static int _wmShowSettings;
+    private IntPtr _hwnd;
+    private SUBCLASSPROC? _wndProcDelegate;
 
-    /// <summary>
-    /// Set by TaskbarWindow when Explorer is restarting so we can avoid
-    /// touching stale handles.
-    /// </summary>
-    internal static volatile bool ExplorerRestarting = false;
+    internal H.NotifyIcon.TaskbarIcon? nIcon;
 
     public MainWindow()
     {
@@ -65,7 +61,7 @@ public partial class MainWindow : Window
         }
 
         InitializeComponent();
-        DataContext = SettingsManager.Current;
+        _hwnd = WindowNative.GetWindowHandle(this);
 
         Logger.Info("Starting TaskbarLauncher MainWindow");
 
@@ -73,65 +69,119 @@ public partial class MainWindow : Window
         _wmShowFlyout = RegisterWindowMessage("TaskbarLauncher_ShowFlyout");
         _wmShowSettings = RegisterWindowMessage("TaskbarLauncher_ShowSettings");
 
-        // ── Restore settings ────────────────────────────────────────
-        // Settings are restored in App.OnStartup before MainWindow is created.
+        // Hide from Alt-Tab and make invisible
+        int exStyle = GetWindowLong(_hwnd, GWL_EXSTYLE);
+        SetWindowLong(_hwnd, GWL_EXSTYLE, exStyle | WS_EX_TOOLWINDOW);
 
+        // Move off-screen
+        var appWindow = GetAppWindow();
+        appWindow.Move(new global::Windows.Graphics.PointInt32(-9999, -9999));
+        appWindow.Resize(new global::Windows.Graphics.SizeInt32(1, 1));
+
+        // Prevent WinUI 3 from closing the host window (and terminating the app)
+        // when other windows close. Exit only happens via Environment.Exit(0) in
+        // the tray icon's Exit command.
+        appWindow.Closing += (s, e) => e.Cancel = true;
+
+        // Hook WndProc for cross-process PostMessage IPC
+        _wndProcDelegate = WndProc;
+        SetWindowSubclass(_hwnd, _wndProcDelegate, 0, 0);
+
+        // Deferred init: apply theme, tray icon
+        ApplyDeferredInit();
+        EnsureStartMenuShortcuts();
+        FlyoutWindow.WarmUp(this);
+        _ = AutoSyncOnStartupAsync();
+    }
+
+    private AppWindow GetAppWindow()
+    {
+        var wndId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(_hwnd);
+        return AppWindow.GetFromWindowId(wndId);
     }
 
     /// <summary>
-    /// Deferred initialisation that needs Application.Current.MainWindow to be set.
-    /// StartupUri doesn't assign MainWindow until after the constructor returns,
-    /// so theme application and tray-icon updates must live here.
+    /// Finish initialization that needs the window to be set up.
     /// </summary>
     private void ApplyDeferredInit()
     {
-        // Apply theme (needs Application.Current.MainWindow)
-        ThemeManager.ApplySavedTheme();
+        // Apply theme
+        ThemeManager.ApplySavedTheme(this);
 
-        // ── Tray icon visibility ────────────────────────────────────
-        nIcon.Visibility = SettingsManager.Current.NIconHide
-            ? Visibility.Collapsed
-            : Visibility.Visible;
+        // ── Tray icon ──────────────────────────────────────────────
+        SetupTrayIcon();
 
         // Show settings on first run
         if (string.IsNullOrEmpty(SettingsManager.Current.LastKnownVersion))
         {
-            SettingsWindow.ShowInstance();
+            SettingsWindow.ShowInstance(this);
         }
 
         SettingsManager.Current.LastKnownVersion = "v1.0.0";
     }
 
-    // ── Window loaded — create the taskbar widget ───────────────────
-
-    private async void Window_Loaded(object sender, RoutedEventArgs e)
+    private void SetupTrayIcon()
     {
-        // Move off-screen so it's truly invisible
-        Left = -9999;
-        Top = -9999;
+        if (nIcon != null)
+        {
+            nIcon.Dispose();
+            nIcon = null;
+        }
 
-        // Hide from Alt-Tab
-        var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
-        int exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
-        SetWindowLong(hwnd, GWL_EXSTYLE, exStyle | WS_EX_TOOLWINDOW);
+        nIcon = new H.NotifyIcon.TaskbarIcon();
+        nIcon.NoLeftClickDelay = true;
+        nIcon.ToolTipText = "Taskbar Launcher";
 
-        // Hook WndProc for cross-process PostMessage IPC
-        var source = HwndSource.FromHwnd(hwnd);
-        source?.AddHook(WndProc);
+        // Use icon from Resources
+        string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "SelfHostedHelper.ico");
+        if (File.Exists(iconPath))
+            nIcon.Icon = new System.Drawing.Icon(iconPath);
 
-        // Now that Application.Current.MainWindow is set, finish init
-        ApplyDeferredInit();
+        // Subscribe to left-click for instant flyout toggle.
+        // NoLeftClickDelay skips the double-click wait interval.
+        nIcon.LeftClickCommand = new RelayCommand(() =>
+        {
+            GetCursorPos(out var pt);
+            DispatcherQueue.TryEnqueue(() => FlyoutWindow.Toggle(this, pt.X, pt.Y));
+        });
 
-        // Ensure Start Menu shortcuts exist
-        EnsureStartMenuShortcuts();
+        // Context menu via RightClickCommand showing a native popup
+        nIcon.RightClickCommand = new RelayCommand(() =>
+        {
+            GetCursorPos(out var pt);
+            var popup = new H.NotifyIcon.Core.PopupMenu();
+            var settingsItem = new H.NotifyIcon.Core.PopupMenuItem { Text = "Settings" };
+            settingsItem.Click += (s, e) =>
+                DispatcherQueue.TryEnqueue(() => SettingsWindow.ShowInstance(this));
+            popup.Items.Add(settingsItem);
+            popup.Items.Add(new H.NotifyIcon.Core.PopupMenuSeparator());
+            var exitItem = new H.NotifyIcon.Core.PopupMenuItem { Text = "Exit" };
+            exitItem.Click += (s, e) =>
+            {
+                SettingsManager.SaveSettings();
+                nIcon?.Dispose();
+                Environment.Exit(0);
+            };
+            popup.Items.Add(exitItem);
+            popup.Show(_hwnd, pt.X, pt.Y);
+        });
+        nIcon.MenuActivation = H.NotifyIcon.Core.PopupActivationMode.RightClick;
 
-        // Create the taskbar widget
-        UpdateTaskbar();
+        nIcon.Visibility = SettingsManager.Current.NIconHide
+            ? Visibility.Collapsed
+            : Visibility.Visible;
 
-        // Pre-create the flyout so the first toggle is instant
-        FlyoutWindow.WarmUp();
+        nIcon.ForceCreate();
+    }
 
-        // Auto-sync from SFTP if enabled
+    internal void UpdateTrayIconVisibility(bool visible)
+    {
+        if (nIcon != null)
+            nIcon.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private async Task AutoSyncOnStartupAsync()
+    {
         if (SettingsManager.Current.SftpAutoSync)
         {
             try
@@ -140,10 +190,10 @@ public partial class MainWindow : Window
                 if (success)
                 {
                     Logger.Info("Auto-synced settings from SFTP");
-                    // RestoreSettings replaces the singleton — rebind and re-apply
-                    DataContext = SettingsManager.Current;
-                    ApplyDeferredInit();
-                    UpdateTaskbar();
+                    // Only re-apply theme; don't recreate the tray icon (its
+                    // internal WNDPROC delegate would be GC'd, crashing the app).
+                    ThemeManager.ApplySavedTheme(this);
+                    UpdateTrayIconVisibility(!SettingsManager.Current.NIconHide);
                 }
                 else Logger.Warn($"Auto-sync skipped: {message}");
             }
@@ -154,85 +204,21 @@ public partial class MainWindow : Window
         }
     }
 
-    // ── Public method to (re)create the taskbar widget ──────────────
-
-    public void UpdateTaskbar()
-    {
-        if (ExplorerRestarting) return;
-
-        if (SettingsManager.Current.TaskbarWidgetEnabled)
-        {
-            if (taskbarWindow == null)
-            {
-                taskbarWindow = new TaskbarWindow();
-            }
-            else
-            {
-                taskbarWindow.RefreshLauncher();
-            }
-        }
-        else
-        {
-            CloseTaskbarWindow();
-        }
-    }
-
-    private void CloseTaskbarWindow()
-    {
-        if (taskbarWindow != null)
-        {
-            taskbarWindow.StopTimer();
-            taskbarWindow.Close();
-            taskbarWindow = null;
-        }
-    }
-
-    /// <summary>
-    /// Called from TaskbarWindow when Explorer restarts and the widget needs recreation.
-    /// </summary>
-    internal void RecreateTaskbarWindow()
-    {
-        CloseTaskbarWindow();
-        taskbarWindow = new TaskbarWindow();
-    }
-
     // ── WndProc — handle cross-process PostMessage IPC ────────────
 
-    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    private IntPtr WndProc(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam, nuint uIdSubclass, nuint dwRefData)
     {
-        if (msg == _wmShowFlyout && _wmShowFlyout != 0)
+        if ((int)msg == _wmShowFlyout && _wmShowFlyout != 0)
         {
-            var anchor = new Point((int)wParam, (int)lParam);
-            Dispatcher.BeginInvoke(() => FlyoutWindow.Toggle(anchor));
-            handled = true;
+            DispatcherQueue.TryEnqueue(() => FlyoutWindow.Toggle(this, (int)wParam, (int)lParam));
+            return IntPtr.Zero;
         }
-        else if (msg == _wmShowSettings && _wmShowSettings != 0)
+        else if ((int)msg == _wmShowSettings && _wmShowSettings != 0)
         {
-            Dispatcher.BeginInvoke(() => SettingsWindow.ShowInstance());
-            handled = true;
+            DispatcherQueue.TryEnqueue(() => SettingsWindow.ShowInstance(this));
+            return IntPtr.Zero;
         }
-        return IntPtr.Zero;
-    }
-
-    // ── Tray icon event handlers ────────────────────────────────────
-
-    private void nIcon_LeftClick(object sender, RoutedEventArgs e)
-    {
-        GetCursorPos(out var pt);
-        FlyoutWindow.Toggle(new Point(pt.X, pt.Y));
-    }
-
-    private void OpenSettings_Click(object sender, RoutedEventArgs e)
-    {
-        SettingsWindow.ShowInstance();
-    }
-
-    private void Exit_Click(object sender, RoutedEventArgs e)
-    {
-        SettingsManager.SaveSettings();
-        taskbarWindow?.Close();
-        nIcon.Dispose();
-        Application.Current.Shutdown();
+        return DefSubclassProc(hwnd, msg, wParam, lParam);
     }
 
     // ── Start Menu shortcut ─────────────────────────────────────────
@@ -253,7 +239,6 @@ public partial class MainWindow : Window
 
             string system32 = Environment.GetFolderPath(Environment.SpecialFolder.System);
 
-            // Main app shortcut — globe icon (shell32.dll index 14)
             CreateShortcutIfMissing(
                 Path.Combine(startMenuDir, "SelfHostedHelper.lnk"),
                 exePath,
@@ -261,7 +246,6 @@ public partial class MainWindow : Window
                 "SelfHostedHelper",
                 $"{system32}\\shell32.dll,14");
 
-            // Settings shortcut — cog icon (imageres.dll index 109)
             CreateShortcutIfMissing(
                 Path.Combine(startMenuDir, "SelfHostedHelper Settings.lnk"),
                 exePath,

@@ -4,10 +4,9 @@
     <TargetFramework>net10.0-windows10.0.22000.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <UseWPF>true</UseWPF>
-    <UseWindowsForms>False</UseWindowsForms>
+    <UseWinUI>true</UseWinUI>
+    <WindowsPackageType>None</WindowsPackageType>
     <RootNamespace>SelfHostedHelper</RootNamespace>
-    <StartupObject>SelfHostedHelper.App</StartupObject>
     <AssemblyName>TaskbarLauncher</AssemblyName>
     <Platforms>x64;ARM64</Platforms>
     <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
@@ -20,12 +19,11 @@
 
   <!-- NuGet packages ────────────────────────────────────────────── -->
   <ItemGroup>
-    <!-- Fluent Design UI controls for WPF -->
-    <PackageReference Include="WPF-UI" Version="4.2.0" />
-    <PackageReference Include="WPF-UI.Tray" Version="4.2.0" />
+    <!-- WinUI 3 (Windows App SDK) — Fluent Design, Mica, NavigationView -->
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260209005" />
 
-    <!-- Mica backdrop support -->
-    <PackageReference Include="MicaWPF" Version="6.3.2" />
+    <!-- System tray icon for WinUI 3 -->
+    <PackageReference Include="H.NotifyIcon.WinUI" Version="2.4.1" />
 
     <!-- MVVM source generators (ObservableProperty, RelayCommand) -->
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />

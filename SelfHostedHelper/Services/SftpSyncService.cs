@@ -110,8 +110,7 @@ public static class SftpSyncService
             bool savedAutoSync = localSettings.SftpAutoSync;
             bool savedAutoSyncOnClose = localSettings.SftpAutoSyncOnClose;
 
-            var manager = new SettingsManager();
-            manager.RestoreSettings();
+            SettingsManager.RestoreSettings();
 
             // Restore local SSH settings (these are machine-specific, not synced)
             var current = SettingsManager.Current;

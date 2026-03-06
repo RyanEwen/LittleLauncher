@@ -1,18 +1,17 @@
 # SelfHostedHelper
 
-A Windows taskbar launcher and settings-sync utility built with WPF, Fluent Design, and SSH/SFTP.
+A Windows system-tray launcher and settings-sync utility built with WinUI 3, Windows App SDK, and SSH/SFTP.
 
 ## Overview
 
-SelfHostedHelper embeds a launcher widget directly into the Windows 11 taskbar (not just the system tray). Clicking the widget icon opens a flyout with app and website shortcuts. It also provides SSH/SFTP-based settings synchronisation so you can keep your launcher configuration in sync across machines.
+SelfHostedHelper lives in the Windows system tray. Clicking the tray icon opens a flyout with app and website shortcuts. It also provides SSH/SFTP-based settings synchronisation so you can keep your launcher configuration in sync across machines.
 
 **Key features:**
 
-- **Taskbar launcher widget** — a globe icon rendered inside the native Windows taskbar via `SetParent` P/Invoke, with a flyout for shortcuts.
+- **System-tray launcher** — a tray icon that opens a flyout popup for shortcuts.
 - **Application & website shortcuts** — launch any executable or URL with one click from the flyout.
 - **SSH/SFTP settings sync** — upload/download your `settings.xml` to a remote server using SSH.NET.
-- **Fluent Design settings UI** — a WPF-UI `FluentWindow` with Mica backdrop and page-based navigation.
-- **Multi-monitor support** — choose which display hosts the widget and configure padding/position.
+- **WinUI 3 settings UI** — a native window with Mica backdrop and page-based `NavigationView`.
 - **Theme support** — follows the Windows system theme or can be set to Light/Dark explicitly.
 - **Export & import** — back up and restore settings locally via XML.
 
@@ -20,26 +19,24 @@ SelfHostedHelper embeds a launcher widget directly into the Windows 11 taskbar (
 
 | Layer | Description |
 |---|---|
-| `MainWindow` | Invisible host window. Owns the tray `NotifyIcon` and the `TaskbarWindow`. Enforces single-instance via Mutex. |
-| `TaskbarWindow` | A WPF `Window` reparented into `Shell_TrayWnd` (the Windows taskbar) using `SetParent`. Converts `WS_POPUP` → `WS_CHILD` and is tightly sized to the widget area. Position updates are event-driven (`WM_DISPLAYCHANGE`, `WM_SETTINGCHANGE`, `TaskbarCreated`) with a 5 s fallback timer. |
-| `TaskbarLauncherControl` | A `UserControl` displaying a single globe icon. Clicking it toggles the `FlyoutWindow`. |
+| `MainWindow` | Invisible host window. Owns the system-tray icon (`H.NotifyIcon`). Enforces single-instance via Mutex. Cross-process IPC via registered window messages. |
 | `FlyoutWindow` | A popup window that displays launcher items with icons, positioned above the taskbar. Dismissed on focus loss or Escape. |
-| `SettingsWindow` | `FluentWindow` with `NavigationView` — pages for Home, Launcher Items, Cloud Sync, Settings, and About. |
+| `SettingsWindow` | WinUI 3 window with `MicaBackdrop` and `NavigationView` — pages for Home, Launcher Items, Cloud Sync, Settings, and About. |
 | `SftpSyncService` | Static async methods for upload/download/test-connection using SSH.NET (`Renci.SshNet`). Supports private-key and password auth. |
-| `SettingsManager` | Singleton. Serialises `UserSettings` to `%AppData%\SelfHostedHelper\settings.xml` via `XmlSerializer`. |
-| `ThemeManager` | Applies WPF-UI + MicaWPF themes and updates the tray icon to match. |
+| `SettingsManager` | Fully static. Serialises `UserSettings` to `%AppData%\SelfHostedHelper\settings.xml` via `XmlSerializer`. |
+| `ThemeManager` | Sets `RequestedTheme` on root `FrameworkElement` of each window. Detects system dark/light mode via cached `UISettings`. |
 
 ## Tech stack
 
 | Package | Version | Purpose |
 |---|---|---|
-| [WPF-UI](https://github.com/lepoco/wpfui) | 4.2.0 | Fluent Design controls |
-| [MicaWPF](https://github.com/Simnico99/MicaWPF) | 6.3.2 | Mica backdrop |
-| [CommunityToolkit.Mvvm](https://github.com/CommunityToolkit/dotnet) | 8.4.0 | Source-gen `[ObservableProperty]` |
+| [Windows App SDK](https://github.com/microsoft/WindowsAppSDK) | 1.8.260209005 | WinUI 3 controls, Mica, NavigationView |
+| [H.NotifyIcon.WinUI](https://github.com/HavenDV/H.NotifyIcon) | 2.4.1 | System tray icon |
+| [CommunityToolkit.Mvvm](https://github.com/CommunityToolkit/dotnet) | 8.4.0 | Source-gen `[ObservableProperty]`, `RelayCommand` |
 | [SSH.NET](https://github.com/sshnet/SSH.NET) | 2025.1.0 | SFTP sync |
 | [NLog](https://nlog-project.org/) | 6.1.1 | Logging |
 
-**Target:** .NET 10, `net10.0-windows10.0.22000.0`, platforms `x64` and `ARM64`.
+**Target:** .NET 10, `net10.0-windows10.0.22000.0`, unpackaged (`WindowsPackageType=None`), platforms `x64` and `ARM64`.
 
 ## Getting started
 
@@ -52,13 +49,15 @@ SelfHostedHelper embeds a launcher widget directly into the Windows 11 taskbar (
 
 ```bash
 cd SelfHostedHelper
-dotnet build -c Debug -p:Platform=x64
+dotnet build -c Debug
 ```
+
+`Directory.Build.props` auto-detects the platform from `PROCESSOR_ARCHITECTURE` (ARM64 → ARM64, otherwise x64). To override: `-p:Platform=x64` or `-p:Platform=ARM64`.
 
 ### Run
 
 ```bash
-dotnet run --project SelfHostedHelper -c Debug -p:Platform=x64
+dotnet run --project SelfHostedHelper -c Debug
 ```
 
 Or open `SelfHostedHelper.sln` in Visual Studio / Rider and press F5.
@@ -66,23 +65,15 @@ Or open `SelfHostedHelper.sln` in Visual Studio / Rider and press F5.
 ## Project structure
 
 ```
-SelfHostedHelper/              # WPF application project
-├── App.xaml / App.xaml.cs     # Bootstrap, resource dictionaries
-├── MainWindow.xaml/.cs        # Invisible host + tray icon
-├── SettingsWindow.xaml/.cs    # Fluent settings UI
+SelfHostedHelper/              # WinUI 3 application project
+├── App.xaml / App.xaml.cs     # Bootstrap, exception handling, settings restore
+├── MainWindow.xaml/.cs        # Invisible host + tray icon + singleton IPC
+├── SettingsWindow.xaml/.cs    # WinUI 3 settings UI with Mica backdrop
 ├── Classes/
-│   ├── NativeMethods.cs       # P/Invoke declarations
-│   ├── ThemeManager.cs        # Theme orchestration
-│   ├── WindowBlurHelper.cs    # Acrylic blur via SetWindowCompositionAttribute
-│   ├── WindowHelper.cs        # Window positioning helpers
-│   ├── Settings/
-│   │   └── SettingsManager.cs # XML serialisation
-│   └── Utils/
-│       ├── FileSystemHelper.cs
-│       ├── MonitorUtil.cs     # Multi-monitor enumeration
-│       └── ...converters
-├── Controls/
-│   └── TaskbarLauncherControl.xaml/.cs
+│   ├── NativeMethods.cs       # P/Invoke declarations (user32, dwmapi, shcore, comctl32, shlwapi)
+│   ├── ThemeManager.cs        # Theme orchestration (ElementTheme)
+│   └── Settings/
+│       └── SettingsManager.cs # XML serialisation (fully static)
 ├── Models/
 │   ├── LauncherItem.cs
 │   └── SshConnectionProfile.cs
@@ -93,32 +84,19 @@ SelfHostedHelper/              # WPF application project
 │   ├── SystemPage.xaml/.cs
 │   └── AboutPage.xaml/.cs
 ├── Services/
-│   ├── FaviconService.cs
-│   └── SftpSyncService.cs
+│   ├── FaviconService.cs      # Website favicon & title fetching
+│   └── SftpSyncService.cs     # SSH/SFTP upload/download/test
 ├── ViewModels/
-│   └── UserSettings.cs
+│   └── UserSettings.cs        # Observable settings (CommunityToolkit.Mvvm)
 ├── Windows/
-│   ├── TaskbarWindow.xaml/.cs  # Taskbar-embedded window
 │   └── FlyoutWindow.xaml/.cs   # Launcher flyout popup
 └── Resources/
     ├── Localization/
     │   └── Dictionary-en-US.xaml
-    ├── TrayIcons/
     └── SelfHostedHelper.ico
+
+LauncherShortcut/              # Companion console exe for pin-to-taskbar helper
 ```
-
-## How the taskbar embedding works
-
-1. The `TaskbarWindow` finds the `Shell_TrayWnd` handle and calls `SetParent` to reparent itself as a child.
-2. Window style is changed from `WS_POPUP` to `WS_CHILD` via `SetWindowLong`.
-3. The window is sized to exactly the widget area, so only visible content intercepts mouse clicks.
-4. UI Automation (`AutomationElement`) locates the Widgets button, system tray icon area, and taskbar frame to calculate pixel-precise positioning.
-5. Position updates are event-driven (`WM_DISPLAYCHANGE`, `WM_SETTINGCHANGE`, `TaskbarCreated`), with a 5 s `DispatcherTimer` fallback.
-6. Multi-monitor support enumerates `Shell_SecondaryTrayWnd` handles.
-
-## Credits
-
-Based on the architecture of [FluentFlyout](https://github.com/unchihugo/FluentFlyout) by [@unchihugo](https://github.com/unchihugo).
 
 ## License
 
