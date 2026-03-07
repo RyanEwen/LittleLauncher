@@ -5,7 +5,7 @@ applyTo: "**/Directory.Build.props,**/MainWindow.xaml.cs,**/Package.appxmanifest
 
 # Versioning & Releases
 
-LittleLauncher uses **semantic versioning** (`vMAJOR.MINOR.PATCH`).
+Little Launcher uses **semantic versioning** (`vMAJOR.MINOR.PATCH`).
 
 ## Single source of truth
 

@@ -6,24 +6,24 @@
     <?define ProductVersion = "1.1.0.0" ?>
   <?endif ?>
 
-  <Package Name="LittleLauncher"
+  <Package Name="Little Launcher"
            Manufacturer="RyanEwen"
            Version="$(ProductVersion)"
            UpgradeCode="A1B2C3D4-E5F6-7890-ABCD-EF1234567890"
            Scope="perMachine"
            InstallerVersion="500">
 
-    <MajorUpgrade DowngradeErrorMessage="A newer version of LittleLauncher is already installed." />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Little Launcher is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
     <!-- Install to Program Files -->
     <StandardDirectory Id="ProgramFiles6432Folder">
-      <Directory Id="INSTALLFOLDER" Name="LittleLauncher" />
+      <Directory Id="INSTALLFOLDER" Name="Little Launcher" />
     </StandardDirectory>
 
     <!-- Start Menu shortcut -->
     <StandardDirectory Id="ProgramMenuFolder">
-      <Directory Id="StartMenuDir" Name="LittleLauncher" />
+      <Directory Id="StartMenuDir" Name="Little Launcher" />
     </StandardDirectory>
 
     <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
@@ -36,7 +36,7 @@
     <ComponentGroup Id="Shortcuts" Directory="StartMenuDir">
       <Component Id="StartMenuShortcut">
         <Shortcut Id="StartMenuLauncher"
-                  Name="LittleLauncher"
+                  Name="Little Launcher"
                   Target="[INSTALLFOLDER]LittleLauncher.exe"
                   WorkingDirectory="INSTALLFOLDER"
                   Icon="AppIcon" />
@@ -50,7 +50,7 @@
       </Component>
     </ComponentGroup>
 
-    <Feature Id="Main" Title="LittleLauncher" Level="1">
+    <Feature Id="Main" Title="Little Launcher" Level="1">
       <ComponentGroupRef Id="ProductComponents" />
       <ComponentGroupRef Id="Shortcuts" />
     </Feature>

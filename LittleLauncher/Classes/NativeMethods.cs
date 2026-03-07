@@ -1,4 +1,4 @@
-// Copyright © 2024-2026 The LittleLauncher Authors
+// Copyright © 2024-2026 The Little Launcher Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 using System.Runtime.InteropServices;
@@ -177,6 +177,9 @@ public static class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool SetForegroundWindow(IntPtr hWnd);
 
+    [DllImport("user32.dll")]
+    internal static extern IntPtr SetFocus(IntPtr hWnd);
+
     internal const int SW_HIDE = 0;
     internal const int SW_MAXIMIZE = 3;
     internal const int SW_SHOWNOACTIVATE = 4;
@@ -184,6 +187,19 @@ public static class NativeMethods
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool DestroyIcon(IntPtr hIcon);
+
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    internal static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+    internal const uint WM_SETICON = 0x0080;
+    internal const IntPtr ICON_SMALL = 0;
+    internal const IntPtr ICON_BIG = 1;
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    internal static extern IntPtr LoadImage(IntPtr hInst, string lpszName, uint uType, int cxDesired, int cyDesired, uint fuLoad);
+
+    internal const uint IMAGE_ICON = 1;
+    internal const uint LR_LOADFROMFILE = 0x0010;
 
     #endregion
 
@@ -235,6 +251,113 @@ public static class NativeMethods
     [DllImport("shlwapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     internal static extern int AssocQueryString(
         int flags, int str, string pszAssoc, string? pszExtra, StringBuilder pszOut, ref int pcchOut);
+
+    #endregion
+
+    #region ITaskbarList3 (COM)
+
+    [ComImport]
+    [Guid("56FDF344-FD6D-11d0-958A-006097C9A090")]
+    [ClassInterface(ClassInterfaceType.None)]
+    internal class TaskbarList { }
+
+    [ComImport]
+    [Guid("ea1afb91-9e28-4b86-90e9-9e9f8a5eefaf")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface ITaskbarList3
+    {
+        // ITaskbarList
+        [PreserveSig] int HrInit();
+        [PreserveSig] int AddTab(IntPtr hwnd);
+        [PreserveSig] int DeleteTab(IntPtr hwnd);
+        [PreserveSig] int ActivateTab(IntPtr hwnd);
+        [PreserveSig] int SetActiveAlt(IntPtr hwnd);
+        // ITaskbarList2
+        [PreserveSig] int MarkFullscreenWindow(IntPtr hwnd, [MarshalAs(UnmanagedType.Bool)] bool fFullscreen);
+        // ITaskbarList3
+        [PreserveSig] int SetProgressValue(IntPtr hwnd, ulong ullCompleted, ulong ullTotal);
+        [PreserveSig] int SetProgressState(IntPtr hwnd, int tbpFlags);
+        [PreserveSig] int RegisterTab(IntPtr hwndTab, IntPtr hwndMDI);
+        [PreserveSig] int UnregisterTab(IntPtr hwndTab);
+        [PreserveSig] int SetTabOrder(IntPtr hwndTab, IntPtr hwndInsertBefore);
+        [PreserveSig] int SetTabActive(IntPtr hwndTab, IntPtr hwndMDI, uint dwReserved);
+        [PreserveSig] int ThumbBarAddButtons(IntPtr hwnd, uint cButtons, IntPtr pButton);
+        [PreserveSig] int ThumbBarUpdateButtons(IntPtr hwnd, uint cButtons, IntPtr pButton);
+        [PreserveSig] int ThumbBarSetImageList(IntPtr hwnd, IntPtr himl);
+        [PreserveSig] int SetOverlayIcon(IntPtr hwnd, IntPtr hIcon, [MarshalAs(UnmanagedType.LPWStr)] string? pszDescription);
+    }
+
+    #endregion
+
+    #region IPropertyStore (COM) — per-window AppUserModelID
+
+    [DllImport("shell32.dll", PreserveSig = true)]
+    internal static extern int SHGetPropertyStoreForWindow(
+        IntPtr hwnd, ref Guid riid, [MarshalAs(UnmanagedType.Interface)] out IPropertyStore ppv);
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    internal struct PROPERTYKEY
+    {
+        public Guid fmtid;
+        public uint pid;
+    }
+
+    // PKEY_AppUserModel_ID = { {9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3}, 5 }
+    internal static readonly PROPERTYKEY PKEY_AppUserModel_ID = new()
+    {
+        fmtid = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"),
+        pid = 5
+    };
+
+    [ComImport]
+    [Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IPropertyStore
+    {
+        [PreserveSig] int GetCount(out uint cProps);
+        [PreserveSig] int GetAt(uint iProp, out PROPERTYKEY pkey);
+        [PreserveSig] int GetValue(ref PROPERTYKEY key, IntPtr pv);
+        [PreserveSig] int SetValue(ref PROPERTYKEY key, IntPtr pv);
+        [PreserveSig] int Commit();
+    }
+
+    [DllImport("ole32.dll")]
+    internal static extern int PropVariantClear(IntPtr pvar);
+
+    /// <summary>
+    /// Sets the AppUserModel.ID property on a specific HWND so the taskbar
+    /// treats it as its own group, independent of the process exe.
+    /// </summary>
+    internal static void SetWindowAppUserModelId(IntPtr hwnd, string appId)
+    {
+        var IID_IPropertyStore = new Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99");
+        int hr = SHGetPropertyStoreForWindow(hwnd, ref IID_IPropertyStore, out var store);
+        if (hr != S_OK || store == null) return;
+
+        // Allocate a PROPVARIANT with VT_LPWSTR (type 31)
+        // Layout: 2 bytes vt + 6 bytes padding + IntPtr string pointer
+        const int PROPVARIANT_SIZE = 24;
+        IntPtr pv = Marshal.AllocCoTaskMem(PROPVARIANT_SIZE);
+        try
+        {
+            // Zero-init
+            for (int i = 0; i < PROPVARIANT_SIZE; i++)
+                Marshal.WriteByte(pv, i, 0);
+
+            Marshal.WriteInt16(pv, 0, 31); // VT_LPWSTR
+            Marshal.WriteIntPtr(pv, 8, Marshal.StringToCoTaskMemUni(appId));
+
+            var key = PKEY_AppUserModel_ID;
+            store.SetValue(ref key, pv);
+            store.Commit();
+        }
+        finally
+        {
+            PropVariantClear(pv);
+            Marshal.FreeCoTaskMem(pv);
+            Marshal.ReleaseComObject(store);
+        }
+    }
 
     #endregion
 }

@@ -1,9 +1,9 @@
 ---
-description: "Stop the running LittleLauncher app, rebuild the project, and relaunch it. Use after making code changes to test them."
+description: "Stop the running Little Launcher app, rebuild the project, and relaunch it. Use after making code changes to test them."
 agent: "agent"
 ---
 
-Stop, rebuild, and relaunch the LittleLauncher (LittleLauncher) application.
+Stop, rebuild, and relaunch the Little Launcher application.
 
 ## Steps
 

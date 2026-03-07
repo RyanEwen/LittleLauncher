@@ -1,8 +1,8 @@
-# LittleLauncher — Copilot Instructions
+# Little Launcher — Copilot Instructions
 
 ## Project overview
 
-LittleLauncher is a .NET 10 WinUI 3 desktop application (unpackaged) that provides a system-tray launcher with a flyout popup for shortcuts. It also syncs settings to a remote server via SSH/SFTP.
+Little Launcher is a .NET 10 WinUI 3 desktop application (unpackaged) that provides a system-tray launcher with a flyout popup for shortcuts. It also syncs settings to a remote server via SSH/SFTP.
 
 ## Architecture
 

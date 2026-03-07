@@ -4,7 +4,9 @@ using LittleLauncher.Pages;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.UI.Windowing;
+using System.Drawing.Imaging;
 using WinRT.Interop;
 using static LittleLauncher.Classes.NativeMethods;
 
@@ -19,6 +21,10 @@ public sealed partial class SettingsWindow : Window
 
     private static SettingsWindow? instance;
     private readonly MainWindow? _owner;
+    private IntPtr _hIconSmall;
+    private IntPtr _hIconBig;
+    private IntPtr _hOverlayIcon;
+    private ITaskbarList3? _taskbarList;
 
     public SettingsWindow(MainWindow owner)
     {
@@ -41,16 +47,27 @@ public sealed partial class SettingsWindow : Window
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
 
-        // Set the window icon — use the generated AppData icon (Pin glyph), fallback to bundled .ico
+        // Set the window icon (titlebar, taskbar, Alt-Tab)
         var hwnd = WindowNative.GetWindowHandle(this);
+
+        // Give this window its own AppUserModelID so the taskbar treats it
+        // independently from the main (invisible) window. Without this, the
+        // taskbar always uses the exe's embedded icon (WindowsAppSDK#2730).
+        SetWindowAppUserModelId(hwnd, "LittleLauncher.Settings");
+
         var wndId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
         var appWindow = AppWindow.GetFromWindowId(wndId);
-        string appDataIcon = Path.Combine(
+        string settingsIcon = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "LittleLauncher", "app-icon.ico");
-        appWindow.SetIcon(File.Exists(appDataIcon)
-            ? appDataIcon
-            : Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "LittleLauncher.ico"));
+            "LittleLauncher", "settings-icon.ico");
+        if (!File.Exists(settingsIcon))
+            MainWindow.SaveSettingsIconToAppData();
+        string iconPath = File.Exists(settingsIcon)
+            ? settingsIcon
+            : Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "LittleLauncher.ico");
+        ApplyWindowIcon(hwnd, iconPath);
+        SetAppWindowIcon(appWindow, iconPath);
+        LoadTitleBarIcon(iconPath);
         uint dpi = GetDpiForWindow(hwnd);
         double scale = dpi / 96.0;
         appWindow.Resize(new global::Windows.Graphics.SizeInt32((int)(900 * scale), (int)(700 * scale)));
@@ -61,6 +78,21 @@ public sealed partial class SettingsWindow : Window
 
         // Apply saved theme to this window
         Classes.ThemeManager.ApplySavedTheme(this);
+
+        // Re-apply icon after WinUI finishes initializing (it can override WM_SETICON)
+        Activated += (s, e) =>
+        {
+            if (_hIconBig != IntPtr.Zero)
+            {
+                var h = WindowNative.GetWindowHandle(this);
+                SendMessage(h, WM_SETICON, ICON_SMALL, _hIconSmall);
+                SendMessage(h, WM_SETICON, ICON_BIG, _hIconBig);
+            }
+        };
+
+        // Taskbar overlay badge (gear icon) — uses the Shell ITaskbarList3 API
+        // which works regardless of WinUI's internal icon management.
+        SetTaskbarOverlay(hwnd);
 
         Closed += SettingsWindow_Closed;
     }
@@ -138,18 +170,130 @@ public sealed partial class SettingsWindow : Window
     internal static SettingsWindow? GetCurrent() => instance;
 
     /// <summary>
-    /// Re-reads the AppData icon and applies it to this window.
+    /// Re-reads the settings icon (app icon + gear overlay) and applies it to this window.
     /// Called when the tray icon mode or OS theme changes.
     /// </summary>
     internal void RefreshIcon()
     {
-        string appDataIcon = Path.Combine(
+        string settingsIcon = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "LittleLauncher", "app-icon.ico");
-        if (!File.Exists(appDataIcon)) return;
+            "LittleLauncher", "settings-icon.ico");
+        if (!File.Exists(settingsIcon)) return;
         var hwnd = WindowNative.GetWindowHandle(this);
         var wndId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
-        AppWindow.GetFromWindowId(wndId).SetIcon(appDataIcon);
+        var appWindow = AppWindow.GetFromWindowId(wndId);
+        ApplyWindowIcon(hwnd, settingsIcon);
+        SetAppWindowIcon(appWindow, settingsIcon);
+        LoadTitleBarIcon(settingsIcon);
+        SetTaskbarOverlay(hwnd);
+    }
+
+    /// <summary>
+    /// Sets a gear badge overlay on the taskbar button via the Shell ITaskbarList3 API.
+    /// This is the standard Windows mechanism for taskbar overlays and works
+    /// independently of WinUI's icon management (bypasses WindowsAppSDK#2730).
+    /// </summary>
+    private void SetTaskbarOverlay(IntPtr hwnd)
+    {
+        try
+        {
+            _taskbarList ??= (ITaskbarList3)new TaskbarList();
+            _taskbarList.HrInit();
+
+            // Clean up previous overlay HICON
+            if (_hOverlayIcon != IntPtr.Zero)
+            {
+                DestroyIcon(_hOverlayIcon);
+                _hOverlayIcon = IntPtr.Zero;
+            }
+
+            _hOverlayIcon = CreateGearOverlayHIcon();
+            if (_hOverlayIcon != IntPtr.Zero)
+                _taskbarList.SetOverlayIcon(hwnd, _hOverlayIcon, "Settings");
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn(ex, "Failed to set taskbar overlay icon");
+        }
+    }
+
+    /// <summary>
+    /// Renders a small gear glyph on a dark circle as an HICON for taskbar overlay use.
+    /// </summary>
+    private static IntPtr CreateGearOverlayHIcon()
+    {
+        const int size = 20;
+        using var bitmap = new System.Drawing.Bitmap(size, size, PixelFormat.Format32bppArgb);
+        using (var g = System.Drawing.Graphics.FromImage(bitmap))
+        {
+            g.Clear(System.Drawing.Color.Transparent);
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+
+            // Dark circle background for contrast
+            using var bgBrush = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(220, 30, 30, 30));
+            g.FillEllipse(bgBrush, 0, 0, size - 1, size - 1);
+
+            // Gear glyph (Segoe Fluent Icons \uE713)
+            using var font = new System.Drawing.Font("Segoe Fluent Icons", size * 0.6f, System.Drawing.GraphicsUnit.Pixel);
+            using var brush = new System.Drawing.SolidBrush(System.Drawing.Color.White);
+            using var fmt = new System.Drawing.StringFormat(System.Drawing.StringFormat.GenericTypographic);
+            fmt.Alignment = System.Drawing.StringAlignment.Center;
+            fmt.LineAlignment = System.Drawing.StringAlignment.Center;
+            g.DrawString("\uE713", font, brush, new System.Drawing.RectangleF(0, 0, size, size), fmt);
+        }
+        return bitmap.GetHicon();
+    }
+
+    /// <summary>
+    /// Sets the AppWindow icon via the HICON → IconId interop path.
+    /// This is the documented way to update titlebar + taskbar + Alt-Tab.
+    /// </summary>
+    private static void SetAppWindowIcon(AppWindow appWindow, string icoPath)
+    {
+        // Load at native size (0,0) so the OS picks the best resolution
+        var hIcon = LoadImage(IntPtr.Zero, icoPath, IMAGE_ICON, 0, 0, LR_LOADFROMFILE);
+        if (hIcon == IntPtr.Zero) return;
+        try
+        {
+            var iconId = Microsoft.UI.Win32Interop.GetIconIdFromIcon(hIcon);
+            appWindow.SetIcon(iconId);
+        }
+        finally
+        {
+            DestroyIcon(hIcon);
+        }
+    }
+
+    /// <summary>
+    /// Sets both ICON_SMALL and ICON_BIG on the HWND via WM_SETICON.
+    /// Keeps HICON handles alive as instance fields so the taskbar retains them.
+    /// </summary>
+    private void ApplyWindowIcon(IntPtr hwnd, string icoPath)
+    {
+        // Clean up previous handles
+        if (_hIconSmall != IntPtr.Zero) { DestroyIcon(_hIconSmall); _hIconSmall = IntPtr.Zero; }
+        if (_hIconBig != IntPtr.Zero) { DestroyIcon(_hIconBig); _hIconBig = IntPtr.Zero; }
+
+        _hIconSmall = LoadImage(IntPtr.Zero, icoPath, IMAGE_ICON, 16, 16, LR_LOADFROMFILE);
+        _hIconBig = LoadImage(IntPtr.Zero, icoPath, IMAGE_ICON, 32, 32, LR_LOADFROMFILE);
+
+        if (_hIconSmall != IntPtr.Zero)
+            SendMessage(hwnd, WM_SETICON, ICON_SMALL, _hIconSmall);
+        if (_hIconBig != IntPtr.Zero)
+            SendMessage(hwnd, WM_SETICON, ICON_BIG, _hIconBig);
+    }
+
+    /// <summary>
+    /// Loads the icon into the custom titlebar Image element.
+    /// </summary>
+    private void LoadTitleBarIcon(string icoPath)
+    {
+        try
+        {
+            TitleBarIcon.Source = new BitmapImage(new Uri(icoPath));
+        }
+        catch { /* fallback: leave empty */ }
     }
 
     private void RootNavigation_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)

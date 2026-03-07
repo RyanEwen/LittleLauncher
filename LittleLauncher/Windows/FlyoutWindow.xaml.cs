@@ -123,6 +123,7 @@ public partial class FlyoutWindow : Window
         appWindow.Resize(new global::Windows.Graphics.SizeInt32(flyoutWidthPx, flyoutHeightPx));
         ShowWindow(_instance._hwnd, SW_SHOWNOACTIVATE);
         SetForegroundWindow(_instance._hwnd);
+        SetFocus(_instance._hwnd);
 
         if (!_instance._toolWindowStyleApplied)
         {

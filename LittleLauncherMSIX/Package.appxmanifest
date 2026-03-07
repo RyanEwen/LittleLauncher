@@ -13,7 +13,7 @@
     Version="1.1.0.0" />
 
   <Properties>
-    <DisplayName>LittleLauncher</DisplayName>
+    <DisplayName>Little Launcher</DisplayName>
     <PublisherDisplayName>RyanEwen</PublisherDisplayName>
     <Logo>Images\StoreLogo.png</Logo>
   </Properties>
@@ -31,12 +31,12 @@
       Executable="TaskbarLauncher.exe"
       EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
-        DisplayName="LittleLauncher"
+        DisplayName="Little Launcher"
         BackgroundColor="transparent"
         Square150x150Logo="Images\Square150x150Logo.png"
         Square44x44Logo="Images\LittleLauncher.png"
         Description="A launcher widget embedded in the Windows 11 taskbar with SSH/SFTP settings sync.">
-        <uap:DefaultTile Wide310x150Logo="Images\Wide310x150Logo.png"  ShortName="LittleLauncher" Square71x71Logo="Images\SmallTile.png" Square310x310Logo="Images\LargeTile.png">
+        <uap:DefaultTile Wide310x150Logo="Images\Wide310x150Logo.png"  ShortName="Little Launcher" Square71x71Logo="Images\SmallTile.png" Square310x310Logo="Images\LargeTile.png">
           <uap:ShowNameOnTiles>
             <uap:ShowOn Tile="wide310x150Logo"/>
             <uap:ShowOn Tile="square150x150Logo"/>
@@ -49,7 +49,7 @@
           <desktop:StartupTask
             TaskId="LittleLauncherStartup"
             Enabled="false"
-            DisplayName="LittleLauncher" />
+            DisplayName="Little Launcher" />
         </desktop:Extension>
       </Extensions>
     </Application>

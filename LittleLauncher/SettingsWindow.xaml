@@ -22,7 +22,7 @@
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
-            <Image Source="Resources/LittleLauncher.ico" Width="16" Height="16"
+            <Image x:Name="TitleBarIcon" Width="16" Height="16"
                    Margin="16,0,8,0" VerticalAlignment="Center" />
             <TextBlock Grid.Column="1" Text="Little Launcher"
                        VerticalAlignment="Center" Style="{StaticResource CaptionTextBlockStyle}" />

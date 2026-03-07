@@ -2,6 +2,7 @@ using LittleLauncher.Classes.Settings;
 using NLog;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media.Imaging;
 using System.IO;
 using global::Windows.Storage.Pickers;
 using WinRT.Interop;
@@ -16,8 +17,25 @@ public partial class SystemPage : Page
     {
         InitializeComponent();
         DataContext = SettingsManager.Current;
+        LoadIconPreviews();
         UpdateCustomIconCardVisibility();
         UpdateCustomIconPathText();
+    }
+
+    private void LoadIconPreviews()
+    {
+        string iconsDir = Path.Combine(AppContext.BaseDirectory, "Resources", "AppIcons");
+        var previews = new (Image Control, string Name)[]
+        {
+            (IconPreviewBlue, "Blue"), (IconPreviewGreen, "Green"), (IconPreviewTeal, "Teal"),
+            (IconPreviewRed, "Red"), (IconPreviewOrange, "Orange"), (IconPreviewPurple, "Purple"),
+        };
+        foreach (var (control, name) in previews)
+        {
+            string path = Path.Combine(iconsDir, $"{name}.png");
+            if (File.Exists(path))
+                control.Source = new BitmapImage(new Uri(path));
+        }
     }
 
     private void StartupSwitch_Toggled(object sender, RoutedEventArgs e)
@@ -32,7 +50,7 @@ public partial class SystemPage : Page
             using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
                 @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true);
             if (key == null) return;
-            const string appName = "LittleLauncher";
+            const string appName = "Little Launcher";
             var executablePath = Environment.ProcessPath;
 
             if (enable)
@@ -58,7 +76,7 @@ public partial class SystemPage : Page
     {
         var picker = new FileSavePicker();
         picker.FileTypeChoices.Add("XML Files", new List<string> { ".xml" });
-        picker.SuggestedFileName = $"LittleLauncher_Settings_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}";
+        picker.SuggestedFileName = $"Little Launcher Settings {DateTime.Now:yyyy-MM-dd HH-mm-ss}";
         InitializePicker(picker);
         var file = await picker.PickSaveFileAsync();
         if (file != null)
@@ -108,7 +126,7 @@ public partial class SystemPage : Page
     private void UpdateCustomIconCardVisibility()
     {
         if (CustomIconCard != null)
-            CustomIconCard.Visibility = SettingsManager.Current.TrayIconMode == 6
+            CustomIconCard.Visibility = SettingsManager.Current.TrayIconMode == 12
                 ? Visibility.Visible
                 : Visibility.Collapsed;
     }

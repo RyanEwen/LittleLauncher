@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Builds the LittleLauncher MSIX package.
+    Builds the Little Launcher MSIX package.
 
 .DESCRIPTION
     1. Publishes the app with dotnet publish (self-contained)

@@ -6,9 +6,9 @@ namespace LauncherShortcut;
 /// <summary>
 /// Tiny companion exe intended to be pinned to the Windows taskbar.
 ///
-/// Default mode:  Signals the main LittleLauncher app to show its flyout via
+/// Default mode:  Signals the main Little Launcher app to show its flyout via
 ///                a registered window message, passing the cursor position, then exits.
-///                If LittleLauncher is not running, launches it first, waits for its
+///                If Little Launcher is not running, launches it first, waits for its
 ///                window to appear, then signals the flyout.
 /// --pin mode:    Keeps the process alive with a dialog so the user can right-click
 ///                the taskbar icon and choose "Pin to taskbar", then close the dialog.
@@ -92,7 +92,7 @@ static class Program
             return;
         }
 
-        var target = FindWindow(null, "LittleLauncher Host");
+        var target = FindWindow(null, "Little Launcher Host");
 
         if (target == 0)
         {
@@ -113,7 +113,7 @@ static class Program
             for (int i = 0; i < 100; i++)
             {
                 Thread.Sleep(100);
-                target = FindWindow(null, "LittleLauncher Host");
+                target = FindWindow(null, "Little Launcher Host");
                 if (target != 0)
                     break;
             }

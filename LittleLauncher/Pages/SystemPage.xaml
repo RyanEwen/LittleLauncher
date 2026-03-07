@@ -46,38 +46,74 @@
                           SelectedIndex="{Binding TrayIconMode, Mode=TwoWay}" SelectionChanged="TrayIconModeCombo_SelectionChanged">
                     <ComboBoxItem>
                         <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Image x:Name="IconPreviewBlue" Width="20" Height="20"/>
+                            <TextBlock Text="Blue" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Image x:Name="IconPreviewGreen" Width="20" Height="20"/>
+                            <TextBlock Text="Green" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Image x:Name="IconPreviewTeal" Width="20" Height="20"/>
+                            <TextBlock Text="Teal" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Image x:Name="IconPreviewRed" Width="20" Height="20"/>
+                            <TextBlock Text="Red" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Image x:Name="IconPreviewOrange" Width="20" Height="20"/>
+                            <TextBlock Text="Orange" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Image x:Name="IconPreviewPurple" Width="20" Height="20"/>
+                            <TextBlock Text="Purple" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
                             <FontIcon Glyph="&#xE840;" FontSize="16"/>
-                            <TextBlock Text="Pin"/>
+                            <TextBlock Text="Pin" VerticalAlignment="Center"/>
                         </StackPanel>
                     </ComboBoxItem>
                     <ComboBoxItem>
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <FontIcon Glyph="&#xE734;" FontSize="16"/>
-                            <TextBlock Text="Star"/>
+                            <TextBlock Text="Star" VerticalAlignment="Center"/>
                         </StackPanel>
                     </ComboBoxItem>
                     <ComboBoxItem>
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <FontIcon Glyph="&#xEB51;" FontSize="16"/>
-                            <TextBlock Text="Heart"/>
+                            <TextBlock Text="Heart" VerticalAlignment="Center"/>
                         </StackPanel>
                     </ComboBoxItem>
                     <ComboBoxItem>
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <FontIcon Glyph="&#xE945;" FontSize="16"/>
-                            <TextBlock Text="Lightning"/>
+                            <TextBlock Text="Lightning" VerticalAlignment="Center"/>
                         </StackPanel>
                     </ComboBoxItem>
                     <ComboBoxItem>
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <FontIcon Glyph="&#xE721;" FontSize="16"/>
-                            <TextBlock Text="Search"/>
+                            <TextBlock Text="Search" VerticalAlignment="Center"/>
                         </StackPanel>
                     </ComboBoxItem>
                     <ComboBoxItem>
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <FontIcon Glyph="&#xE774;" FontSize="16"/>
-                            <TextBlock Text="Globe"/>
+                            <TextBlock Text="Globe" VerticalAlignment="Center"/>
                         </StackPanel>
                     </ComboBoxItem>
                     <ComboBoxItem Content="Custom..."/>

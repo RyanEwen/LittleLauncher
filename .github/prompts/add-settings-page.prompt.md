@@ -3,7 +3,7 @@ description: "Scaffold a new settings page with XAML and code-behind, add Naviga
 agent: "agent"
 ---
 
-Create a new settings page for the LittleLauncher WPF application.
+Create a new settings page for the Little Launcher WinUI 3 application.
 
 ## Steps
 

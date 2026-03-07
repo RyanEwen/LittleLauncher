@@ -1,4 +1,4 @@
-# Architecture — LittleLauncher
+# Architecture — Little Launcher
 
 ## High-level flow
 

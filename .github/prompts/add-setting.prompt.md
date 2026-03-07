@@ -3,7 +3,7 @@ description: "Add a new observable setting property to UserSettings with XML ser
 agent: "agent"
 ---
 
-Add a new setting property to the LittleLauncher application.
+Add a new setting property to the Little Launcher application.
 
 ## Steps
 

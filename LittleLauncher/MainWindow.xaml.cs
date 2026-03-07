@@ -43,7 +43,7 @@ public sealed partial class MainWindow : Window
         if (!Singleton.WaitOne(TimeSpan.Zero, true))
         {
             // Another instance is running — signal it and exit.
-            IntPtr target = FindWindow(null, "LittleLauncher Host");
+            IntPtr target = FindWindow(null, "Little Launcher Host");
 
             string[] args = Environment.GetCommandLineArgs();
             if (args.Length > 1 && args[1] == "--settings")
@@ -66,7 +66,7 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
         _hwnd = WindowNative.GetWindowHandle(this);
 
-        Logger.Info("Starting LittleLauncher MainWindow");
+        Logger.Info("Starting Little Launcher MainWindow");
 
         // Register the window message for cross-process flyout signaling
         _wmShowFlyout = RegisterWindowMessage("LittleLauncher_ShowFlyout");
@@ -150,6 +150,7 @@ public sealed partial class MainWindow : Window
 
         // Use icon based on current settings
         nIcon.Icon = ResolveTrayIcon();
+        SaveSettingsIconToAppData();
 
         // Subscribe to left-click for instant flyout toggle.
         // NoLeftClickDelay skips the double-click wait interval.
@@ -199,43 +200,77 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            if (mode == 6)
+            if (mode == 12)
                 return LoadCustomIcon(SettingsManager.Current.CustomTrayIconPath);
+
+            if (mode >= 6 && GlyphPresets.ContainsKey(mode))
+                return RenderGlyphPresetIcon(mode);
 
             return RenderPresetIcon(mode);
         }
         catch (Exception ex)
         {
-            Logger.Warn(ex, "Failed to load tray icon for mode {Mode}, falling back to Pin", mode);
+            Logger.Warn(ex, "Failed to load tray icon for mode {Mode}, falling back to Blue", mode);
             return RenderPresetIcon(0);
         }
     }
 
     /// <summary>
-    /// Preset icon glyph characters (Segoe Fluent Icons).
+    /// Preset icon PNG filenames (in Resources/AppIcons/).
     /// </summary>
-    private static readonly Dictionary<int, (char Glyph, string Name)> PresetIcons = new()
+    private static readonly Dictionary<int, string> PresetIcons = new()
     {
-        { 0, ('\uE840', "Pin") },          // Pin (default)
-        { 1, ('\uE734', "Star") },        // FavoriteStar
-        { 2, ('\uEB51', "Heart") },       // Heart
-        { 3, ('\uE945', "Lightning") },   // Lightning
-        { 4, ('\uE721', "Search") },      // Search
-        { 5, ('\uE774', "Globe") },       // Globe
+        { 0, "Blue" },
+        { 1, "Green" },
+        { 2, "Teal" },
+        { 3, "Red" },
+        { 4, "Orange" },
+        { 5, "Purple" },
     };
 
     /// <summary>
-    /// Renders a Segoe Fluent Icons glyph as a tray icon.
-    /// Uses white foreground for dark themes, black for light themes.
+    /// Glyph preset icon characters (Segoe Fluent Icons).
+    /// </summary>
+    private static readonly Dictionary<int, (char Glyph, string Name)> GlyphPresets = new()
+    {
+        { 6, ('\uE840', "Pin") },
+        { 7, ('\uE734', "Star") },
+        { 8, ('\uEB51', "Heart") },
+        { 9, ('\uE945', "Lightning") },
+        { 10, ('\uE721', "Search") },
+        { 11, ('\uE774', "Globe") },
+    };
+
+    /// <summary>
+    /// Loads a preset icon PNG from the app directory and converts to a multi-resolution ICO.
+    /// Preserves the original composition (no trimming).
     /// </summary>
     private static System.Drawing.Icon? RenderPresetIcon(int mode)
     {
-        if (!PresetIcons.TryGetValue(mode, out var preset))
-            preset = PresetIcons[0]; // Fall back to Pin
+        if (!PresetIcons.TryGetValue(mode, out var name))
+            name = PresetIcons[0];
+
+        string pngPath = Path.Combine(AppContext.BaseDirectory, "Resources", "AppIcons", $"{name}.png");
+        if (!File.Exists(pngPath))
+        {
+            Logger.Warn("Preset icon PNG not found: {Path}", pngPath);
+            return null;
+        }
+
+        using var original = new System.Drawing.Bitmap(pngPath);
+        return TrimAndResizeToBitmapIcon(original);
+    }
+
+    /// <summary>
+    /// Renders a glyph preset icon (theme-aware: white on dark, black on light).
+    /// </summary>
+    private static System.Drawing.Icon? RenderGlyphPresetIcon(int mode)
+    {
+        if (!GlyphPresets.TryGetValue(mode, out var preset))
+            return RenderPresetIcon(0);
 
         bool dark = Classes.ThemeManager.IsDarkTheme();
         var fg = dark ? System.Drawing.Color.White : System.Drawing.Color.Black;
-
         return RenderGlyphIcon(preset.Glyph, fg);
     }
 
@@ -288,27 +323,40 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private static System.Drawing.Icon TrimAndResizeToBitmapIcon(System.Drawing.Bitmap original)
     {
+        using var resized = TrimAndResizeTo256(original);
+        return BitmapToIcon(resized);
+    }
+
+    /// <summary>
+    /// Trims transparent padding and centers the content on a 256×256 canvas,
+    /// preserving the original aspect ratio.
+    /// </summary>
+    private static System.Drawing.Bitmap TrimAndResizeTo256(System.Drawing.Bitmap original)
+    {
         var bounds = GetOpaqueContentBounds(original);
         int contentSize = Math.Max(bounds.Width, bounds.Height);
         if (contentSize <= 0) contentSize = original.Width;
 
-        // Fill ~93.75% of the canvas (matching preset glyphs at 240/256)
-        float scale = 256f * 0.9375f / contentSize;
-        int drawSize = (int)(contentSize * scale);
-        int offset = (256 - drawSize) / 2;
+        // Fill 100% of the canvas so icons appear full-size in tray/taskbar
+        float scale = 256f / contentSize;
+        int drawW = (int)(bounds.Width * scale);
+        int drawH = (int)(bounds.Height * scale);
+        int offsetX = (256 - drawW) / 2;
+        int offsetY = (256 - drawH) / 2;
 
         const int iconSize = 256;
-        using var resized = new System.Drawing.Bitmap(iconSize, iconSize);
+        var resized = new System.Drawing.Bitmap(iconSize, iconSize, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
         using (var g = System.Drawing.Graphics.FromImage(resized))
         {
+            g.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceOver;
             g.Clear(System.Drawing.Color.Transparent);
             g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
-            // Draw only the trimmed content region, not the full bitmap with padding
-            var dest = new System.Drawing.Rectangle(offset, offset, drawSize, drawSize);
+            // Draw only the trimmed content region, preserving aspect ratio
+            var dest = new System.Drawing.Rectangle(offsetX, offsetY, drawW, drawH);
             g.DrawImage(original, dest, bounds, System.Drawing.GraphicsUnit.Pixel);
         }
-        return BitmapToIcon(resized);
+        return resized;
     }
 
     /// <summary>
@@ -347,9 +395,10 @@ public sealed partial class MainWindow : Window
         for (int i = 0; i < sizes.Length; i++)
         {
             int s = sizes[i];
-            using var resized = new System.Drawing.Bitmap(s, s);
+            using var resized = new System.Drawing.Bitmap(s, s, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
             using (var g = System.Drawing.Graphics.FromImage(resized))
             {
+                g.Clear(System.Drawing.Color.Transparent);
                 g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
                 g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
                 g.DrawImage(bitmap, 0, 0, s, s);
@@ -409,8 +458,8 @@ public sealed partial class MainWindow : Window
 
             int mode = SettingsManager.Current.TrayIconMode;
 
-            // For mode 6 (Custom) with an .ico file, just copy it directly.
-            if (mode == 6)
+            // For mode 12 (Custom) with an .ico file, just copy it directly.
+            if (mode == 12)
             {
                 string customPath = SettingsManager.Current.CustomTrayIconPath;
                 if (!string.IsNullOrEmpty(customPath) && File.Exists(customPath))
@@ -425,8 +474,10 @@ public sealed partial class MainWindow : Window
                 }
             }
 
-            // For preset modes (0-5), render the glyph to .ico.
-            var icon = RenderPresetIcon(mode);
+            // For preset modes, render the icon to .ico.
+            var icon = mode >= 6 && GlyphPresets.ContainsKey(mode)
+                ? RenderGlyphPresetIcon(mode)
+                : RenderPresetIcon(mode);
             if (icon != null)
             {
                 using var stream = new FileStream(icoPath, FileMode.Create, FileAccess.Write);
@@ -438,6 +489,121 @@ public sealed partial class MainWindow : Window
         catch (Exception ex)
         {
             Logger.Warn(ex, "Failed to save resolved icon to AppData");
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Generates a settings-specific icon by compositing the current app icon
+    /// with a small gear overlay in the bottom-right corner.
+    /// Saved as settings-icon.ico alongside app-icon.ico.
+    /// </summary>
+    internal static string? SaveSettingsIconToAppData()
+    {
+        try
+        {
+            string appDataDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "LittleLauncher");
+            Directory.CreateDirectory(appDataDir);
+            string icoPath = Path.Combine(appDataDir, "settings-icon.ico");
+
+            using var baseBitmap = ResolveBaseIconBitmap();
+            if (baseBitmap == null) return null;
+
+            // Draw gear overlay in the bottom-right corner
+            const int overlaySize = 112; // ~44% of 256
+            const int padding = 4;
+            using (var g = System.Drawing.Graphics.FromImage(baseBitmap))
+            {
+                g.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceOver;
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
+                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+
+                // Semi-transparent dark circle background for contrast
+                int cx = 256 - overlaySize / 2 - padding;
+                int cy = 256 - overlaySize / 2 - padding;
+                using var bgBrush = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(200, 30, 30, 30));
+                g.FillEllipse(bgBrush, cx - overlaySize / 2, cy - overlaySize / 2, overlaySize, overlaySize);
+
+                // Gear glyph (\uE713 = Settings in Segoe Fluent Icons)
+                using var font = new System.Drawing.Font("Segoe Fluent Icons", overlaySize * 0.7f, System.Drawing.GraphicsUnit.Pixel);
+                using var brush = new System.Drawing.SolidBrush(System.Drawing.Color.White);
+                using var fmt = new System.Drawing.StringFormat(System.Drawing.StringFormat.GenericTypographic);
+                fmt.Alignment = System.Drawing.StringAlignment.Center;
+                fmt.LineAlignment = System.Drawing.StringAlignment.Center;
+                var rect = new System.Drawing.RectangleF(
+                    cx - overlaySize / 2f, cy - overlaySize / 2f,
+                    overlaySize, overlaySize);
+                g.DrawString("\uE713", font, brush, rect, fmt);
+            }
+
+            using var icon = BitmapToIcon(baseBitmap);
+            using var stream = new FileStream(icoPath, FileMode.Create, FileAccess.Write);
+            icon.Save(stream);
+            return icoPath;
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn(ex, "Failed to save settings icon to AppData");
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Returns the current app icon as a 256×256 bitmap (before ICO conversion).
+    /// </summary>
+    private static System.Drawing.Bitmap? ResolveBaseIconBitmap()
+    {
+        int mode = SettingsManager.Current.TrayIconMode;
+
+        try
+        {
+            if (mode == 12)
+            {
+                string path = SettingsManager.Current.CustomTrayIconPath;
+                if (!string.IsNullOrEmpty(path) && File.Exists(path))
+                {
+                    using var original = new System.Drawing.Bitmap(path);
+                    return TrimAndResizeTo256(original);
+                }
+            }
+
+            if (mode >= 6 && GlyphPresets.TryGetValue(mode, out var preset))
+            {
+                // Render glyph to bitmap directly (always use dark bg style for overlay base)
+                bool dark = ThemeManager.IsDarkTheme();
+                var fg = dark ? System.Drawing.Color.White : System.Drawing.Color.Black;
+                const int size = 256;
+                var bitmap = new System.Drawing.Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                using (var g = System.Drawing.Graphics.FromImage(bitmap))
+                {
+                    g.Clear(System.Drawing.Color.Transparent);
+                    g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
+                    g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+                    using var font = new System.Drawing.Font("Segoe Fluent Icons", 240f, System.Drawing.GraphicsUnit.Pixel);
+                    using var brush = new System.Drawing.SolidBrush(fg);
+                    using var fmt = new System.Drawing.StringFormat(System.Drawing.StringFormat.GenericTypographic);
+                    fmt.Alignment = System.Drawing.StringAlignment.Center;
+                    fmt.LineAlignment = System.Drawing.StringAlignment.Center;
+                    g.DrawString(preset.Glyph.ToString(), font, brush, new System.Drawing.RectangleF(0, 0, size, size), fmt);
+                }
+                return bitmap;
+            }
+
+            // Image preset
+            if (!PresetIcons.TryGetValue(mode, out var name))
+                name = PresetIcons[0];
+            string pngPath = Path.Combine(AppContext.BaseDirectory, "Resources", "AppIcons", $"{name}.png");
+            if (File.Exists(pngPath))
+            {
+                using var original = new System.Drawing.Bitmap(pngPath);
+                return TrimAndResizeTo256(original);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn(ex, "Failed to resolve base icon bitmap for mode {Mode}", mode);
         }
         return null;
     }
@@ -483,6 +649,7 @@ public sealed partial class MainWindow : Window
         if (nIcon == null) return;
         nIcon.Icon = ResolveTrayIcon();
         UpdateShortcutIcons();
+        SaveSettingsIconToAppData();
         SettingsWindow.GetCurrent()?.RefreshIcon();
     }
 
@@ -501,7 +668,6 @@ public sealed partial class MainWindow : Window
         DispatcherQueue.TryEnqueue(() =>
         {
             UpdateTrayIcon();
-            SettingsWindow.GetCurrent()?.RefreshIcon();
         });
     }
 
@@ -558,17 +724,20 @@ public sealed partial class MainWindow : Window
 
             Directory.CreateDirectory(startMenuDir);
 
-            // Remove the old separate Settings shortcut (replaced by single shortcut)
-            string oldSettingsLnk = Path.Combine(startMenuDir, "LittleLauncher Settings.lnk");
-            if (File.Exists(oldSettingsLnk))
-                File.Delete(oldSettingsLnk);
+            // Remove old-named shortcuts (renamed to "Little Launcher")
+            foreach (var old in new[] { "LittleLauncher Settings.lnk", "LittleLauncher.lnk" })
+            {
+                string oldLnk = Path.Combine(startMenuDir, old);
+                if (File.Exists(oldLnk))
+                    File.Delete(oldLnk);
+            }
 
             // Single Start Menu shortcut — always opens settings when clicked
             CreateOrUpdateShortcut(
-                Path.Combine(startMenuDir, "LittleLauncher.lnk"),
+                Path.Combine(startMenuDir, "Little Launcher.lnk"),
                 exePath,
                 "--settings",
-                "LittleLauncher",
+                "Little Launcher",
                 GetShortcutIconLocation($"{exePath},0"));
         }
         catch (Exception ex)

@@ -3,7 +3,7 @@ description: "Add a new launcher item feature to the LauncherItem model, taskbar
 agent: "agent"
 ---
 
-Add a new feature to the launcher items in LittleLauncher.
+Add a new feature to the launcher items in Little Launcher.
 
 ## Steps
 

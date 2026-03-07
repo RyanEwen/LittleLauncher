@@ -3,7 +3,7 @@ description: "Bump the version number and create a new release. Handles Director
 agent: "agent"
 ---
 
-Create a new release for LittleLauncher.
+Create a new release for Little Launcher.
 
 ## Inputs
 
