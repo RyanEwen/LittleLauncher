@@ -4,6 +4,6 @@
     <InstallerPlatform>$(Platform)</InstallerPlatform>
   </PropertyGroup>
   <PropertyGroup>
-    <DefineConstants>BuildOutputPath=$(BuildOutputPath)</DefineConstants>
+    <DefineConstants>BuildOutputPath=$(BuildOutputPath);ProductVersion=$(Version).0</DefineConstants>
   </PropertyGroup>
 </Project>

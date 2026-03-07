@@ -26,6 +26,28 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      # ── Extract version from Directory.Build.props ─────────────
+      - name: Read version
+        id: version
+        shell: pwsh
+        run: |
+          [xml]$props = Get-Content Directory.Build.props
+          $ver = $props.Project.PropertyGroup[0].Version
+          echo "VERSION=$ver" >> $env:GITHUB_OUTPUT
+          echo "VERSION_QUAD=$ver.0" >> $env:GITHUB_OUTPUT
+          Write-Host "Detected version: $ver"
+
+      # ── Stamp MSIX manifest ────────────────────────────────────
+      - name: Stamp AppxManifest version
+        shell: pwsh
+        run: |
+          $manifest = "LittleLauncherMSIX/Package.appxmanifest"
+          $quad = "${{ steps.version.outputs.VERSION_QUAD }}"
+          # Only replace Version= on the Identity element line
+          (Get-Content $manifest) | ForEach-Object {
+            if ($_ -match '<Identity') { $_ -replace 'Version="[^"]*"', "Version=`"$quad`"" } else { $_ }
+          } | Set-Content $manifest
+
       # ── Regular build ──────────────────────────────────────────
       - name: Build (dotnet)
         run: dotnet build LittleLauncher/LittleLauncher.csproj -c Release -p:Platform=$env:PLATFORM
@@ -42,7 +64,8 @@ jobs:
           dotnet build LittleLauncherSetup\LittleLauncherSetup.wixproj `
             -p:Platform=$env:PLATFORM `
             -p:Configuration=Release `
-            "-p:BuildOutputPath=$env:GITHUB_WORKSPACE\LittleLauncher\bin\$env:PLATFORM\Release\net10.0-windows10.0.22000.0"
+            "-p:BuildOutputPath=$env:GITHUB_WORKSPACE\LittleLauncher\bin\$env:PLATFORM\Release\net10.0-windows10.0.22000.0" `
+            "-p:Version=${{ steps.version.outputs.VERSION }}"
 
       - name: Upload MSI artifact
         uses: actions/upload-artifact@v4

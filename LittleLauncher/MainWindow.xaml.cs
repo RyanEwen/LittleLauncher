@@ -132,7 +132,8 @@ public sealed partial class MainWindow : Window
             SettingsWindow.ShowInstance(this);
         }
 
-        SettingsManager.Current.LastKnownVersion = "v1.1.0";
+        var asm = typeof(MainWindow).Assembly.GetName();
+        SettingsManager.Current.LastKnownVersion = $"v{asm.Version!.Major}.{asm.Version.Minor}.{asm.Version.Build}";
     }
 
     private void SetupTrayIcon()

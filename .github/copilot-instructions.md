@@ -62,3 +62,4 @@ Target: `net10.0-windows10.0.22000.0`, unpackaged (`WindowsPackageType=None`), p
 - **Add a new settings page:** Create `Pages/FooPage.xaml` + `.cs`, add a `NavigationViewItem` in `SettingsWindow.xaml`, add any new string keys to `Dictionary-en-US.xaml`.
 - **Add a new launcher feature:** Extend `LauncherItem` model, update `FlyoutWindow` to render it, update `LauncherItemsPage` for editing.
 - **Add a new setting:** Add an `[ObservableProperty]` to `UserSettings.cs`. It will auto-serialize to XML.
+- **Release a new version:** Edit `<Version>` in `Directory.Build.props` (the single source of truth), commit, tag `vX.Y.Z`, push. The GitHub Action builds and publishes automatically.

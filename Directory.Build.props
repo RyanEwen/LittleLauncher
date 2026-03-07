@@ -1,4 +1,9 @@
 <Project>
+  <!-- Single source of truth for the app version -->
+  <PropertyGroup>
+    <Version>1.1.0</Version>
+  </PropertyGroup>
+
   <!--
     Auto-detect the build platform from the OS architecture when no explicit
     Platform is provided (i.e. plain "dotnet build" without -p:Platform=...).
