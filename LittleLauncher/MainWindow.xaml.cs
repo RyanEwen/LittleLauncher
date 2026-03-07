@@ -132,7 +132,7 @@ public sealed partial class MainWindow : Window
             SettingsWindow.ShowInstance(this);
         }
 
-        SettingsManager.Current.LastKnownVersion = "v1.0.0";
+        SettingsManager.Current.LastKnownVersion = "v1.1.0";
     }
 
     private void SetupTrayIcon()
