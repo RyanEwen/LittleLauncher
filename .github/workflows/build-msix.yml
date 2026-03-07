@@ -85,8 +85,16 @@ jobs:
         with:
           path: artifacts
 
+      - name: Zip artifacts
+        run: |
+          cd artifacts
+          for dir in */; do
+            name="${dir%/}"
+            (cd "$dir" && zip -r "../../${name}.zip" .)
+          done
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*
+          files: "*.zip"
           generate_release_notes: true
