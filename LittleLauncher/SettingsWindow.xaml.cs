@@ -41,11 +41,16 @@ public sealed partial class SettingsWindow : Window
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
 
-        // Set the window icon explicitly to the default app icon
+        // Set the window icon — use the generated AppData icon (Pin glyph), fallback to bundled .ico
         var hwnd = WindowNative.GetWindowHandle(this);
         var wndId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
         var appWindow = AppWindow.GetFromWindowId(wndId);
-        appWindow.SetIcon(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "LittleLauncher.ico"));
+        string appDataIcon = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "LittleLauncher", "app-icon.ico");
+        appWindow.SetIcon(File.Exists(appDataIcon)
+            ? appDataIcon
+            : Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "LittleLauncher.ico"));
         uint dpi = GetDpiForWindow(hwnd);
         double scale = dpi / 96.0;
         appWindow.Resize(new global::Windows.Graphics.SizeInt32((int)(900 * scale), (int)(700 * scale)));
@@ -53,6 +58,9 @@ public sealed partial class SettingsWindow : Window
         // Navigate to home
         RootNavigation.SelectedItem = RootNavigation.MenuItems[0];
         ContentFrame.Navigate(typeof(HomePage));
+
+        // Apply saved theme to this window
+        Classes.ThemeManager.ApplySavedTheme(this);
 
         Closed += SettingsWindow_Closed;
     }
@@ -128,6 +136,21 @@ public sealed partial class SettingsWindow : Window
     internal MainWindow? GetOwner() => _owner;
 
     internal static SettingsWindow? GetCurrent() => instance;
+
+    /// <summary>
+    /// Re-reads the AppData icon and applies it to this window.
+    /// Called when the tray icon mode or OS theme changes.
+    /// </summary>
+    internal void RefreshIcon()
+    {
+        string appDataIcon = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "LittleLauncher", "app-icon.ico");
+        if (!File.Exists(appDataIcon)) return;
+        var hwnd = WindowNative.GetWindowHandle(this);
+        var wndId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
+        AppWindow.GetFromWindowId(wndId).SetIcon(appDataIcon);
+    }
 
     private void RootNavigation_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
     {

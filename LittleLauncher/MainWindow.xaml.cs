@@ -34,6 +34,8 @@ public sealed partial class MainWindow : Window
     private SUBCLASSPROC? _wndProcDelegate;
 
     internal H.NotifyIcon.TaskbarIcon? nIcon;
+    private readonly global::Windows.UI.ViewManagement.UISettings _uiSettings = new();
+    private bool _lastDarkTheme;
 
     public MainWindow()
     {
@@ -94,6 +96,10 @@ public sealed partial class MainWindow : Window
         UpdateShortcutIcons();
         FlyoutWindow.WarmUp(this);
         _ = StartAutoSyncAsync();
+
+        // Listen for OS theme changes to refresh icons
+        _lastDarkTheme = Classes.ThemeManager.IsDarkTheme();
+        _uiSettings.ColorValuesChanged += OnSystemThemeChanged;
 
         // Show settings if launched with --settings (e.g. from Start Menu shortcut)
         string[] cmdArgs = Environment.GetCommandLineArgs();
@@ -183,30 +189,24 @@ public sealed partial class MainWindow : Window
 
     /// <summary>
     /// Resolves the tray icon based on the current TrayIconMode setting.
-    /// Mode: 0 = App Icon, 1 = Light, 2 = Dark, 3 = Auto, 4-9 = Presets, 10 = Custom.
+    /// Mode: 0 = Pin (default), 1 = Star, 2 = Heart, 3 = Lightning, 4 = Search, 5 = Globe, 6 = Custom.
+    /// All presets auto-detect OS theme for light/dark foreground color.
     /// </summary>
     private static System.Drawing.Icon? ResolveTrayIcon()
     {
         int mode = SettingsManager.Current.TrayIconMode;
-        string baseDir = AppDomain.CurrentDomain.BaseDirectory;
 
         try
         {
-            return mode switch
-            {
-                1 => LoadIconFromImage(Path.Combine(baseDir, "Resources", "TrayIcons", "TrayWhite.png")),
-                2 => LoadIconFromImage(Path.Combine(baseDir, "Resources", "TrayIcons", "TrayBlack.png")),
-                3 => LoadIconFromImage(Path.Combine(baseDir, "Resources", "TrayIcons",
-                        Classes.ThemeManager.IsDarkTheme() ? "TrayWhite.png" : "TrayBlack.png")),
-                >= 4 and <= 9 => RenderPresetIcon(mode),
-                10 => LoadCustomIcon(SettingsManager.Current.CustomTrayIconPath),
-                _ => LoadDefaultIcon(baseDir),
-            };
+            if (mode == 6)
+                return LoadCustomIcon(SettingsManager.Current.CustomTrayIconPath);
+
+            return RenderPresetIcon(mode);
         }
         catch (Exception ex)
         {
-            Logger.Warn(ex, "Failed to load tray icon for mode {Mode}, falling back to default", mode);
-            return LoadDefaultIcon(baseDir);
+            Logger.Warn(ex, "Failed to load tray icon for mode {Mode}, falling back to Pin", mode);
+            return RenderPresetIcon(0);
         }
     }
 
@@ -215,12 +215,12 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private static readonly Dictionary<int, (char Glyph, string Name)> PresetIcons = new()
     {
-        { 4, ('\uE840', "Pin") },          // Pin
-        { 5, ('\uE734', "Star") },        // FavoriteStar
-        { 6, ('\uEB51', "Heart") },       // Heart
-        { 7, ('\uE945', "Lightning") },   // Lightning
-        { 8, ('\uE721', "Shield") },      // Shield
-        { 9, ('\uE774', "Globe") },       // Globe
+        { 0, ('\uE840', "Pin") },          // Pin (default)
+        { 1, ('\uE734', "Star") },        // FavoriteStar
+        { 2, ('\uEB51', "Heart") },       // Heart
+        { 3, ('\uE945', "Lightning") },   // Lightning
+        { 4, ('\uE721', "Search") },      // Search
+        { 5, ('\uE774', "Globe") },       // Globe
     };
 
     /// <summary>
@@ -230,11 +230,19 @@ public sealed partial class MainWindow : Window
     private static System.Drawing.Icon? RenderPresetIcon(int mode)
     {
         if (!PresetIcons.TryGetValue(mode, out var preset))
-            return LoadDefaultIcon(AppDomain.CurrentDomain.BaseDirectory);
+            preset = PresetIcons[0]; // Fall back to Pin
 
         bool dark = Classes.ThemeManager.IsDarkTheme();
         var fg = dark ? System.Drawing.Color.White : System.Drawing.Color.Black;
 
+        return RenderGlyphIcon(preset.Glyph, fg);
+    }
+
+    /// <summary>
+    /// Renders a single Segoe Fluent Icons glyph with a specific foreground color.
+    /// </summary>
+    private static System.Drawing.Icon? RenderGlyphIcon(char glyph, System.Drawing.Color fg)
+    {
         const int size = 256;
         using var bitmap = new System.Drawing.Bitmap(size, size);
         using (var g = System.Drawing.Graphics.FromImage(bitmap))
@@ -249,28 +257,16 @@ public sealed partial class MainWindow : Window
             fmt.Alignment = System.Drawing.StringAlignment.Center;
             fmt.LineAlignment = System.Drawing.StringAlignment.Center;
             var rect = new System.Drawing.RectangleF(0, 0, size, size);
-            g.DrawString(preset.Glyph.ToString(), font, brush, rect, fmt);
+            g.DrawString(glyph.ToString(), font, brush, rect, fmt);
         }
 
         return BitmapToIcon(bitmap);
     }
 
-    private static System.Drawing.Icon? LoadDefaultIcon(string baseDir)
-    {
-        string iconPath = Path.Combine(baseDir, "Resources", "LittleLauncher.ico");
-        if (!File.Exists(iconPath)) return null;
-
-        // Extract the largest frame and run through the trim-and-resize pipeline
-        // so it matches the preset icon proportions in the tray.
-        using var ico = new System.Drawing.Icon(iconPath, 256, 256);
-        using var bmp = ico.ToBitmap();
-        return TrimAndResizeToBitmapIcon(bmp);
-    }
-
     private static System.Drawing.Icon? LoadCustomIcon(string path)
     {
         if (string.IsNullOrEmpty(path) || !File.Exists(path))
-            return LoadDefaultIcon(AppDomain.CurrentDomain.BaseDirectory);
+            return RenderPresetIcon(0);
 
         if (path.EndsWith(".ico", StringComparison.OrdinalIgnoreCase))
             return new System.Drawing.Icon(path, 64, 64);
@@ -411,18 +407,9 @@ public sealed partial class MainWindow : Window
             string icoPath = Path.Combine(appDataDir, "app-icon.ico");
 
             int mode = SettingsManager.Current.TrayIconMode;
-            string baseDir = AppDomain.CurrentDomain.BaseDirectory;
 
-            // For mode 0 (Default), remove any override so shortcuts fall back to the exe icon.
-            if (mode == 0)
-            {
-                if (File.Exists(icoPath))
-                    File.Delete(icoPath);
-                return null;
-            }
-
-            // For mode 10 (Custom) with an .ico file, just copy it directly.
-            if (mode == 10)
+            // For mode 6 (Custom) with an .ico file, just copy it directly.
+            if (mode == 6)
             {
                 string customPath = SettingsManager.Current.CustomTrayIconPath;
                 if (!string.IsNullOrEmpty(customPath) && File.Exists(customPath))
@@ -437,32 +424,13 @@ public sealed partial class MainWindow : Window
                 }
             }
 
-            // For modes 1-3 (Light/Dark/Auto), convert the PNG to .ico.
-            // For modes 4-9 (Presets), render the glyph to .ico.
-            if (mode >= 4 && mode <= 9)
+            // For preset modes (0-5), render the glyph to .ico.
+            var icon = RenderPresetIcon(mode);
+            if (icon != null)
             {
-                var icon = RenderPresetIcon(mode);
-                if (icon != null)
-                {
-                    using var stream = new FileStream(icoPath, FileMode.Create, FileAccess.Write);
-                    icon.Save(stream);
-                    icon.Dispose();
-                    return icoPath;
-                }
-            }
-
-            string pngPath = mode switch
-            {
-                1 => Path.Combine(baseDir, "Resources", "TrayIcons", "TrayWhite.png"),
-                2 => Path.Combine(baseDir, "Resources", "TrayIcons", "TrayBlack.png"),
-                3 => Path.Combine(baseDir, "Resources", "TrayIcons",
-                        Classes.ThemeManager.IsDarkTheme() ? "TrayWhite.png" : "TrayBlack.png"),
-                _ => ""
-            };
-
-            if (!string.IsNullOrEmpty(pngPath) && File.Exists(pngPath))
-            {
-                SavePngAsIco(pngPath, icoPath);
+                using var stream = new FileStream(icoPath, FileMode.Create, FileAccess.Write);
+                icon.Save(stream);
+                icon.Dispose();
                 return icoPath;
             }
         }
@@ -514,12 +482,26 @@ public sealed partial class MainWindow : Window
         if (nIcon == null) return;
         nIcon.Icon = ResolveTrayIcon();
         UpdateShortcutIcons();
+        SettingsWindow.GetCurrent()?.RefreshIcon();
     }
 
     internal void UpdateTrayIconVisibility(bool visible)
     {
         if (nIcon != null)
             nIcon.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OnSystemThemeChanged(global::Windows.UI.ViewManagement.UISettings sender, object args)
+    {
+        bool dark = Classes.ThemeManager.IsDarkTheme();
+        if (dark == _lastDarkTheme) return;
+        _lastDarkTheme = dark;
+
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            UpdateTrayIcon();
+            SettingsWindow.GetCurrent()?.RefreshIcon();
+        });
     }
 
     private async Task StartAutoSyncAsync()
@@ -586,7 +568,7 @@ public sealed partial class MainWindow : Window
                 exePath,
                 "--settings",
                 "LittleLauncher",
-                $"{exePath},0");
+                GetShortcutIconLocation($"{exePath},0"));
         }
         catch (Exception ex)
         {

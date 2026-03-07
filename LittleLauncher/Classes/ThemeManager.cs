@@ -41,6 +41,11 @@ internal static class ThemeManager
         var settingsWindow = SettingsWindow.GetCurrent();
         if (settingsWindow?.Content is FrameworkElement sfe)
             sfe.RequestedTheme = requestedTheme;
+
+        // Apply to flyout window too
+        var flyout = Windows.FlyoutWindow.GetCurrent();
+        if (flyout?.Content is FrameworkElement ffe)
+            ffe.RequestedTheme = requestedTheme;
     }
 
     private static readonly global::Windows.UI.ViewManagement.UISettings s_uiSettings = new();

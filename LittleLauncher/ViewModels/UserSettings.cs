@@ -27,7 +27,7 @@ public partial class UserSettings : ObservableObject
     [ObservableProperty]
     public partial bool NIconHide { get; set; }
 
-    /// <summary>Tray icon style. 0 = Default, 1 = Light, 2 = Dark, 3 = Auto, 4 = Custom.</summary>
+    /// <summary>Tray icon style. 0 = Pin (default), 1 = Star, 2 = Heart, 3 = Lightning, 4 = Search, 5 = Globe, 6 = Custom.</summary>
     [ObservableProperty]
     public partial int TrayIconMode { get; set; }
 
@@ -180,7 +180,7 @@ public partial class UserSettings : ObservableObject
     partial void OnCustomTrayIconPathChanged(string oldValue, string newValue)
     {
         if (oldValue == newValue || _initializing) return;
-        if (TrayIconMode == 10) // Custom
+        if (TrayIconMode == 6) // Custom
             ApplyTrayIconChange();
     }
 

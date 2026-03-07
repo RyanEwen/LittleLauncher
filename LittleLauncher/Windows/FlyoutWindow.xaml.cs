@@ -62,6 +62,9 @@ public partial class FlyoutWindow : Window
         _wndProcDelegate = WndProc;
         SetWindowSubclass(_hwnd, _wndProcDelegate, 2, 0);
         Activated += FlyoutWindow_Activated;
+
+        // Apply saved app theme
+        ThemeManager.ApplySavedTheme(this);
     }
 
     private void FlyoutWindow_Activated(object sender, WindowActivatedEventArgs args)
@@ -84,6 +87,8 @@ public partial class FlyoutWindow : Window
         }
         return DefSubclassProc(hwnd, msg, wParam, lParam);
     }
+
+    internal static FlyoutWindow? GetCurrent() => _instance;
 
     public static void Toggle(MainWindow owner, int screenX, int screenY)
     {

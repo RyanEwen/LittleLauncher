@@ -44,10 +44,6 @@
                 </StackPanel>
                 <ComboBox x:Name="TrayIconModeCombo" Grid.Column="2" MinWidth="160"
                           SelectedIndex="{Binding TrayIconMode, Mode=TwoWay}" SelectionChanged="TrayIconModeCombo_SelectionChanged">
-                    <ComboBoxItem Content="App Icon"/>
-                    <ComboBoxItem Content="Light"/>
-                    <ComboBoxItem Content="Dark"/>
-                    <ComboBoxItem Content="Auto"/>
                     <ComboBoxItem>
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <FontIcon Glyph="&#xE840;" FontSize="16"/>
@@ -75,7 +71,7 @@
                     <ComboBoxItem>
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <FontIcon Glyph="&#xE721;" FontSize="16"/>
-                            <TextBlock Text="Shield"/>
+                            <TextBlock Text="Search"/>
                         </StackPanel>
                     </ComboBoxItem>
                     <ComboBoxItem>

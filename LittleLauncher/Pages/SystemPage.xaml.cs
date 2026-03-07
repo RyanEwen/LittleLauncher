@@ -108,7 +108,7 @@ public partial class SystemPage : Page
     private void UpdateCustomIconCardVisibility()
     {
         if (CustomIconCard != null)
-            CustomIconCard.Visibility = SettingsManager.Current.TrayIconMode == 10
+            CustomIconCard.Visibility = SettingsManager.Current.TrayIconMode == 6
                 ? Visibility.Visible
                 : Visibility.Collapsed;
     }
