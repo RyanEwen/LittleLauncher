@@ -1,6 +1,6 @@
 # LittleLauncher
 
-A Windows system-tray launcher and settings-sync utility built with WinUI 3, Windows App SDK, and SSH/SFTP.
+A Windows system-tray launcher with settings-sync capability, built with WinUI 3, Windows App SDK, and SSH/SFTP.
 
 ## Overview
 
