@@ -75,8 +75,8 @@ public partial class AboutPage : Page
 
             if (success)
             {
-                UpdateStatusText.Text = "Installer launched. The app will close.";
-                await Task.Delay(1500);
+                UpdateStatusText.Text = "Installer will launch after the app closes.";
+                await Task.Delay(1000);
                 Environment.Exit(0);
             }
             else

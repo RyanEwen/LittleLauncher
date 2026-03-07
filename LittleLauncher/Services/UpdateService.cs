@@ -130,12 +130,41 @@ public static class UpdateService
 
             progress?.Report(1.0);
 
-            // Launch the MSI installer
+            // Remove the Mark of the Web (Zone.Identifier ADS) so SmartScreen
+            // doesn't block the MSI that was downloaded from the internet.
+            try
+            {
+                string zoneFile = msiPath + ":Zone.Identifier";
+                File.Delete(zoneFile);
+            }
+            catch { /* ADS removal is best-effort */ }
+
+            // Launch a helper script that waits for this process to exit,
+            // then runs the MSI installer. This avoids file-lock failures
+            // when the installer tries to replace the running executable.
+            int pid = Environment.ProcessId;
+            string scriptPath = Path.Combine(tempDir, "install-update.cmd");
+            string script = $"""
+                @echo off
+                echo Waiting for Little Launcher to exit...
+                :wait
+                tasklist /FI "PID eq {pid}" 2>NUL | find /I "{pid}" >NUL
+                if not errorlevel 1 (
+                    timeout /t 1 /nobreak >NUL
+                    goto wait
+                )
+                echo Installing update...
+                start "" msiexec /i "{msiPath}"
+                """;
+            await File.WriteAllTextAsync(scriptPath, script, cancellationToken);
+
             Process.Start(new ProcessStartInfo
             {
-                FileName = "msiexec",
-                Arguments = $"/i \"{msiPath}\"",
-                UseShellExecute = true,
+                FileName = "cmd.exe",
+                Arguments = $"/c \"{scriptPath}\"",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden,
             });
 
             return (true, "Installer launched successfully.");
