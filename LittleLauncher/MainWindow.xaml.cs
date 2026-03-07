@@ -756,36 +756,34 @@ public sealed partial class MainWindow : Window
         {
             string? iconPath = SaveResolvedIconToAppData();
 
-            // Only update flyout-targeting shortcuts (not the main app shortcut)
-            var shortcuts = new List<string>();
+            string newIconLocation = iconPath != null
+                ? $"{iconPath},0"
+                : $"{Environment.ProcessPath},0";
 
-            // Start Menu flyout shortcut (LittleLauncher.lnk targets the main exe
-            // which also serves as the flyout entry point)
-            // We only customize the pinned taskbar flyout shortcut, not Start Menu app shortcuts.
+            // Re-stamp the Start Menu shortcut so the shell picks up the new icon
+            string startMenuLnk = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.StartMenu),
+                "Programs", "Little Launcher.lnk");
+            if (File.Exists(startMenuLnk))
+                UpdateShortcutIconLocation(startMenuLnk, newIconLocation);
 
-            // Pinned taskbar shortcuts — only update ones that target the flyout companion exe
+            // Pinned taskbar shortcuts — update ones that target the flyout companion exe
             string taskbarPinDir = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                 "Microsoft", "Internet Explorer", "Quick Launch",
                 "User Pinned", "TaskBar");
             if (Directory.Exists(taskbarPinDir))
             {
+                string flyoutIconLocation = iconPath != null
+                    ? $"{iconPath},0"
+                    : GetFlyoutExeIconFallback();
+
                 foreach (string lnk in Directory.GetFiles(taskbarPinDir, "*.lnk"))
                 {
                     if (IsFlyoutShortcut(lnk))
-                        shortcuts.Add(lnk);
+                        UpdateShortcutIconLocation(lnk, flyoutIconLocation);
                 }
             }
-
-            if (shortcuts.Count == 0) return;
-
-            // Determine new icon location
-            string newIconLocation = iconPath != null
-                ? $"{iconPath},0"
-                : GetFlyoutExeIconFallback();
-
-            foreach (string lnk in shortcuts)
-                UpdateShortcutIconLocation(lnk, newIconLocation);
 
             // Notify the shell that shortcuts changed so it refreshes cached icons
             SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, IntPtr.Zero, IntPtr.Zero);
