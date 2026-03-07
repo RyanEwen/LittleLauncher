@@ -3,7 +3,7 @@
 
   <!-- Version is injected by the build: -d ProductVersion=1.0.0.0 -->
   <?ifndef ProductVersion ?>
-    <?define ProductVersion = "1.1.0.0" ?>
+    <?define ProductVersion = "1.2.1.0" ?>
   <?endif ?>
 
   <Package Name="Little Launcher"
@@ -21,11 +21,6 @@
       <Directory Id="INSTALLFOLDER" Name="Little Launcher" />
     </StandardDirectory>
 
-    <!-- Start Menu shortcut -->
-    <StandardDirectory Id="ProgramMenuFolder">
-      <Directory Id="StartMenuDir" Name="Little Launcher" />
-    </StandardDirectory>
-
     <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
       <!-- Harvest the entire build output directory, excluding debug symbols -->
       <Files Include="$(BuildOutputPath)\**">
@@ -33,14 +28,16 @@
       </Files>
     </ComponentGroup>
 
-    <ComponentGroup Id="Shortcuts" Directory="StartMenuDir">
+    <!-- Initial Start Menu shortcut so users can find the app after install.
+         On first launch the app overwrites it with the user's chosen icon. -->
+    <ComponentGroup Id="Shortcuts" Directory="ProgramMenuFolder">
       <Component Id="StartMenuShortcut">
         <Shortcut Id="StartMenuLauncher"
                   Name="Little Launcher"
                   Target="[INSTALLFOLDER]LittleLauncher.exe"
+                  Arguments="--settings"
                   WorkingDirectory="INSTALLFOLDER"
                   Icon="AppIcon" />
-        <RemoveFolder Id="RemoveStartMenuDir" On="uninstall" />
         <RegistryValue Root="HKCU"
                        Key="Software\LittleLauncher"
                        Name="StartMenuShortcut"

@@ -2,6 +2,11 @@
   <PropertyGroup>
     <OutputType>Package</OutputType>
     <InstallerPlatform>$(Platform)</InstallerPlatform>
+    <!-- Suppress ICE38/ICE64/ICE91: per-user installs into LocalAppData trigger
+         false positives for auto-harvested components. WiX 5 Files element
+         handles cleanup correctly but doesn't generate HKCU registry KeyPaths.
+         ICE91 warns about per-user dirs not varying on ALLUSERS — intentional. -->
+    <SuppressIces>ICE38;ICE64;ICE91</SuppressIces>
   </PropertyGroup>
   <PropertyGroup>
     <DefineConstants>BuildOutputPath=$(BuildOutputPath);ProductVersion=$(Version).0</DefineConstants>

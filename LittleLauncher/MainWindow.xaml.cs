@@ -732,6 +732,14 @@ public sealed partial class MainWindow : Window
                     File.Delete(oldLnk);
             }
 
+            // Remove MSI-era shortcut that lived in a "Little Launcher" subfolder
+            string msiSubfolder = Path.Combine(startMenuDir, "Little Launcher");
+            if (Directory.Exists(msiSubfolder))
+            {
+                try { Directory.Delete(msiSubfolder, true); }
+                catch { /* best-effort */ }
+            }
+
             // Single Start Menu shortcut — always opens settings when clicked
             CreateOrUpdateShortcut(
                 Path.Combine(startMenuDir, "Little Launcher.lnk"),

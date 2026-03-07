@@ -12,7 +12,7 @@ Little Launcher uses **semantic versioning** (`vMAJOR.MINOR.PATCH`).
 The version is defined **once** in `Directory.Build.props`:
 
 ```xml
-<Version>1.1.0</Version>
+<Version>1.2.0</Version>
 ```
 
 All other consumers derive from this automatically:
@@ -24,7 +24,18 @@ All other consumers derive from this automatically:
 | **MSIX manifest** | CI workflow stamps `LittleLauncherMSIX/Package.appxmanifest` Identity Version from `Directory.Build.props` before build |
 | **Git tag** | Created manually to match: `git tag -a v1.1.0 ...` |
 
-**To bump the version, edit only `Directory.Build.props`.** Everything else is automatic.
+**To bump the version, edit `Directory.Build.props` first, then update the fallback versions** in the files below. CI handles injection at build time, but the fallbacks must stay current so local/manual builds produce the correct version.
+
+### Fallback versions to update
+
+After changing `Directory.Build.props`, also update these hardcoded fallback values:
+
+| File | What to change |
+|---|---|
+| `LittleLauncherSetup/Package.wxs` | `<?define ProductVersion = "X.Y.Z.0" ?>` (line ~6) |
+| `LittleLauncherMSIX/Package.appxmanifest` | `<Identity ... Version="X.Y.Z.0" />` (line ~13) |
+
+These only matter when the CI version injection doesn't run (local builds, manual WiX builds). **If you forget, the installer ships with the old version number.**
 
 ## Release workflow
 
@@ -40,10 +51,11 @@ Pushing a tag matching `v*` triggers `.github/workflows/build-msix.yml` which:
 ## How to release
 
 1. Edit `Directory.Build.props` — change `<Version>X.Y.Z</Version>`
-2. Commit: `git commit -am "Bump version to vX.Y.Z"`
-3. Tag: `git tag -a vX.Y.Z -m "vX.Y.Z: <brief summary>"`
-4. Push both: `git push origin main vX.Y.Z`
-5. The GitHub Action handles the rest
+2. Update fallback versions in `Package.wxs` and `Package.appxmanifest` (see table above)
+3. Commit: `git commit -am "Bump version to vX.Y.Z"`
+4. Tag: `git tag -a vX.Y.Z -m "vX.Y.Z: <brief summary>"`
+5. Push both: `git push origin main vX.Y.Z`
+6. The GitHub Action handles the rest
 
 ## Version bump guidance
 

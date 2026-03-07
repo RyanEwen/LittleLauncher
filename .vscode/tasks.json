@@ -11,21 +11,6 @@
             }
         },
         {
-            "label": "build",
-            "command": "dotnet",
-            "type": "process",
-            "args": [
-                "build",
-                "${workspaceFolder}/LittleLauncher/LittleLauncher.csproj",
-                "-c", "Debug"
-            ],
-            "problemMatcher": "$msCompile",
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            }
-        },
-        {
             "label": "build-x64",
             "command": "dotnet",
             "type": "process",
@@ -49,16 +34,77 @@
                 "-p:Platform=ARM64"
             ],
             "dependsOn": "stop-app",
+            "problemMatcher": "$msCompile",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "build-x64-release",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "build",
+                "${workspaceFolder}/LittleLauncher/LittleLauncher.csproj",
+                "-c", "Release",
+                "-p:Platform=x64"
+            ],
+            "dependsOn": "stop-app",
             "problemMatcher": "$msCompile"
         },
         {
-            "label": "watch",
+            "label": "build-arm64-release",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "build",
+                "${workspaceFolder}/LittleLauncher/LittleLauncher.csproj",
+                "-c", "Release",
+                "-p:Platform=ARM64"
+            ],
+            "dependsOn": "stop-app",
+            "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "installer-x64",
+            "type": "shell",
+            "command": "dotnet build LittleLauncherSetup/LittleLauncherSetup.wixproj -p:Platform=x64 -c Release \"-p:BuildOutputPath=${workspaceFolder}/LittleLauncher/bin/x64/Release/net10.0-windows10.0.22000.0\"",
+            "dependsOn": "build-x64-release",
+            "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "installer-arm64",
+            "type": "shell",
+            "command": "dotnet build LittleLauncherSetup/LittleLauncherSetup.wixproj -p:Platform=ARM64 -c Release \"-p:BuildOutputPath=${workspaceFolder}/LittleLauncher/bin/ARM64/Release/net10.0-windows10.0.22000.0\"",
+            "dependsOn": "build-arm64-release",
+            "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "run-x64",
+            "type": "shell",
+            "command": "Start-Process '${workspaceFolder}/LittleLauncher/bin/x64/Debug/net10.0-windows10.0.22000.0/LittleLauncher.exe'",
+            "dependsOn": "build-x64",
+            "problemMatcher": [],
+            "presentation": { "reveal": "silent" }
+        },
+        {
+            "label": "run-arm64",
+            "type": "shell",
+            "command": "Start-Process '${workspaceFolder}/LittleLauncher/bin/ARM64/Debug/net10.0-windows10.0.22000.0/LittleLauncher.exe'",
+            "dependsOn": "build-arm64",
+            "problemMatcher": [],
+            "presentation": { "reveal": "silent" }
+        },
+        {
+            "label": "watch-x64",
             "command": "dotnet",
             "type": "process",
             "args": [
                 "watch",
                 "--project", "${workspaceFolder}/LittleLauncher/LittleLauncher.csproj",
-                "run", "-c", "Debug"
+                "run", "-c", "Debug",
+                "-p:Platform=x64"
             ],
             "problemMatcher": "$msCompile",
             "isBackground": true,
@@ -85,21 +131,14 @@
             }
         },
         {
-            "label": "watch-x64",
+            "label": "clean",
             "command": "dotnet",
             "type": "process",
             "args": [
-                "watch",
-                "--project", "${workspaceFolder}/LittleLauncher/LittleLauncher.csproj",
-                "run", "-c", "Debug",
-                "-p:Platform=x64"
+                "clean",
+                "${workspaceFolder}/LittleLauncher/LittleLauncher.csproj"
             ],
-            "problemMatcher": "$msCompile",
-            "isBackground": true,
-            "presentation": {
-                "reveal": "always",
-                "panel": "dedicated"
-            }
+            "problemMatcher": []
         }
     ]
 }
