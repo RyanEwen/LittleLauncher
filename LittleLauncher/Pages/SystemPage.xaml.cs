@@ -16,6 +16,8 @@ public partial class SystemPage : Page
     {
         InitializeComponent();
         DataContext = SettingsManager.Current;
+        UpdateCustomIconCardVisibility();
+        UpdateCustomIconPathText();
     }
 
     private void StartupSwitch_Toggled(object sender, RoutedEventArgs e)
@@ -95,6 +97,108 @@ public partial class SystemPage : Page
             {
                 Logger.Error(ex, "Error importing settings");
             }
+        }
+    }
+
+    private void TrayIconModeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        UpdateCustomIconCardVisibility();
+    }
+
+    private void UpdateCustomIconCardVisibility()
+    {
+        if (CustomIconCard != null)
+            CustomIconCard.Visibility = SettingsManager.Current.TrayIconMode == 10
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+    }
+
+    private void UpdateCustomIconPathText()
+    {
+        if (CustomIconPathText == null) return;
+        string path = SettingsManager.Current.CustomTrayIconPath;
+        CustomIconPathText.Text = string.IsNullOrEmpty(path)
+            ? "No file selected"
+            : Path.GetFileName(path);
+    }
+
+    private async void RestartExplorer_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new ContentDialog
+        {
+            Title = "Restart Explorer?",
+            Content = "This will briefly restart Windows Explorer to refresh cached taskbar icons. Your taskbar and desktop will disappear momentarily.",
+            PrimaryButtonText = "Restart",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = this.XamlRoot
+        };
+
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary)
+        {
+            try
+            {
+                // Delete the icon cache database so Windows rebuilds it
+                string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                string cacheDir = Path.Combine(localAppData, "Microsoft", "Windows", "Explorer");
+                if (Directory.Exists(cacheDir))
+                {
+                    foreach (string file in Directory.GetFiles(cacheDir, "iconcache*"))
+                    {
+                        try { File.Delete(file); } catch { }
+                    }
+                    foreach (string file in Directory.GetFiles(cacheDir, "thumbcache*"))
+                    {
+                        try { File.Delete(file); } catch { }
+                    }
+                }
+
+                foreach (var proc in System.Diagnostics.Process.GetProcessesByName("explorer"))
+                {
+                    proc.Kill();
+                    proc.Dispose();
+                }
+
+                // Windows auto-restarts explorer, but launch it explicitly as a fallback
+                await Task.Delay(1000);
+                if (System.Diagnostics.Process.GetProcessesByName("explorer").Length == 0)
+                {
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = "explorer.exe",
+                        UseShellExecute = true
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Error(ex, "Failed to restart Explorer");
+            }
+        }
+    }
+
+    private async void BrowseCustomIcon_Click(object sender, RoutedEventArgs e)
+    {
+        var picker = new FileOpenPicker();
+        picker.FileTypeFilter.Add(".ico");
+        picker.FileTypeFilter.Add(".png");
+        InitializePicker(picker);
+
+        var file = await picker.PickSingleFileAsync();
+        if (file != null)
+        {
+            // Copy the icon to AppData so the path survives across sessions
+            string appDataDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "LittleLauncher");
+            Directory.CreateDirectory(appDataDir);
+
+            string ext = Path.GetExtension(file.Path);
+            string destPath = Path.Combine(appDataDir, $"custom-tray-icon{ext}");
+            File.Copy(file.Path, destPath, overwrite: true);
+
+            SettingsManager.Current.CustomTrayIconPath = destPath;
+            UpdateCustomIconPathText();
         }
     }
 

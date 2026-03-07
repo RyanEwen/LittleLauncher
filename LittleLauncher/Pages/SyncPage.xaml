@@ -109,7 +109,7 @@
                     <TextBlock Text="Auto Sync" FontSize="14"/>
                     <TextBlock Text="Sync launcher items on startup, on change, and periodically" FontSize="12" Opacity="0.5"/>
                 </StackPanel>
-                <ToggleSwitch Grid.Column="2" IsOn="{Binding SftpAutoSync, Mode=TwoWay}"/>
+                <ToggleSwitch Grid.Column="2" OnContent="" OffContent="" MinWidth="0" IsOn="{Binding SftpAutoSync, Mode=TwoWay}"/>
             </Grid>
         </Border>
 

@@ -31,6 +31,12 @@ static class Program
     private static extern bool PostMessage(nint hWnd, int Msg, nint wParam, nint lParam);
 
     [DllImport("user32.dll")]
+    private static extern nint SendMessage(nint hWnd, uint Msg, nint wParam, nint lParam);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern nint LoadImage(nint hInst, string name, uint type, int cx, int cy, uint fuLoad);
+
+    [DllImport("user32.dll")]
     private static extern bool SetProcessDpiAwarenessContext(nint dpiContext);
 
     private static readonly nint DpiAwarenessContextPerMonitorAwareV2 = new(-4);
@@ -47,6 +53,35 @@ static class Program
 
         if (args.Length > 0 && args[0] == "--pin")
         {
+            // Load the custom icon (if any) so the taskbar shows it while pinning
+            string iconPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "LittleLauncher", "app-icon.ico");
+            nint hIcon = File.Exists(iconPath)
+                ? LoadImage(0, iconPath, 1 /* IMAGE_ICON */, 0, 0, 0x0010 /* LR_LOADFROMFILE */)
+                : 0;
+
+            if (hIcon != 0)
+            {
+                // Set the custom icon on the MessageBox once it appears
+                var thread = new Thread(() =>
+                {
+                    for (int i = 0; i < 50; i++)
+                    {
+                        Thread.Sleep(50);
+                        var mb = FindWindow(null, "Pin to Taskbar");
+                        if (mb != 0)
+                        {
+                            SendMessage(mb, 0x0080 /* WM_SETICON */, 1 /* ICON_BIG */, hIcon);
+                            SendMessage(mb, 0x0080 /* WM_SETICON */, 0 /* ICON_SMALL */, hIcon);
+                            break;
+                        }
+                    }
+                });
+                thread.IsBackground = true;
+                thread.Start();
+            }
+
             MessageBoxW(
                 0,
                 "This app is now running so you can pin it to the taskbar.\n\n" +
@@ -57,13 +92,11 @@ static class Program
             return;
         }
 
-        GetCursorPos(out var pt);
-
         var target = FindWindow(null, "LittleLauncher Host");
 
         if (target == 0)
         {
-            // Main app isn't running — try to launch it.
+            // Main app isn't running — launch it, then signal the flyout.
             string myDir = AppContext.BaseDirectory;
             string mainExe = Path.Combine(myDir, "LittleLauncher.exe");
             if (!File.Exists(mainExe))
@@ -89,6 +122,8 @@ static class Program
                 return;
         }
 
+        // App is running — signal it to show the flyout.
+        GetCursorPos(out var pt);
         var msg = (int)RegisterWindowMessage("LittleLauncher_ShowFlyout");
         PostMessage(target, msg, pt.X, pt.Y);
     }

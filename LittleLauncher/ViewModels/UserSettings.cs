@@ -27,6 +27,14 @@ public partial class UserSettings : ObservableObject
     [ObservableProperty]
     public partial bool NIconHide { get; set; }
 
+    /// <summary>Tray icon style. 0 = Default, 1 = Light, 2 = Dark, 3 = Auto, 4 = Custom.</summary>
+    [ObservableProperty]
+    public partial int TrayIconMode { get; set; }
+
+    /// <summary>Path to a custom tray icon file (.ico or .png) when TrayIconMode is Custom.</summary>
+    [ObservableProperty]
+    public partial string CustomTrayIconPath { get; set; }
+
     /// <summary>Last known app version string.</summary>
     [ObservableProperty]
     public partial string LastKnownVersion { get; set; }
@@ -124,6 +132,8 @@ public partial class UserSettings : ObservableObject
         AppTheme = 0;
         Startup = false;
         NIconHide = false;
+        TrayIconMode = 0;
+        CustomTrayIconPath = "";
         LastKnownVersion = "";
 
         // Do NOT populate defaults here — XmlSerializer calls this constructor
@@ -159,5 +169,25 @@ public partial class UserSettings : ObservableObject
     {
         if (oldValue == newValue || _initializing) return;
         LittleLauncher.Classes.ThemeManager.ApplyAndSaveTheme(newValue);
+    }
+
+    partial void OnTrayIconModeChanged(int oldValue, int newValue)
+    {
+        if (oldValue == newValue || _initializing) return;
+        ApplyTrayIconChange();
+    }
+
+    partial void OnCustomTrayIconPathChanged(string oldValue, string newValue)
+    {
+        if (oldValue == newValue || _initializing) return;
+        if (TrayIconMode == 10) // Custom
+            ApplyTrayIconChange();
+    }
+
+    private void ApplyTrayIconChange()
+    {
+        if ((Microsoft.UI.Xaml.Application.Current as App)?.m_window is MainWindow mw)
+            mw.UpdateTrayIcon();
+        LittleLauncher.Classes.Settings.SettingsManager.SaveSettings();
     }
 }

@@ -181,6 +181,20 @@ public static class NativeMethods
     internal const int SW_MAXIMIZE = 3;
     internal const int SW_SHOWNOACTIVATE = 4;
 
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool DestroyIcon(IntPtr hIcon);
+
+    #endregion
+
+    #region shell32.dll
+
+    [DllImport("shell32.dll")]
+    internal static extern void SHChangeNotify(uint wEventId, uint uFlags, IntPtr dwItem1, IntPtr dwItem2);
+
+    internal const uint SHCNE_ASSOCCHANGED = 0x08000000;
+    internal const uint SHCNF_IDLIST = 0x0000;
+
     #endregion
 
     #region dwmapi.dll

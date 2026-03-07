@@ -41,10 +41,11 @@ public sealed partial class SettingsWindow : Window
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
 
-        // Set window size (DPI-aware)
+        // Set the window icon explicitly to the default app icon
         var hwnd = WindowNative.GetWindowHandle(this);
         var wndId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
         var appWindow = AppWindow.GetFromWindowId(wndId);
+        appWindow.SetIcon(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "LittleLauncher.ico"));
         uint dpi = GetDpiForWindow(hwnd);
         double scale = dpi / 96.0;
         appWindow.Resize(new global::Windows.Graphics.SizeInt32((int)(900 * scale), (int)(700 * scale)));

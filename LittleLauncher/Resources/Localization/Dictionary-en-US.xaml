@@ -36,6 +36,16 @@
     <x:String x:Key="TrayIconSectionTitle">Tray Icon</x:String>
     <x:String x:Key="HideTrayIconTitle">Hide Tray Icon Completely</x:String>
     <x:String x:Key="HideTrayIconDescription">Access settings from launching the program twice</x:String>
+    <x:String x:Key="TrayIconStyleTitle">Tray Icon Style</x:String>
+    <x:String x:Key="TrayIconStyleDescription">Choose how the tray icon looks</x:String>
+    <x:String x:Key="TrayIconStyleDefault">App Icon</x:String>
+    <x:String x:Key="TrayIconStyleLight">Light</x:String>
+    <x:String x:Key="TrayIconStyleDark">Dark</x:String>
+    <x:String x:Key="TrayIconStyleAuto">Auto</x:String>
+    <x:String x:Key="TrayIconStyleCustom">Custom...</x:String>
+    <x:String x:Key="CustomIconTitle">Custom Icon</x:String>
+    <x:String x:Key="CustomIconNoFile">No file selected</x:String>
+    <x:String x:Key="CustomIconBrowse">Browse...</x:String>
     <x:String x:Key="TrayIcon_SettingsOption">Settings</x:String>
     <x:String x:Key="TrayIcon_QuitOption">Quit</x:String>
 
