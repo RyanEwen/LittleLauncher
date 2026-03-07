@@ -27,6 +27,7 @@ Little Launcher lives in the Windows system tray. Clicking the tray icon opens a
 - **Application & website shortcuts** — launch any executable or URL with one click from the flyout.
 - **SSH/SFTP settings sync** — upload/download your `settings.xml` to a remote server using SSH.NET.
 - **WinUI 3 settings UI** — a native window with Mica backdrop and page-based `NavigationView`.
+- **Taskbar pinning** — a companion helper exe (`LauncherShortcut`) can be pinned to the taskbar so one click opens the flyout without needing to find the tray icon.
 - **Theme support** — follows the Windows system theme or can be set to Light/Dark explicitly.
 - **Export & import** — back up and restore settings locally via XML.
 

@@ -5,9 +5,22 @@
     <ScrollViewer VerticalScrollBarVisibility="Auto">
     <StackPanel MaxWidth="1000" Margin="16">
         <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,0,8">
+            <Image x:Name="AppIcon" Width="32" Height="32" VerticalAlignment="Center" Margin="0,0,10,0" />
             <TextBlock Text="Little Launcher" FontSize="24" FontWeight="Medium" VerticalAlignment="Center" />
             <TextBlock x:Name="VersionTextBlock" FontSize="14" FontWeight="Normal" VerticalAlignment="Bottom" Margin="10" Opacity="0.5" />
         </StackPanel>
+
+        <!-- Update banner (hidden by default) -->
+        <InfoBar x:Name="UpdateInfoBar"
+                 Title="Update Available"
+                 IsOpen="False"
+                 IsClosable="True"
+                 Severity="Informational"
+                 Margin="0,8,0,0">
+            <InfoBar.ActionButton>
+                <Button x:Name="UpdateActionButton" Content="Download &amp; Install" Click="UpdateAction_Click" />
+            </InfoBar.ActionButton>
+        </InfoBar>
 
         <TextBlock Text="Home" FontSize="24" FontWeight="SemiBold" Margin="0,24,0,12" />
 

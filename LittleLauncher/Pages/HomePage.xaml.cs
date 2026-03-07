@@ -1,4 +1,5 @@
 using LittleLauncher.Classes.Settings;
+using LittleLauncher.Services;
 using LittleLauncher.ViewModels;
 using NLog;
 using System.Diagnostics;
@@ -6,6 +7,7 @@ using System.IO;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media.Imaging;
 
 namespace LittleLauncher.Pages;
 
@@ -15,11 +17,90 @@ public partial class HomePage : Page
 
     internal UserSettings Settings => SettingsManager.Current;
 
+    private UpdateService.UpdateCheckResult? _updateResult;
+
     public HomePage()
     {
         InitializeComponent();
+        LoadAppIcon();
         VersionTextBlock.Text = SettingsManager.Current.LastKnownVersion;
         TrayIconSwitch.IsOn = !SettingsManager.Current.NIconHide;
+        _ = CheckForUpdateAsync();
+    }
+
+    private void LoadAppIcon()
+    {
+        string icoPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "LittleLauncher", "app-icon.ico");
+        if (File.Exists(icoPath))
+        {
+            var bmp = new BitmapImage();
+            bmp.UriSource = new Uri(icoPath);
+            AppIcon.Source = bmp;
+        }
+    }
+
+    private async Task CheckForUpdateAsync()
+    {
+        try
+        {
+            var result = await UpdateService.CheckForUpdateAsync();
+            if (result is { UpdateAvailable: true })
+            {
+                _updateResult = result;
+                UpdateInfoBar.Message = $"A new version ({result.LatestVersion}) is available. You are running {result.CurrentVersion}.";
+                UpdateInfoBar.IsOpen = true;
+
+                if (string.IsNullOrEmpty(result.MsiDownloadUrl))
+                {
+                    UpdateActionButton.Content = "View Release";
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn(ex, "Update check failed on HomePage");
+        }
+    }
+
+    private async void UpdateAction_Click(object sender, RoutedEventArgs e)
+    {
+        if (_updateResult == null) return;
+
+        if (!string.IsNullOrEmpty(_updateResult.MsiDownloadUrl))
+        {
+            UpdateActionButton.IsEnabled = false;
+            UpdateActionButton.Content = "Downloading...";
+
+            var progress = new Progress<double>(p =>
+            {
+                int pct = (int)(p * 100);
+                UpdateActionButton.Content = pct < 100 ? $"Downloading ({pct}%)..." : "Installing...";
+            });
+
+            var (success, message) = await UpdateService.DownloadAndInstallAsync(
+                _updateResult.MsiDownloadUrl, progress);
+
+            if (success)
+            {
+                UpdateInfoBar.Message = "Installer launched. The app will close.";
+                UpdateInfoBar.Severity = InfoBarSeverity.Success;
+                await Task.Delay(1500);
+                Environment.Exit(0);
+            }
+            else
+            {
+                UpdateActionButton.Content = "Download & Install";
+                UpdateActionButton.IsEnabled = true;
+                UpdateInfoBar.Message = message;
+                UpdateInfoBar.Severity = InfoBarSeverity.Error;
+            }
+        }
+        else if (!string.IsNullOrEmpty(_updateResult.ReleaseUrl))
+        {
+            Process.Start(new ProcessStartInfo(_updateResult.ReleaseUrl) { UseShellExecute = true });
+        }
     }
 
     private void LauncherItems_Click(object sender, PointerRoutedEventArgs e)

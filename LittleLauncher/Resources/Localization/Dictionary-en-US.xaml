@@ -68,5 +68,16 @@
     <x:String x:Key="AboutTitle">About</x:String>
     <x:String x:Key="GitHubRepoLink">GitHub Repository</x:String>
     <x:String x:Key="CloseButton">Close</x:String>
+
+    <!-- Updates -->
+    <x:String x:Key="UpdateAvailableTitle">Update Available</x:String>
+    <x:String x:Key="CheckForUpdates">Check for Updates</x:String>
+    <x:String x:Key="CheckingForUpdates">Checking...</x:String>
+    <x:String x:Key="DownloadAndInstall">Download &amp; Install</x:String>
+    <x:String x:Key="Downloading">Downloading...</x:String>
+    <x:String x:Key="Installing">Installing...</x:String>
+    <x:String x:Key="UpToDate">You're up to date</x:String>
+    <x:String x:Key="UpdateCheckFailed">Unable to check for updates</x:String>
+    <x:String x:Key="ViewRelease">View Release</x:String>
 </ResourceDictionary>
 
