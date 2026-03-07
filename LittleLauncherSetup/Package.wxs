@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+
+  <!-- Version is injected by the build: -d ProductVersion=1.0.0.0 -->
+  <?ifndef ProductVersion ?>
+    <?define ProductVersion = "1.0.0.0" ?>
+  <?endif ?>
+
+  <Package Name="LittleLauncher"
+           Manufacturer="RyanEwen"
+           Version="$(ProductVersion)"
+           UpgradeCode="A1B2C3D4-E5F6-7890-ABCD-EF1234567890"
+           Scope="perMachine"
+           InstallerVersion="500">
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of LittleLauncher is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Install to Program Files -->
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="LittleLauncher" />
+    </StandardDirectory>
+
+    <!-- Start Menu shortcut -->
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="StartMenuDir" Name="LittleLauncher" />
+    </StandardDirectory>
+
+    <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
+      <!-- Harvest the entire build output directory, excluding debug symbols -->
+      <Files Include="$(BuildOutputPath)\**">
+        <Exclude Files="$(BuildOutputPath)\**\*.pdb" />
+      </Files>
+    </ComponentGroup>
+
+    <ComponentGroup Id="Shortcuts" Directory="StartMenuDir">
+      <Component Id="StartMenuShortcut">
+        <Shortcut Id="StartMenuLauncher"
+                  Name="LittleLauncher"
+                  Target="[INSTALLFOLDER]LittleLauncher.exe"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="AppIcon" />
+        <RemoveFolder Id="RemoveStartMenuDir" On="uninstall" />
+        <RegistryValue Root="HKCU"
+                       Key="Software\LittleLauncher"
+                       Name="StartMenuShortcut"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <Feature Id="Main" Title="LittleLauncher" Level="1">
+      <ComponentGroupRef Id="ProductComponents" />
+      <ComponentGroupRef Id="Shortcuts" />
+    </Feature>
+
+    <Icon Id="AppIcon" SourceFile="$(BuildOutputPath)\Resources\LittleLauncher.ico" />
+
+  </Package>
+</Wix>

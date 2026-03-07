@@ -1,0 +1,9 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+  <PropertyGroup>
+    <OutputType>Package</OutputType>
+    <InstallerPlatform>$(Platform)</InstallerPlatform>
+  </PropertyGroup>
+  <PropertyGroup>
+    <DefineConstants>BuildOutputPath=$(BuildOutputPath)</DefineConstants>
+  </PropertyGroup>
+</Project>

@@ -43,6 +43,22 @@ jobs:
           name: Build-${{ matrix.configuration == 'GitHub Release' && 'GitHub_Release' || matrix.configuration }}-${{ matrix.platform }}
           path: LittleLauncher/bin/${{ matrix.platform }}/Release/net10.0-windows10.0.22000.0/
 
+      # ── MSI build (WiX) ─────────────────────────────────────────
+      - name: Build MSI installer
+        if: matrix.configuration == 'GitHub Release'
+        run: |
+          dotnet build LittleLauncherSetup\LittleLauncherSetup.wixproj `
+            -p:Platform=$env:PLATFORM `
+            -p:Configuration=Release `
+            "-p:BuildOutputPath=$env:GITHUB_WORKSPACE\LittleLauncher\bin\$env:PLATFORM\Release\net10.0-windows10.0.22000.0"
+
+      - name: Upload MSI artifact
+        if: matrix.configuration == 'GitHub Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MSI-${{ matrix.platform }}
+          path: LittleLauncherSetup/bin/${{ matrix.platform }}/Release/LittleLauncherSetup.msi
+
       # ── MSIX build ─────────────────────────────────────────────
       - name: Decode signing certificate
         run: |
@@ -90,10 +106,20 @@ jobs:
           pattern: Build-GitHub_Release-*
           path: artifacts/build
 
+      - name: Download MSI artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: MSI-*
+          path: artifacts/msi
+
       - name: Collect release files
         run: |
           mkdir -p release
           find artifacts/msix -name 'LittleLauncherMSIX_*.msix' -exec cp {} release/ \;
+          for dir in artifacts/msi/*/; do
+            arch=$(basename "$dir" | sed 's/MSI-//')
+            cp "$dir"/*.msi "release/LittleLauncher-${arch}-Setup.msi"
+          done
           for dir in artifacts/build/*/; do
             arch=$(basename "$dir" | sed 's/Build-GitHub_Release-//')
             (cd "$dir" && zip -r "../../../release/LittleLauncher-${arch}-portable.zip" .)
