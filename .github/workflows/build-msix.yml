@@ -82,15 +82,25 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           pattern: MSIX-GitHub_Release-*
-          path: artifacts
+          path: artifacts/msix
 
-      - name: Collect MSIX files
+      - name: Download portable build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: Build-GitHub_Release-*
+          path: artifacts/build
+
+      - name: Collect release files
         run: |
           mkdir -p release
-          find artifacts -name '*.msix' -exec cp {} release/ \;
+          find artifacts/msix -name 'LittleLauncherMSIX_*.msix' -exec cp {} release/ \;
+          for dir in artifacts/build/*/; do
+            arch=$(basename "$dir" | sed 's/Build-GitHub_Release-//')
+            (cd "$dir" && zip -r "../../../release/LittleLauncher-${arch}-portable.zip" .)
+          done
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: release/*.msix
+          files: release/*
           generate_release_notes: true
