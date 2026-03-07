@@ -80,21 +80,19 @@ jobs:
       contents: write
 
     steps:
-      - name: Download all artifacts
+      - name: Download MSIX artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: MSIX-GitHub_Release-*
           path: artifacts
 
-      - name: Zip artifacts
+      - name: Collect MSIX files
         run: |
-          cd artifacts
-          for dir in */; do
-            name="${dir%/}"
-            (cd "$dir" && zip -r "../../${name}.zip" .)
-          done
+          mkdir -p release
+          find artifacts -name '*.msix' -exec cp {} release/ \;
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: "*.zip"
+          files: release/*.msix
           generate_release_notes: true
