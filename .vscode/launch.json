@@ -1,0 +1,39 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug (x64)",
+            "type": "coreclr",
+            "request": "launch",
+            "program": "${workspaceFolder}/LittleLauncher/bin/x64/Debug/net10.0-windows10.0.22000.0/LittleLauncher.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}/LittleLauncher",
+            "stopAtEntry": false,
+            "console": "internalConsole",
+            "preLaunchTask": "build-x64",
+            "env": {
+                "DOTNET_ENVIRONMENT": "Development"
+            }
+        },
+        {
+            "name": "Debug (ARM64)",
+            "type": "coreclr",
+            "request": "launch",
+            "program": "${workspaceFolder}/LittleLauncher/bin/ARM64/Debug/net10.0-windows10.0.22000.0/LittleLauncher.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}/LittleLauncher",
+            "stopAtEntry": false,
+            "console": "internalConsole",
+            "preLaunchTask": "build-arm64",
+            "env": {
+                "DOTNET_ENVIRONMENT": "Development"
+            }
+        },
+        {
+            "name": "Attach to LittleLauncher",
+            "type": "coreclr",
+            "request": "attach",
+            "processName": "LittleLauncher"
+        }
+    ]
+}

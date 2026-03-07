@@ -1,0 +1,105 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "stop-app",
+            "type": "shell",
+            "command": "Stop-Process -Name LittleLauncher -Force -ErrorAction SilentlyContinue",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "silent"
+            }
+        },
+        {
+            "label": "build",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "build",
+                "${workspaceFolder}/LittleLauncher/LittleLauncher.csproj",
+                "-c", "Debug"
+            ],
+            "problemMatcher": "$msCompile",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "build-x64",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "build",
+                "${workspaceFolder}/LittleLauncher/LittleLauncher.csproj",
+                "-c", "Debug",
+                "-p:Platform=x64"
+            ],
+            "dependsOn": "stop-app",
+            "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "build-arm64",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "build",
+                "${workspaceFolder}/LittleLauncher/LittleLauncher.csproj",
+                "-c", "Debug",
+                "-p:Platform=ARM64"
+            ],
+            "dependsOn": "stop-app",
+            "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "watch",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "watch",
+                "--project", "${workspaceFolder}/LittleLauncher/LittleLauncher.csproj",
+                "run", "-c", "Debug"
+            ],
+            "problemMatcher": "$msCompile",
+            "isBackground": true,
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            }
+        },
+        {
+            "label": "watch-arm64",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "watch",
+                "--project", "${workspaceFolder}/LittleLauncher/LittleLauncher.csproj",
+                "run", "-c", "Debug",
+                "-p:Platform=ARM64"
+            ],
+            "problemMatcher": "$msCompile",
+            "isBackground": true,
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            }
+        },
+        {
+            "label": "watch-x64",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "watch",
+                "--project", "${workspaceFolder}/LittleLauncher/LittleLauncher.csproj",
+                "run", "-c", "Debug",
+                "-p:Platform=x64"
+            ],
+            "problemMatcher": "$msCompile",
+            "isBackground": true,
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            }
+        }
+    ]
+}

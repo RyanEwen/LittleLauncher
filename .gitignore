@@ -369,7 +369,4 @@ FodyWeavers.xsd
 # Jetbrains IDE
 .idea/
 
-# Visual Studio Code
-.vscode/
-
 Website/tailwindcss.exe
