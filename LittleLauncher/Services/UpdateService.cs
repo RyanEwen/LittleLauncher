@@ -142,6 +142,8 @@ public static class UpdateService
             // Launch a helper script that waits for this process to exit,
             // then runs the MSI installer. This avoids file-lock failures
             // when the installer tries to replace the running executable.
+            // The MSI is per-user (no elevation needed). A helper script
+            // waits for the app to exit before launching the installer.
             int pid = Environment.ProcessId;
             string scriptPath = Path.Combine(tempDir, "install-update.cmd");
             string script = $"""

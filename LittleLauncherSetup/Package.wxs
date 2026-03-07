@@ -10,14 +10,14 @@
            Manufacturer="RyanEwen"
            Version="$(ProductVersion)"
            UpgradeCode="A1B2C3D4-E5F6-7890-ABCD-EF1234567890"
-           Scope="perMachine"
+           Scope="perUser"
            InstallerVersion="500">
 
     <MajorUpgrade DowngradeErrorMessage="A newer version of Little Launcher is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
-    <!-- Install to Program Files -->
-    <StandardDirectory Id="ProgramFiles6432Folder">
+    <!-- Install to LocalAppData\Little Launcher (per-user, no elevation needed) -->
+    <StandardDirectory Id="LocalAppDataFolder">
       <Directory Id="INSTALLFOLDER" Name="Little Launcher" />
     </StandardDirectory>
 
