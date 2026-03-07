@@ -12,13 +12,9 @@ jobs:
 
     strategy:
       matrix:
-        configuration: ["GitHub Release", "Release"]
         platform: [x64, ARM64]
 
     env:
-      SOLUTION_PATH: LittleLauncher.sln
-      WAP_PROJECT_PATH: LittleLauncherMSIX\LittleLauncherMSIX.wapproj
-      CONFIGURATION: ${{ matrix.configuration }}
       PLATFORM: ${{ matrix.platform }}
 
     steps:
@@ -30,9 +26,6 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v2
-
       # ── Regular build ──────────────────────────────────────────
       - name: Build (dotnet)
         run: dotnet build LittleLauncher/LittleLauncher.csproj -c Release -p:Platform=$env:PLATFORM
@@ -40,12 +33,11 @@ jobs:
       - name: Upload build output
         uses: actions/upload-artifact@v4
         with:
-          name: Build-${{ matrix.configuration == 'GitHub Release' && 'GitHub_Release' || matrix.configuration }}-${{ matrix.platform }}
+          name: Build-${{ matrix.platform }}
           path: LittleLauncher/bin/${{ matrix.platform }}/Release/net10.0-windows10.0.22000.0/
 
       # ── MSI build (WiX) ─────────────────────────────────────────
       - name: Build MSI installer
-        if: matrix.configuration == 'GitHub Release'
         run: |
           dotnet build LittleLauncherSetup\LittleLauncherSetup.wixproj `
             -p:Platform=$env:PLATFORM `
@@ -53,38 +45,10 @@ jobs:
             "-p:BuildOutputPath=$env:GITHUB_WORKSPACE\LittleLauncher\bin\$env:PLATFORM\Release\net10.0-windows10.0.22000.0"
 
       - name: Upload MSI artifact
-        if: matrix.configuration == 'GitHub Release'
         uses: actions/upload-artifact@v4
         with:
           name: MSI-${{ matrix.platform }}
           path: LittleLauncherSetup/bin/${{ matrix.platform }}/Release/LittleLauncherSetup.msi
-
-      # ── MSIX build ─────────────────────────────────────────────
-      - name: Decode signing certificate
-        run: |
-          $cert = [Convert]::FromBase64String("${{ secrets.MSIX_CERT_BASE64 }}")
-          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\cert.pfx", $cert)
-
-      - name: Restore NuGet packages
-        run: nuget restore $env:SOLUTION_PATH
-
-      - name: Build & Package (MSIX)
-        run: |
-          msbuild $env:WAP_PROJECT_PATH `
-            /p:Configuration=$env:CONFIGURATION `
-            /p:Platform=$env:PLATFORM `
-            /p:UapAppxPackageBuildMode=StoreUpload `
-            /p:AppxBundle=Never `
-            /p:AppxPackageDir="$env:GITHUB_WORKSPACE\AppxPackages\\" `
-            /p:AppxPackageSigningEnabled=true `
-            /p:PackageCertificateKeyFile="$env:RUNNER_TEMP\cert.pfx" `
-            /p:PackageCertificatePassword="${{ secrets.MSIX_CERT_PASSWORD }}"
-
-      - name: Upload MSIX bundle as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: MSIX-${{ matrix.configuration == 'GitHub Release' && 'GitHub_Release' || matrix.configuration }}-${{ matrix.platform }}
-          path: AppxPackages\*\
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -94,16 +58,10 @@ jobs:
       contents: write
 
     steps:
-      - name: Download MSIX artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: MSIX-GitHub_Release-*
-          path: artifacts/msix
-
       - name: Download portable build artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: Build-GitHub_Release-*
+          pattern: Build-*
           path: artifacts/build
 
       - name: Download MSI artifacts
@@ -115,13 +73,12 @@ jobs:
       - name: Collect release files
         run: |
           mkdir -p release
-          find artifacts/msix -name 'LittleLauncherMSIX_*.msix' -exec cp {} release/ \;
           for dir in artifacts/msi/*/; do
             arch=$(basename "$dir" | sed 's/MSI-//')
             cp "$dir"/*.msi "release/LittleLauncher-${arch}-Setup.msi"
           done
           for dir in artifacts/build/*/; do
-            arch=$(basename "$dir" | sed 's/Build-GitHub_Release-//')
+            arch=$(basename "$dir" | sed 's/Build-//')
             (cd "$dir" && zip -r "../../../release/LittleLauncher-${arch}-portable.zip" .)
           done
 
