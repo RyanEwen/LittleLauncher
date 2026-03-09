@@ -554,8 +554,6 @@ public sealed partial class MainWindow : Window
     {
         if ((int)msg == _wmShowFlyout && _wmShowFlyout != 0)
         {
-            // Update shortcut icons in case the user just pinned the flyout helper
-            UpdateShortcutIcons();
             DispatcherQueue.TryEnqueue(() => FlyoutWindow.Toggle(this, (int)wParam, (int)lParam));
             return IntPtr.Zero;
         }

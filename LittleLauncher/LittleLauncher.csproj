@@ -35,14 +35,30 @@
     <PackageReference Include="NLog" Version="6.1.1" />
   </ItemGroup>
 
-  <!-- Build the companion flyout exe and copy it to our output directory -->
+  <!-- Build the companion flyout exe and copy it to our output directory.
+       Release: AOT-publish for near-instant native startup.
+       Debug:   copy framework-dependent build for fast iteration. -->
   <ItemGroup>
     <ProjectReference Include="..\LauncherShortcut\LauncherShortcut.csproj">
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
     </ProjectReference>
   </ItemGroup>
 
-  <Target Name="CopyFlyoutExe" AfterTargets="Build">
+  <Target Name="PublishFlyoutExeAot" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
+    <PropertyGroup>
+      <_FlyoutRid Condition="'$(Platform)' == 'ARM64'">win-arm64</_FlyoutRid>
+      <_FlyoutRid Condition="'$(Platform)' != 'ARM64'">win-x64</_FlyoutRid>
+      <_FlyoutPublishDir>$(MSBuildThisFileDirectory)..\LauncherShortcut\bin\aot-publish\$(_FlyoutRid)\</_FlyoutPublishDir>
+    </PropertyGroup>
+    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\LauncherShortcut\LauncherShortcut.csproj&quot; -c Release -r $(_FlyoutRid) -o &quot;$(_FlyoutPublishDir)&quot;" />
+    <Copy SourceFiles="$(_FlyoutPublishDir)LittleLauncherFlyout.exe"
+          DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" />
+    <!-- Clean up stale managed files from previous Debug copies -->
+    <Delete Files="$(OutputPath)LittleLauncherFlyout.dll;$(OutputPath)LittleLauncherFlyout.deps.json;$(OutputPath)LittleLauncherFlyout.runtimeconfig.json"
+            Condition="Exists('$(OutputPath)LittleLauncherFlyout.dll')" />
+  </Target>
+
+  <Target Name="CopyFlyoutExeDebug" AfterTargets="Build" Condition="'$(Configuration)' == 'Debug'">
     <PropertyGroup>
       <FlyoutOutputDir>..\LauncherShortcut\bin\$(Platform)\$(Configuration)\net10.0-windows10.0.22000.0\</FlyoutOutputDir>
       <!-- Fallback when Platform resolves to AnyCPU (e.g. dotnet watch) -->
