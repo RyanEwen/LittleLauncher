@@ -3,7 +3,7 @@
 
   <!-- Version is injected by the build: -d ProductVersion=1.0.0.0 -->
   <?ifndef ProductVersion ?>
-    <?define ProductVersion = "1.2.1.0" ?>
+    <?define ProductVersion = "1.3.0.0" ?>
   <?endif ?>
 
   <Package Name="Little Launcher"
@@ -13,7 +13,8 @@
            Scope="perUser"
            InstallerVersion="500">
 
-    <MajorUpgrade DowngradeErrorMessage="A newer version of Little Launcher is already installed." />
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of Little Launcher is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
     <!-- Install to LocalAppData\Little Launcher (per-user, no elevation needed) -->
@@ -53,6 +54,16 @@
     </Feature>
 
     <Icon Id="AppIcon" SourceFile="$(BuildOutputPath)\Resources\LittleLauncher.ico" />
+
+    <!-- Launch the app after install or upgrade (not on uninstall or repair) -->
+    <CustomAction Id="LaunchApp"
+                  Directory="INSTALLFOLDER"
+                  ExeCommand="[INSTALLFOLDER]LittleLauncher.exe"
+                  Impersonate="yes"
+                  Return="asyncNoWait" />
+    <InstallExecuteSequence>
+      <Custom Action="LaunchApp" After="InstallFinalize" Condition="NOT REMOVE" />
+    </InstallExecuteSequence>
 
   </Package>
 </Wix>

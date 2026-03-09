@@ -191,28 +191,23 @@ public sealed partial class MainWindow : Window
 
     /// <summary>
     /// Resolves the tray icon based on the current TrayIconMode setting.
-    /// Mode: 0 = Pin (default), 1 = Star, 2 = Heart, 3 = Lightning, 4 = Search, 5 = Globe, 6 = Custom.
-    /// All presets auto-detect OS theme for light/dark foreground color.
     /// </summary>
     private static System.Drawing.Icon? ResolveTrayIcon()
     {
-        int mode = SettingsManager.Current.TrayIconMode;
-
         try
         {
-            if (mode == 12)
-                return LoadCustomIcon(SettingsManager.Current.CustomTrayIconPath);
-
-            if (mode >= 6 && GlyphPresets.ContainsKey(mode))
-                return RenderGlyphPresetIcon(mode);
-
-            return RenderPresetIcon(mode);
+            using var bitmap = ResolveBaseIconBitmap();
+            if (bitmap != null)
+                return BitmapToIcon(bitmap);
         }
         catch (Exception ex)
         {
-            Logger.Warn(ex, "Failed to load tray icon for mode {Mode}, falling back to Blue", mode);
-            return RenderPresetIcon(0);
+            Logger.Warn(ex, "Failed to resolve tray icon, falling back to Blue");
         }
+
+        // Last-resort fallback: load the embedded exe icon
+        string fallbackIco = Path.Combine(AppContext.BaseDirectory, "Resources", "LittleLauncher.ico");
+        return File.Exists(fallbackIco) ? new System.Drawing.Icon(fallbackIco, 64, 64) : null;
     }
 
     /// <summary>
@@ -242,45 +237,63 @@ public sealed partial class MainWindow : Window
     };
 
     /// <summary>
-    /// Loads a preset icon PNG from the app directory and converts to a multi-resolution ICO.
-    /// Preserves the original composition (no trimming).
+    /// Single source of truth for rendering the current app icon as a 256×256 bitmap.
+    /// All icon surfaces (tray, shortcuts, settings window) derive from this.
     /// </summary>
-    private static System.Drawing.Icon? RenderPresetIcon(int mode)
+    private static System.Drawing.Bitmap? ResolveBaseIconBitmap()
     {
-        if (!PresetIcons.TryGetValue(mode, out var name))
-            name = PresetIcons[0];
+        int mode = SettingsManager.Current.TrayIconMode;
 
-        string pngPath = Path.Combine(AppContext.BaseDirectory, "Resources", "AppIcons", $"{name}.png");
-        if (!File.Exists(pngPath))
+        try
         {
-            Logger.Warn("Preset icon PNG not found: {Path}", pngPath);
-            return null;
+            // Custom user image (mode 12)
+            if (mode == 12)
+            {
+                string path = SettingsManager.Current.CustomTrayIconPath;
+                if (!string.IsNullOrEmpty(path) && File.Exists(path))
+                {
+                    if (path.EndsWith(".ico", StringComparison.OrdinalIgnoreCase))
+                    {
+                        using var ico = new System.Drawing.Icon(path, 256, 256);
+                        return new System.Drawing.Bitmap(ico.ToBitmap(), 256, 256);
+                    }
+                    using var original = new System.Drawing.Bitmap(path);
+                    return TrimAndResizeTo256(original);
+                }
+            }
+
+            // Glyph presets (modes 6–11)
+            if (mode >= 6 && GlyphPresets.TryGetValue(mode, out var preset))
+            {
+                bool dark = ThemeManager.IsDarkTheme();
+                var fg = dark ? System.Drawing.Color.White : System.Drawing.Color.Black;
+                return RenderGlyphBitmap(preset.Glyph, fg);
+            }
+
+            // Color presets (modes 0–5)
+            if (!PresetIcons.TryGetValue(mode, out var name))
+                name = PresetIcons[0];
+            string pngPath = Path.Combine(AppContext.BaseDirectory, "Resources", "AppIcons", $"{name}.png");
+            if (File.Exists(pngPath))
+            {
+                using var original = new System.Drawing.Bitmap(pngPath);
+                return TrimAndResizeTo256(original);
+            }
         }
-
-        using var original = new System.Drawing.Bitmap(pngPath);
-        return TrimAndResizeToBitmapIcon(original);
+        catch (Exception ex)
+        {
+            Logger.Warn(ex, "Failed to resolve base icon bitmap for mode {Mode}", mode);
+        }
+        return null;
     }
 
     /// <summary>
-    /// Renders a glyph preset icon (theme-aware: white on dark, black on light).
+    /// Renders a Segoe Fluent Icons glyph as a 256×256 bitmap.
     /// </summary>
-    private static System.Drawing.Icon? RenderGlyphPresetIcon(int mode)
-    {
-        if (!GlyphPresets.TryGetValue(mode, out var preset))
-            return RenderPresetIcon(0);
-
-        bool dark = Classes.ThemeManager.IsDarkTheme();
-        var fg = dark ? System.Drawing.Color.White : System.Drawing.Color.Black;
-        return RenderGlyphIcon(preset.Glyph, fg);
-    }
-
-    /// <summary>
-    /// Renders a single Segoe Fluent Icons glyph with a specific foreground color.
-    /// </summary>
-    private static System.Drawing.Icon? RenderGlyphIcon(char glyph, System.Drawing.Color fg)
+    private static System.Drawing.Bitmap RenderGlyphBitmap(char glyph, System.Drawing.Color fg)
     {
         const int size = 256;
-        using var bitmap = new System.Drawing.Bitmap(size, size);
+        var bitmap = new System.Drawing.Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
         using (var g = System.Drawing.Graphics.FromImage(bitmap))
         {
             g.Clear(System.Drawing.Color.Transparent);
@@ -292,39 +305,9 @@ public sealed partial class MainWindow : Window
             using var fmt = new System.Drawing.StringFormat(System.Drawing.StringFormat.GenericTypographic);
             fmt.Alignment = System.Drawing.StringAlignment.Center;
             fmt.LineAlignment = System.Drawing.StringAlignment.Center;
-            var rect = new System.Drawing.RectangleF(0, 0, size, size);
-            g.DrawString(glyph.ToString(), font, brush, rect, fmt);
+            g.DrawString(glyph.ToString(), font, brush, new System.Drawing.RectangleF(0, 0, size, size), fmt);
         }
-
-        return BitmapToIcon(bitmap);
-    }
-
-    private static System.Drawing.Icon? LoadCustomIcon(string path)
-    {
-        if (string.IsNullOrEmpty(path) || !File.Exists(path))
-            return RenderPresetIcon(0);
-
-        if (path.EndsWith(".ico", StringComparison.OrdinalIgnoreCase))
-            return new System.Drawing.Icon(path, 64, 64);
-
-        return LoadIconFromImage(path);
-    }
-
-    private static System.Drawing.Icon? LoadIconFromImage(string path)
-    {
-        if (!File.Exists(path)) return null;
-        using var original = new System.Drawing.Bitmap(path);
-        return TrimAndResizeToBitmapIcon(original);
-    }
-
-    /// <summary>
-    /// Trims transparent borders from a bitmap and redraws it centered into a
-    /// 256×256 canvas, then converts to a multi-resolution ICO.
-    /// </summary>
-    private static System.Drawing.Icon TrimAndResizeToBitmapIcon(System.Drawing.Bitmap original)
-    {
-        using var resized = TrimAndResizeTo256(original);
-        return BitmapToIcon(resized);
+        return bitmap;
     }
 
     /// <summary>
@@ -456,35 +439,13 @@ public sealed partial class MainWindow : Window
             Directory.CreateDirectory(appDataDir);
             string icoPath = Path.Combine(appDataDir, "app-icon.ico");
 
-            int mode = SettingsManager.Current.TrayIconMode;
+            using var bitmap = ResolveBaseIconBitmap();
+            if (bitmap == null) return null;
 
-            // For mode 12 (Custom) with an .ico file, just copy it directly.
-            if (mode == 12)
-            {
-                string customPath = SettingsManager.Current.CustomTrayIconPath;
-                if (!string.IsNullOrEmpty(customPath) && File.Exists(customPath))
-                {
-                    if (customPath.EndsWith(".ico", StringComparison.OrdinalIgnoreCase))
-                    {
-                        File.Copy(customPath, icoPath, overwrite: true);
-                        return icoPath;
-                    }
-                    SavePngAsIco(customPath, icoPath);
-                    return icoPath;
-                }
-            }
-
-            // For preset modes, render the icon to .ico.
-            var icon = mode >= 6 && GlyphPresets.ContainsKey(mode)
-                ? RenderGlyphPresetIcon(mode)
-                : RenderPresetIcon(mode);
-            if (icon != null)
-            {
-                using var stream = new FileStream(icoPath, FileMode.Create, FileAccess.Write);
-                icon.Save(stream);
-                icon.Dispose();
-                return icoPath;
-            }
+            using var icon = BitmapToIcon(bitmap);
+            using var stream = new FileStream(icoPath, FileMode.Create, FileAccess.Write);
+            icon.Save(stream);
+            return icoPath;
         }
         catch (Exception ex)
         {
@@ -548,96 +509,6 @@ public sealed partial class MainWindow : Window
             Logger.Warn(ex, "Failed to save settings icon to AppData");
         }
         return null;
-    }
-
-    /// <summary>
-    /// Returns the current app icon as a 256×256 bitmap (before ICO conversion).
-    /// </summary>
-    private static System.Drawing.Bitmap? ResolveBaseIconBitmap()
-    {
-        int mode = SettingsManager.Current.TrayIconMode;
-
-        try
-        {
-            if (mode == 12)
-            {
-                string path = SettingsManager.Current.CustomTrayIconPath;
-                if (!string.IsNullOrEmpty(path) && File.Exists(path))
-                {
-                    using var original = new System.Drawing.Bitmap(path);
-                    return TrimAndResizeTo256(original);
-                }
-            }
-
-            if (mode >= 6 && GlyphPresets.TryGetValue(mode, out var preset))
-            {
-                // Render glyph to bitmap directly (always use dark bg style for overlay base)
-                bool dark = ThemeManager.IsDarkTheme();
-                var fg = dark ? System.Drawing.Color.White : System.Drawing.Color.Black;
-                const int size = 256;
-                var bitmap = new System.Drawing.Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-                using (var g = System.Drawing.Graphics.FromImage(bitmap))
-                {
-                    g.Clear(System.Drawing.Color.Transparent);
-                    g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
-                    g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
-                    using var font = new System.Drawing.Font("Segoe Fluent Icons", 240f, System.Drawing.GraphicsUnit.Pixel);
-                    using var brush = new System.Drawing.SolidBrush(fg);
-                    using var fmt = new System.Drawing.StringFormat(System.Drawing.StringFormat.GenericTypographic);
-                    fmt.Alignment = System.Drawing.StringAlignment.Center;
-                    fmt.LineAlignment = System.Drawing.StringAlignment.Center;
-                    g.DrawString(preset.Glyph.ToString(), font, brush, new System.Drawing.RectangleF(0, 0, size, size), fmt);
-                }
-                return bitmap;
-            }
-
-            // Image preset
-            if (!PresetIcons.TryGetValue(mode, out var name))
-                name = PresetIcons[0];
-            string pngPath = Path.Combine(AppContext.BaseDirectory, "Resources", "AppIcons", $"{name}.png");
-            if (File.Exists(pngPath))
-            {
-                using var original = new System.Drawing.Bitmap(pngPath);
-                return TrimAndResizeTo256(original);
-            }
-        }
-        catch (Exception ex)
-        {
-            Logger.Warn(ex, "Failed to resolve base icon bitmap for mode {Mode}", mode);
-        }
-        return null;
-    }
-
-    /// <summary>
-    /// Converts a PNG (or other image) to a single-image .ico file.
-    /// </summary>
-    private static void SavePngAsIco(string imagePath, string icoPath)
-    {
-        using var bitmap = new System.Drawing.Bitmap(imagePath);
-        using var stream = new FileStream(icoPath, FileMode.Create, FileAccess.Write);
-
-        // Write ICO header
-        using var bw = new BinaryWriter(stream);
-        bw.Write((short)0);           // reserved
-        bw.Write((short)1);           // type: icon
-        bw.Write((short)1);           // image count
-
-        // Write ICO directory entry
-        using var pngStream = new MemoryStream();
-        bitmap.Save(pngStream, ImageFormat.Png);
-        byte[] pngBytes = pngStream.ToArray();
-
-        bw.Write((byte)(bitmap.Width >= 256 ? 0 : bitmap.Width));
-        bw.Write((byte)(bitmap.Height >= 256 ? 0 : bitmap.Height));
-        bw.Write((byte)0);            // color palette
-        bw.Write((byte)0);            // reserved
-        bw.Write((short)1);           // color planes
-        bw.Write((short)32);          // bits per pixel
-        bw.Write(pngBytes.Length);    // image data size
-        bw.Write(22);                 // offset to image data (6 header + 16 entry)
-
-        // Write PNG data
-        bw.Write(pngBytes);
     }
 
     /// <summary>
@@ -764,6 +635,10 @@ public sealed partial class MainWindow : Window
         {
             string? iconPath = SaveResolvedIconToAppData();
 
+            // Tell the shell the .ico file content changed so it invalidates cached copies
+            if (iconPath != null)
+                NotifyShellItemUpdated(iconPath);
+
             string newIconLocation = iconPath != null
                 ? $"{iconPath},0"
                 : $"{Environment.ProcessPath},0";
@@ -773,7 +648,10 @@ public sealed partial class MainWindow : Window
                 Environment.GetFolderPath(Environment.SpecialFolder.StartMenu),
                 "Programs", "Little Launcher.lnk");
             if (File.Exists(startMenuLnk))
+            {
                 UpdateShortcutIconLocation(startMenuLnk, newIconLocation);
+                NotifyShellItemUpdated(startMenuLnk);
+            }
 
             // Pinned taskbar shortcuts — update ones that target the flyout companion exe
             string taskbarPinDir = Path.Combine(
@@ -789,17 +667,31 @@ public sealed partial class MainWindow : Window
                 foreach (string lnk in Directory.GetFiles(taskbarPinDir, "*.lnk"))
                 {
                     if (IsFlyoutShortcut(lnk))
+                    {
                         UpdateShortcutIconLocation(lnk, flyoutIconLocation);
+                        NotifyShellItemUpdated(lnk);
+                    }
                 }
             }
 
-            // Notify the shell that shortcuts changed so it refreshes cached icons
-            SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, IntPtr.Zero, IntPtr.Zero);
+            // Global broadcast so the shell refreshes any remaining cached icons
+            SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST | SHCNF_FLUSHNOWAIT, IntPtr.Zero, IntPtr.Zero);
         }
         catch (Exception ex)
         {
             Logger.Warn(ex, "Failed to update shortcut icons");
         }
+    }
+
+    /// <summary>
+    /// Sends a targeted SHCNE_UPDATEITEM notification for a specific file path so the
+    /// shell invalidates its cached icon for that file.
+    /// </summary>
+    private static void NotifyShellItemUpdated(string path)
+    {
+        IntPtr pathPtr = System.Runtime.InteropServices.Marshal.StringToHGlobalUni(path);
+        try { SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATHW, pathPtr, IntPtr.Zero); }
+        finally { System.Runtime.InteropServices.Marshal.FreeHGlobal(pathPtr); }
     }
 
     /// <summary>

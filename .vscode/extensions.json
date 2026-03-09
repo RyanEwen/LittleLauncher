@@ -1,0 +1,9 @@
+{
+	"recommendations": [
+		"ms-vscode.powershell",
+		"ms-dotnettools.csdevkit",
+		"ms-dotnettools.csharp",
+		"ms-vscode.cpptools-themes",
+		"ms-dotnettools.vscode-dotnet-runtime"
+	]
+}

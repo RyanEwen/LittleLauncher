@@ -4,7 +4,7 @@
         {
             "label": "stop-app",
             "type": "shell",
-            "command": "Stop-Process -Name LittleLauncher -Force -ErrorAction SilentlyContinue",
+            "command": "Stop-Process -Name LittleLauncher -Force -ErrorAction SilentlyContinue; exit 0",
             "problemMatcher": [],
             "presentation": {
                 "reveal": "silent"
@@ -17,7 +17,8 @@
             "args": [
                 "build",
                 "${workspaceFolder}/LittleLauncher/LittleLauncher.csproj",
-                "-c", "Debug",
+                "-c",
+                "Debug",
                 "-p:Platform=x64"
             ],
             "dependsOn": "stop-app",
@@ -30,7 +31,8 @@
             "args": [
                 "build",
                 "${workspaceFolder}/LittleLauncher/LittleLauncher.csproj",
-                "-c", "Debug",
+                "-c",
+                "Debug",
                 "-p:Platform=ARM64"
             ],
             "dependsOn": "stop-app",
@@ -47,7 +49,8 @@
             "args": [
                 "build",
                 "${workspaceFolder}/LittleLauncher/LittleLauncher.csproj",
-                "-c", "Release",
+                "-c",
+                "Release",
                 "-p:Platform=x64"
             ],
             "dependsOn": "stop-app",
@@ -60,7 +63,8 @@
             "args": [
                 "build",
                 "${workspaceFolder}/LittleLauncher/LittleLauncher.csproj",
-                "-c", "Release",
+                "-c",
+                "Release",
                 "-p:Platform=ARM64"
             ],
             "dependsOn": "stop-app",
@@ -86,7 +90,9 @@
             "command": "Start-Process '${workspaceFolder}/LittleLauncher/bin/x64/Debug/net10.0-windows10.0.22000.0/LittleLauncher.exe'",
             "dependsOn": "build-x64",
             "problemMatcher": [],
-            "presentation": { "reveal": "silent" }
+            "presentation": {
+                "reveal": "silent"
+            }
         },
         {
             "label": "run-arm64",
@@ -94,7 +100,9 @@
             "command": "Start-Process '${workspaceFolder}/LittleLauncher/bin/ARM64/Debug/net10.0-windows10.0.22000.0/LittleLauncher.exe'",
             "dependsOn": "build-arm64",
             "problemMatcher": [],
-            "presentation": { "reveal": "silent" }
+            "presentation": {
+                "reveal": "silent"
+            }
         },
         {
             "label": "watch-x64",
@@ -102,8 +110,11 @@
             "type": "process",
             "args": [
                 "watch",
-                "--project", "${workspaceFolder}/LittleLauncher/LittleLauncher.csproj",
-                "run", "-c", "Debug",
+                "--project",
+                "${workspaceFolder}/LittleLauncher/LittleLauncher.csproj",
+                "run",
+                "-c",
+                "Debug",
                 "-p:Platform=x64"
             ],
             "problemMatcher": "$msCompile",
@@ -119,8 +130,11 @@
             "type": "process",
             "args": [
                 "watch",
-                "--project", "${workspaceFolder}/LittleLauncher/LittleLauncher.csproj",
-                "run", "-c", "Debug",
+                "--project",
+                "${workspaceFolder}/LittleLauncher/LittleLauncher.csproj",
+                "run",
+                "-c",
+                "Debug",
                 "-p:Platform=ARM64"
             ],
             "problemMatcher": "$msCompile",

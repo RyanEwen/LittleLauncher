@@ -30,18 +30,47 @@ public partial class HomePage : Page
 
     private void LoadAppIcon()
     {
-        string icoPath = Path.Combine(
+        // Prefer the source PNG/image for crisp rendering — BitmapImage handles PNG
+        // much better than ICO on high-DPI (WIC's ICO decoder may pick a low-res frame).
+        string? source = ResolveAppIconSource();
+        if (source == null) return;
+
+        var bmp = new BitmapImage();
+        bmp.DecodePixelWidth = 256;
+        bmp.DecodePixelHeight = 256;
+        bmp.UriSource = new Uri(source);
+        AppIcon.Source = bmp;
+    }
+
+    /// <summary>
+    /// Returns the best image source path for the current tray icon mode.
+    /// Prefers native PNG/image files over the generated ICO.
+    /// </summary>
+    private static string? ResolveAppIconSource()
+    {
+        int mode = SettingsManager.Current.TrayIconMode;
+
+        // Preset color icons (modes 0–5): load the source PNG directly
+        string[] presetNames = ["Blue", "Green", "Teal", "Red", "Orange", "Purple"];
+        if (mode >= 0 && mode < presetNames.Length)
+        {
+            string png = Path.Combine(AppContext.BaseDirectory, "Resources", "AppIcons", $"{presetNames[mode]}.png");
+            if (File.Exists(png)) return png;
+        }
+
+        // Custom icon (mode 12): load the user's original file
+        if (mode == 12)
+        {
+            string custom = SettingsManager.Current.CustomTrayIconPath;
+            if (!string.IsNullOrEmpty(custom) && File.Exists(custom))
+                return custom;
+        }
+
+        // Glyph presets and fallback: use the generated ICO
+        string ico = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "LittleLauncher", "app-icon.ico");
-        if (File.Exists(icoPath))
-        {
-            var bmp = new BitmapImage();
-            // Decode at full resolution so high-DPI displays get a crisp downscale
-            bmp.DecodePixelWidth = 256;
-            bmp.DecodePixelHeight = 256;
-            bmp.UriSource = new Uri(icoPath);
-            AppIcon.Source = bmp;
-        }
+        return File.Exists(ico) ? ico : null;
     }
 
     private async Task CheckForUpdateAsync()

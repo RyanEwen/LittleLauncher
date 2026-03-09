@@ -6,7 +6,6 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.UI.Windowing;
-using System.Drawing.Imaging;
 using WinRT.Interop;
 using static LittleLauncher.Classes.NativeMethods;
 
@@ -23,8 +22,7 @@ public sealed partial class SettingsWindow : Window
     private readonly MainWindow? _owner;
     private IntPtr _hIconSmall;
     private IntPtr _hIconBig;
-    private IntPtr _hOverlayIcon;
-    private ITaskbarList3? _taskbarList;
+
 
     public SettingsWindow(MainWindow owner)
     {
@@ -89,10 +87,6 @@ public sealed partial class SettingsWindow : Window
                 SendMessage(h, WM_SETICON, ICON_BIG, _hIconBig);
             }
         };
-
-        // Taskbar overlay badge (gear icon) — uses the Shell ITaskbarList3 API
-        // which works regardless of WinUI's internal icon management.
-        SetTaskbarOverlay(hwnd);
 
         Closed += SettingsWindow_Closed;
     }
@@ -185,64 +179,6 @@ public sealed partial class SettingsWindow : Window
         ApplyWindowIcon(hwnd, settingsIcon);
         SetAppWindowIcon(appWindow, settingsIcon);
         LoadTitleBarIcon(settingsIcon);
-        SetTaskbarOverlay(hwnd);
-    }
-
-    /// <summary>
-    /// Sets a gear badge overlay on the taskbar button via the Shell ITaskbarList3 API.
-    /// This is the standard Windows mechanism for taskbar overlays and works
-    /// independently of WinUI's icon management (bypasses WindowsAppSDK#2730).
-    /// </summary>
-    private void SetTaskbarOverlay(IntPtr hwnd)
-    {
-        try
-        {
-            _taskbarList ??= (ITaskbarList3)new TaskbarList();
-            _taskbarList.HrInit();
-
-            // Clean up previous overlay HICON
-            if (_hOverlayIcon != IntPtr.Zero)
-            {
-                DestroyIcon(_hOverlayIcon);
-                _hOverlayIcon = IntPtr.Zero;
-            }
-
-            _hOverlayIcon = CreateGearOverlayHIcon();
-            if (_hOverlayIcon != IntPtr.Zero)
-                _taskbarList.SetOverlayIcon(hwnd, _hOverlayIcon, "Settings");
-        }
-        catch (Exception ex)
-        {
-            Logger.Warn(ex, "Failed to set taskbar overlay icon");
-        }
-    }
-
-    /// <summary>
-    /// Renders a small gear glyph on a dark circle as an HICON for taskbar overlay use.
-    /// </summary>
-    private static IntPtr CreateGearOverlayHIcon()
-    {
-        const int size = 20;
-        using var bitmap = new System.Drawing.Bitmap(size, size, PixelFormat.Format32bppArgb);
-        using (var g = System.Drawing.Graphics.FromImage(bitmap))
-        {
-            g.Clear(System.Drawing.Color.Transparent);
-            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
-            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
-
-            // Dark circle background for contrast
-            using var bgBrush = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(220, 30, 30, 30));
-            g.FillEllipse(bgBrush, 0, 0, size - 1, size - 1);
-
-            // Gear glyph (Segoe Fluent Icons \uE713)
-            using var font = new System.Drawing.Font("Segoe Fluent Icons", size * 0.6f, System.Drawing.GraphicsUnit.Pixel);
-            using var brush = new System.Drawing.SolidBrush(System.Drawing.Color.White);
-            using var fmt = new System.Drawing.StringFormat(System.Drawing.StringFormat.GenericTypographic);
-            fmt.Alignment = System.Drawing.StringAlignment.Center;
-            fmt.LineAlignment = System.Drawing.StringAlignment.Center;
-            g.DrawString("\uE713", font, brush, new System.Drawing.RectangleF(0, 0, size, size), fmt);
-        }
-        return bitmap.GetHicon();
     }
 
     /// <summary>

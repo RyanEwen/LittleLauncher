@@ -14,7 +14,7 @@ Little Launcher uses a flat upright rocket as its identity icon. Users can chang
 | **System tray** | `ResolveTrayIcon()` → preset PNG, glyph, or custom image | Yes (`TrayIconMode`) |
 | **Pinned taskbar shortcut** | `app-icon.ico` in `%AppData%\LittleLauncher\` | Yes (follows `TrayIconMode`) |
 | **Settings window titlebar** | `settings-icon.ico` (app icon + gear overlay) | Yes (follows `TrayIconMode`) |
-| **Settings window taskbar entry** | `settings-icon.ico` via `WM_SETICON` + `AppWindow.SetIcon(IconId)` + `ITaskbarList3.SetOverlayIcon` gear badge | Yes (follows `TrayIconMode`) |
+| **Settings window taskbar entry** | `settings-icon.ico` via `WM_SETICON` + `AppWindow.SetIcon(IconId)` | Yes (follows `TrayIconMode`) |
 | **Settings window Alt-Tab** | `settings-icon.ico` via `AppWindow.SetIcon(IconId)` | Yes (follows `TrayIconMode`) |
 | **Start menu shortcut** | `app-icon.ico` via `GetShortcutIconLocation()` | Yes (follows `TrayIconMode`) |
 | **Exe embedded icon** | `Resources/LittleLauncher.ico` (compiled into exe) | No — always Blue rocket |
@@ -23,7 +23,7 @@ Little Launcher uses a flat upright rocket as its identity icon. Users can chang
 ## Key Files
 
 - **`Resources/LittleLauncher.ico`** — Multi-resolution Blue rocket (16–256px). Embedded into the exe at build time. This is the fallback icon for all surfaces. Generated from `Resources/AppIcons/Blue.png`.
-- **`Resources/AppIcons/*.png`** — Preset icon PNGs (Blue, Green, Teal, Red, Orange, Purple). Flat upright rockets stretched 20% horizontally for a wider profile. Copied to output at build time. Loaded at runtime by `RenderPresetIcon()`.
+- **`Resources/AppIcons/*.png`** — Preset icon PNGs (Blue, Green, Teal, Red, Orange, Purple). Flat upright rockets stretched 20% horizontally for a wider profile. Copied to output at build time. Loaded at runtime by `ResolveBaseIconBitmap()`.
 - **`%AppData%\LittleLauncher\app-icon.ico`** — Runtime-generated icon matching the current `TrayIconMode`. Written by `SaveResolvedIconToAppData()`. Used by shortcuts and window icons.
 - **`%AppData%\LittleLauncher\settings-icon.ico`** — Runtime-generated icon: the current app icon composited with a gear glyph overlay (dark circle + white gear in bottom-right corner). Written by `SaveSettingsIconToAppData()`. Used by the Settings window.
 
@@ -50,13 +50,27 @@ Glyph presets (6–11) render in black (light theme) or white (dark theme) and u
 
 ## How Icon Updates Flow
 
+All icon surfaces derive from a single source of truth: `ResolveBaseIconBitmap()`, which returns a 256×256 `System.Drawing.Bitmap`.
+
 1. User changes `TrayIconMode` in Settings → `OnTrayIconModeChanged` fires
 2. `ApplyTrayIconChange()` → `MainWindow.UpdateTrayIcon()`
-3. `UpdateTrayIcon()` calls `ResolveTrayIcon()` (loads preset PNG, glyph, or custom file) → sets `nIcon.Icon`
-4. `UpdateTrayIcon()` calls `UpdateShortcutIcons()` → `SaveResolvedIconToAppData()` writes `app-icon.ico`
-5. `UpdateTrayIcon()` calls `SaveSettingsIconToAppData()` → writes `settings-icon.ico` (app icon + gear overlay)
+3. `UpdateTrayIcon()` calls `ResolveTrayIcon()` → `ResolveBaseIconBitmap()` → `BitmapToIcon()` → sets `nIcon.Icon`
+4. `UpdateTrayIcon()` calls `UpdateShortcutIcons()` → `SaveResolvedIconToAppData()` → `ResolveBaseIconBitmap()` → `BitmapToIcon()` → writes `app-icon.ico`
+5. `UpdateTrayIcon()` calls `SaveSettingsIconToAppData()` → `ResolveBaseIconBitmap()` → gear overlay → `BitmapToIcon()` → writes `settings-icon.ico`
 6. `UpdateShortcutIcons()` updates pinned taskbar `.lnk` files that target `LittleLauncherFlyout.exe`
 7. `SettingsWindow.RefreshIcon()` reloads `settings-icon.ico` into titlebar, taskbar, and overlay
+
+### Key rendering methods
+
+| Method | Purpose |
+|---|---|
+| `ResolveBaseIconBitmap()` | Single source of truth — returns 256×256 bitmap for any `TrayIconMode` |
+| `RenderGlyphBitmap()` | Renders a Segoe Fluent Icons glyph to 256×256 bitmap (called by `ResolveBaseIconBitmap` for modes 6–11) |
+| `TrimAndResizeTo256()` | Trims transparent padding, centers on 256×256 canvas (called for presets + custom images) |
+| `BitmapToIcon()` | Converts a bitmap to multi-resolution ICO (16–256px) |
+| `ResolveTrayIcon()` | `ResolveBaseIconBitmap()` → `BitmapToIcon()` |
+| `SaveResolvedIconToAppData()` | `ResolveBaseIconBitmap()` → `BitmapToIcon()` → write file |
+| `SaveSettingsIconToAppData()` | `ResolveBaseIconBitmap()` → gear overlay → `BitmapToIcon()` → write file |
 
 ## Settings Window Icon Strategy
 
@@ -67,8 +81,7 @@ windows in the same process as the exe's embedded icon. The workaround uses thre
    taskbar group via the Shell `IPropertyStore` COM API, so the taskbar treats it independently.
 2. **`AppWindow.SetIcon(IconId)`** via `GetIconIdFromIcon` interop — sets the app-level icon for
    Alt-Tab and the window's identity.
-3. **`ITaskbarList3.SetOverlayIcon`** — adds a gear badge overlay on the taskbar button.
-4. **`WM_SETICON`** (ICON_SMALL + ICON_BIG) — sets the Win32 window icon, re-sent on `Activated`
+3. **`WM_SETICON`** (ICON_SMALL + ICON_BIG) — sets the Win32 window icon, re-sent on `Activated`
    to counteract WinUI's framework overrides.
 
 ## Adding a New Preset Icon
@@ -76,7 +89,7 @@ windows in the same process as the exe's embedded icon. The workaround uses thre
 1. Add the PNG file to `Resources/AppIcons/` (transparent background, square)
 2. Add entry to `PresetIcons` dictionary in `MainWindow.xaml.cs` with the next mode number
 3. Add a `ComboBoxItem` with colored `Ellipse` + `TextBlock` in `SystemPage.xaml` (before `Custom...`)
-4. Bump the Custom mode number in: `ResolveTrayIcon()`, `SaveResolvedIconToAppData()`, `SystemPage.xaml.cs` (`UpdateCustomIconCardVisibility`), and `UserSettings.cs` (`OnCustomTrayIconPathChanged`)
+4. Bump the Custom mode number in: `ResolveBaseIconBitmap()`, `SystemPage.xaml.cs` (`UpdateCustomIconCardVisibility`), and `UserSettings.cs` (`OnCustomTrayIconPathChanged`)
 5. Add `<Content Include="Resources/AppIcons/NewColor.png">` to `.csproj` (or use the existing `*.png` glob)
 6. Update `TrayIconMode` comment in `UserSettings.cs`
 
