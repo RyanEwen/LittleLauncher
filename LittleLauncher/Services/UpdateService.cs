@@ -146,6 +146,7 @@ public static class UpdateService
             // waits for the app to exit before launching the installer.
             int pid = Environment.ProcessId;
             string scriptPath = Path.Combine(tempDir, "install-update.cmd");
+            string exePath = Environment.ProcessPath!;
             string script = $"""
                 @echo off
                 echo Waiting for Little Launcher to exit...
@@ -156,7 +157,9 @@ public static class UpdateService
                     goto wait
                 )
                 echo Installing update...
-                start "" msiexec /i "{msiPath}"
+                msiexec /i "{msiPath}" /passive
+                echo Launching Little Launcher...
+                start "" "{exePath}" --settings
                 """;
             await File.WriteAllTextAsync(scriptPath, script, cancellationToken);
 

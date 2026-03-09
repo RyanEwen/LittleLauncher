@@ -30,7 +30,11 @@ The installer version comes from `Directory.Build.props` → `LittleLauncherSetu
 
 ## Upgrade behavior
 
-`MajorUpgrade` handles version upgrades automatically — the old version is uninstalled before the new one is installed. `UpgradeCode` must never change.
+`MajorUpgrade` with `AllowSameVersionUpgrades="yes"` handles upgrades and reinstalls — the old version is uninstalled before the new one is installed, even when the version number is unchanged. `UpgradeCode` must never change.
+
+## Auto-launch after install
+
+A `CustomAction` in `Package.wxs` launches `LittleLauncher.exe` after `InstallFinalize` (condition `NOT REMOVE`). It uses `asyncNoWait` so the installer doesn't block. This ensures the app is running in the tray immediately after a fresh install or upgrade.
 
 ## Per-user install notes
 
@@ -40,4 +44,9 @@ The installer version comes from `Directory.Build.props` → `LittleLauncherSetu
 
 ## Auto-update flow
 
-`UpdateService` downloads the MSI to a temp folder, removes the Zone.Identifier ADS (Mark of the Web), then spawns a `.cmd` script that waits for the app to exit before running `msiexec /i`. The app exits after a short delay to allow the script to start.
+`UpdateService` downloads the MSI to a temp folder, removes the Zone.Identifier ADS (Mark of the Web), then spawns a `.cmd` helper script:
+
+1. Script waits for the current app process to exit
+2. Runs `msiexec /i <path> /passive` — installs silently with progress bar (no user interaction; they already consented in-app)
+3. MSI's `CustomAction` auto-launches the app in the tray
+4. Script launches `LittleLauncher.exe --settings` — the single-instance mutex detects the running app and sends `LittleLauncher_ShowSettings`, re-opening the Settings window
