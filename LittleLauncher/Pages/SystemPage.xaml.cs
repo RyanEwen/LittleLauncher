@@ -56,7 +56,7 @@ public partial class SystemPage : Page
             if (enable)
             {
                 if (File.Exists(executablePath))
-                    key.SetValue(appName, executablePath);
+                    key.SetValue(appName, $"\"{executablePath}\" --silent");
                 else
                     throw new FileNotFoundException("Application executable not found.");
             }
@@ -206,9 +206,7 @@ public partial class SystemPage : Page
         if (file != null)
         {
             // Copy the icon to AppData so the path survives across sessions
-            string appDataDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "LittleLauncher");
+            string appDataDir = MainWindow.GetPhysicalAppDataDir();
             Directory.CreateDirectory(appDataDir);
 
             string ext = Path.GetExtension(file.Path);

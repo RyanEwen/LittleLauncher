@@ -1,6 +1,7 @@
 using LittleLauncher.Classes.Settings;
 using LittleLauncher.Models;
 using LittleLauncher.Services;
+using LittleLauncher.Windows;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using System.IO;
@@ -172,6 +173,9 @@ public partial class SyncPage : Page
         ShowStatus("Downloading launcher items...", InfoBarSeverity.Informational);
         var (success, message) = await SftpSyncService.DownloadLauncherItemsAsync(password);
         ShowStatus(message, success ? InfoBarSeverity.Success : InfoBarSeverity.Error);
+
+        if (success)
+            FlyoutWindow.InvalidateItems();
     }
 
     // -- Helpers --

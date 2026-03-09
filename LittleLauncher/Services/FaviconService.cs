@@ -1,3 +1,4 @@
+using LittleLauncher.Models;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -445,6 +446,48 @@ internal static partial class FaviconService
             if (File.Exists(full)) return full;
         }
         return null;
+    }
+
+    // ── Batch icon pipeline ────────────────────────────────────────
+
+    /// <summary>
+    /// Fetches missing icons for a collection of launcher items.
+    /// For websites: downloads cached favicons. For apps: extracts icons from executables.
+    /// This is the single pipeline used by all import paths (manual add, sync, file import, settings restore).
+    /// </summary>
+    public static async Task FetchMissingItemIconsAsync(IEnumerable<LauncherItem> items)
+    {
+        foreach (var item in items)
+        {
+            if (item.IsCategory || string.IsNullOrWhiteSpace(item.Path))
+                continue;
+
+            // Already has a valid local icon
+            if (!string.IsNullOrEmpty(item.IconPath) && File.Exists(item.IconPath))
+                continue;
+
+            try
+            {
+                string? iconPath = null;
+
+                if (item.IsWebsite)
+                {
+                    iconPath = GetCachedPath(item.Path)
+                        ?? await FetchAndCacheAsync(item.Path);
+                }
+                else
+                {
+                    iconPath = GetApplicationIcon(item.Path);
+                }
+
+                if (!string.IsNullOrEmpty(iconPath))
+                    item.IconPath = iconPath;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn(ex, $"Failed to fetch icon for {item.Path}");
+            }
+        }
     }
 
     [GeneratedRegex(@"<title[^>]*>(.*?)</title>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]

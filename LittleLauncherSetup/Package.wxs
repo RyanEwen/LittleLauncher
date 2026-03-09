@@ -3,7 +3,7 @@
 
   <!-- Version is injected by the build: -d ProductVersion=1.0.0.0 -->
   <?ifndef ProductVersion ?>
-    <?define ProductVersion = "1.3.2.0" ?>
+    <?define ProductVersion = "1.4.0.0" ?>
   <?endif ?>
 
   <Package Name="Little Launcher"
@@ -61,8 +61,22 @@
                   ExeCommand="[INSTALLFOLDER]LittleLauncher.exe"
                   Impersonate="yes"
                   Return="asyncNoWait" />
+
+    <!-- Clean up AppData files, startup registry entry, and pinned taskbar
+         shortcuts on uninstall. The app writes to %AppData%\LittleLauncher\
+         (settings, companion exe, icons), creates .lnk files in the Start Menu
+         and pinned taskbar directory, and registers a startup Run key — none
+         of which are tracked by the MSI. See cleanup-uninstall.ps1 for the
+         full script. asyncNoWait so the installer doesn't block on PowerShell. -->
+    <CustomAction Id="CleanupAppData"
+                  Directory="INSTALLFOLDER"
+                  ExeCommand="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]cleanup-uninstall.ps1&quot;"
+                  Impersonate="yes"
+                  Return="asyncNoWait" />
+
     <InstallExecuteSequence>
       <Custom Action="LaunchApp" After="InstallFinalize" Condition="NOT REMOVE" />
+      <Custom Action="CleanupAppData" Before="RemoveFiles" Condition="REMOVE=&quot;ALL&quot;" />
     </InstallExecuteSequence>
 
   </Package>

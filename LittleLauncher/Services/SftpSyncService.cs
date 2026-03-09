@@ -113,10 +113,14 @@ public static class SftpSyncService
             // Replace the launcher items collection on the UI thread
             await ApplyLauncherItemsAsync(items);
 
-            SettingsManager.SaveSettings();
+            // Normalize legacy glyph values from older serialized data
+            foreach (var item in SettingsManager.Current.LauncherItems)
+                item.NormalizeGlyph();
 
-            // Fetch missing web icons in the background (fire-and-forget)
-            _ = FetchMissingIconsAsync();
+            // Fetch missing icons (favicons for websites, exe icons for apps)
+            await FaviconService.FetchMissingItemIconsAsync(SettingsManager.Current.LauncherItems);
+
+            SettingsManager.SaveSettings();
 
             Logger.Info($"Launcher items downloaded from {remotePath}");
             return (true, $"Launcher items downloaded from {SettingsManager.Current.SftpHost}");
@@ -249,51 +253,6 @@ public static class SftpSyncService
 
         if (!client.Exists(path))
             throw new InvalidOperationException($"Failed to create remote directory: {path}");
-    }
-
-    /// <summary>
-    /// Iterates launcher items that are websites and fetches any missing favicons.
-    /// Called after downloading settings so synced items get their icons on this machine.
-    /// </summary>
-    private static async Task FetchMissingIconsAsync()
-    {
-        var items = SettingsManager.Current.LauncherItems;
-        bool changed = false;
-
-        foreach (var item in items)
-        {
-            if (!item.IsWebsite || string.IsNullOrWhiteSpace(item.Path))
-                continue;
-
-            // Already has a valid local icon
-            if (!string.IsNullOrEmpty(item.IconPath) && File.Exists(item.IconPath))
-                continue;
-
-            try
-            {
-                var cached = FaviconService.GetCachedPath(item.Path);
-                if (cached != null)
-                {
-                    item.IconPath = cached;
-                    changed = true;
-                    continue;
-                }
-
-                var iconPath = await FaviconService.FetchAndCacheAsync(item.Path);
-                if (!string.IsNullOrEmpty(iconPath))
-                {
-                    item.IconPath = iconPath;
-                    changed = true;
-                }
-            }
-            catch (Exception ex)
-            {
-                Logger.Warn(ex, $"Failed to fetch icon for {item.Path}");
-            }
-        }
-
-        if (changed)
-            SettingsManager.SaveSettings();
     }
 
     /// <summary>

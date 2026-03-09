@@ -155,7 +155,7 @@ public partial class UserSettings : ObservableObject
         // Populate default launcher items only if none were deserialized
         if (LauncherItems.Count == 0)
         {
-            LauncherItems.Add(new LauncherItem("Google", "https://www.google.com", "Globe24", isWebsite: true));
+            LauncherItems.Add(new LauncherItem("Google", "https://www.google.com", "\uE774", isWebsite: true));
             LauncherItems.Add(new LauncherItem("Explorer", "explorer.exe", "Folder24"));
             LauncherItems.Add(new LauncherItem("Notepad", "notepad.exe", "Notepad24"));
         }

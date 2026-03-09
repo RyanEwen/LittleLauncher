@@ -59,6 +59,10 @@ public static class SettingsManager
                         _current = deserialized;
                         _current.CompleteInitialization();
 
+                        // Normalize legacy glyph text names from older settings files
+                        foreach (var item in _current.LauncherItems)
+                            item.NormalizeGlyph();
+
                         Logger.Info("Settings successfully restored");
                         return _current;
                     }

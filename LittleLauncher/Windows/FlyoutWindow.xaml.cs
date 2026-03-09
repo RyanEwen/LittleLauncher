@@ -194,9 +194,21 @@ public partial class FlyoutWindow : Window
         if (currentHash != _lastItemsHash)
         {
             _lastItemsHash = currentHash;
-            // Re-bind in case the collection instance was replaced (e.g. settings reload)
+            // Null first to force full container recreation — reassigning the
+            // same ObservableCollection reference is a no-op in WinUI's ListView.
+            ItemsListControl.ItemsSource = null;
             ItemsListControl.ItemsSource = SettingsManager.Current.LauncherItems;
         }
+    }
+
+    /// <summary>
+    /// Resets the cached items hash so the next Toggle() forces a full re-bind.
+    /// Call after import, sync download, or any bulk item change.
+    /// </summary>
+    internal static void InvalidateItems()
+    {
+        if (_instance != null)
+            _instance._lastItemsHash = -1;
     }
 
 

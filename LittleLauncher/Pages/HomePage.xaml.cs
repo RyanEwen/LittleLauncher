@@ -68,8 +68,7 @@ public partial class HomePage : Page
 
         // Glyph presets and fallback: use the generated ICO
         string ico = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "LittleLauncher", "app-icon.ico");
+            MainWindow.GetPhysicalAppDataDir(), "app-icon.ico");
         return File.Exists(ico) ? ico : null;
     }
 
@@ -156,51 +155,22 @@ public partial class HomePage : Page
 
     private async void PinToTaskbar_Click(object sender, RoutedEventArgs e)
     {
-        if (HasPackageIdentity())
-        {
-            try
-            {
-                var taskbarManager = global::Windows.UI.Shell.TaskbarManager.GetDefault();
-                if (taskbarManager.IsSupported && taskbarManager.IsPinningAllowed)
-                {
-                    if (await taskbarManager.IsCurrentAppPinnedAsync())
-                    {
-                        var dialog = new ContentDialog
-                        {
-                            Title = "Already Pinned",
-                            Content = "This app is already pinned to the taskbar.",
-                            CloseButtonText = "OK",
-                            XamlRoot = this.XamlRoot
-                        };
-                        await dialog.ShowAsync();
-                        return;
-                    }
-
-                    if (await taskbarManager.RequestPinCurrentAppAsync())
-                        return;
-                }
-            }
-            catch (Exception ex)
-            {
-                Logger.Info(ex, "TaskbarManager pinning failed, falling back to companion exe");
-            }
-        }
-
+        // Always use the companion exe pin flow. In MSIX mode, pinning via
+        // TaskbarManager pins the main app (which opens Settings on click),
+        // not the companion exe (which shows the flyout). The companion exe
+        // --pin mode keeps a process alive so the user can right-click and
+        // choose "Pin to taskbar".
         LaunchCompanionPinMode();
-    }
-
-    private static bool HasPackageIdentity()
-    {
-        try { return global::Windows.ApplicationModel.Package.Current != null; }
-        catch { return false; }
     }
 
     private async void LaunchCompanionPinMode()
     {
         try
         {
-            var appDir = AppDomain.CurrentDomain.BaseDirectory;
-            var flyoutExe = Path.Combine(appDir, "LittleLauncherFlyout.exe");
+            // Always use the AppData copy — EnsureFlyoutShortcut() keeps it
+            // current for all build types (WiX, MSIX, unpackaged).
+            string flyoutExe = Path.Combine(
+                MainWindow.GetPhysicalAppDataDir(), "LittleLauncherFlyout.exe");
 
             if (!File.Exists(flyoutExe))
             {
@@ -215,12 +185,22 @@ public partial class HomePage : Page
                 return;
             }
 
-            Process.Start(new ProcessStartInfo
+            var process = Process.Start(new ProcessStartInfo
             {
                 FileName = flyoutExe,
                 Arguments = "--pin",
                 UseShellExecute = true
             });
+
+            // Wait for the pin dialog to close, then stamp the newly-created
+            // pinned .lnk with the current app-icon.ico so it doesn't show
+            // the exe's embedded Blue icon.
+            if (process != null)
+            {
+                await Task.Run(() => process.WaitForExit());
+                if (Application.Current is App { m_window: MainWindow mainWindow })
+                    mainWindow.UpdateShortcutIcons();
+            }
         }
         catch (Exception ex)
         {

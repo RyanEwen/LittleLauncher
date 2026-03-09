@@ -50,3 +50,18 @@ A `CustomAction` in `Package.wxs` launches `LittleLauncher.exe` after `InstallFi
 2. Runs `msiexec /i <path> /passive` — installs silently with progress bar (no user interaction; they already consented in-app)
 3. MSI's `CustomAction` auto-launches the app in the tray
 4. Script launches `LittleLauncher.exe --settings` — the single-instance mutex detects the running app and sends `LittleLauncher_ShowSettings`, re-opening the Settings window
+
+## Uninstall cleanup
+
+On `REMOVE="ALL"`, a `CustomAction` runs `cleanup-uninstall.ps1` (shipped in the install folder) via `powershell.exe -File`. It cleans up:
+
+| What | Where |
+|---|---|
+| App data folder | `%AppData%\LittleLauncher\` (settings, companion exe, icons) |
+| Flyout Start Menu shortcut | `%AppData%\...\Start Menu\Programs\Little Launcher Flyout.lnk` |
+| Startup registry entry | `HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\Little Launcher` |
+| Pinned taskbar shortcuts | Any `.lnk` in `User Pinned\TaskBar\` targeting `LittleLauncherFlyout.exe` |
+
+The action uses `Return="asyncNoWait"` so the installer doesn't block on PowerShell.
+
+**MSIX limitation:** MSIX has no custom uninstall actions. When an MSIX package is removed, Windows deletes the package files and its own Start Menu entry, but leaves behind `%AppData%\LittleLauncher\` and any pinned taskbar shortcuts. The pinned `.lnk` becomes a dead shortcut — Windows 11 eventually detects and offers to remove stale pins.

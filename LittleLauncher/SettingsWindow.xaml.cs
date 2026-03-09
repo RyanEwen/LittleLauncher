@@ -56,8 +56,7 @@ public sealed partial class SettingsWindow : Window
         var wndId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
         var appWindow = AppWindow.GetFromWindowId(wndId);
         string settingsIcon = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "LittleLauncher", "settings-icon.ico");
+            MainWindow.GetPhysicalAppDataDir(), "settings-icon.ico");
         if (!File.Exists(settingsIcon))
             MainWindow.SaveSettingsIconToAppData();
         string iconPath = File.Exists(settingsIcon)
@@ -170,8 +169,7 @@ public sealed partial class SettingsWindow : Window
     internal void RefreshIcon()
     {
         string settingsIcon = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "LittleLauncher", "settings-icon.ico");
+            MainWindow.GetPhysicalAppDataDir(), "settings-icon.ico");
         if (!File.Exists(settingsIcon)) return;
         var hwnd = WindowNative.GetWindowHandle(this);
         var wndId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);

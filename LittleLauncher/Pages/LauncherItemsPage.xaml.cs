@@ -2,10 +2,13 @@ using LittleLauncher.Classes;
 using LittleLauncher.Classes.Settings;
 using LittleLauncher.Models;
 using LittleLauncher.Services;
+using LittleLauncher.Windows;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media.Imaging;
+using System.Collections.ObjectModel;
 using System.IO;
+using System.Xml.Serialization;
 using global::Windows.Storage.Pickers;
 using WinRT.Interop;
 using Image = Microsoft.UI.Xaml.Controls.Image;
@@ -716,7 +719,7 @@ public partial class LauncherItemsPage : Page
         var name = nameBox.Text.Trim();
         var finalPath = pathBox.Text.Trim();
         var args = argsBox.Text.Trim();
-        var glyph = isWebsite ? "Globe24" : "Open24";
+        var glyph = isWebsite ? "\uE774" : "\uE8E5";
 
         if (isEdit)
         {
@@ -1202,5 +1205,119 @@ public partial class LauncherItemsPage : Page
     {
         SettingsManager.SaveSettings();
         Services.AutoSyncService.NotifyItemsChanged();
+    }
+
+    private async void ExportItems_Click(object sender, RoutedEventArgs e)
+    {
+        var items = SettingsManager.Current.LauncherItems;
+        if (items.Count == 0) return;
+
+        var picker = new FileSavePicker();
+        InitializePicker(picker);
+        picker.SuggestedStartLocation = PickerLocationId.DocumentsLibrary;
+        picker.SuggestedFileName = "launcher-items";
+        picker.FileTypeChoices.Add("XML files", [".xml"]);
+
+        var file = await picker.PickSaveFileAsync();
+        if (file == null) return;
+
+        try
+        {
+            var list = new List<LauncherItem>(items);
+            var serializer = new XmlSerializer(typeof(List<LauncherItem>));
+            using var stream = new FileStream(file.Path, FileMode.Create, FileAccess.Write);
+            serializer.Serialize(stream, list);
+        }
+        catch (Exception ex)
+        {
+            var dialog = new ContentDialog
+            {
+                XamlRoot = XamlRoot,
+                Title = "Export Failed",
+                Content = ex.Message,
+                CloseButtonText = "OK"
+            };
+            await dialog.ShowAsync();
+        }
+    }
+
+    private async void ImportItems_Click(object sender, RoutedEventArgs e)
+    {
+        var picker = new FileOpenPicker();
+        InitializePicker(picker);
+        picker.SuggestedStartLocation = PickerLocationId.DocumentsLibrary;
+        picker.FileTypeFilter.Add(".xml");
+
+        var file = await picker.PickSingleFileAsync();
+        if (file == null) return;
+
+        List<LauncherItem>? imported;
+        try
+        {
+            var serializer = new XmlSerializer(typeof(List<LauncherItem>));
+            using var stream = new FileStream(file.Path, FileMode.Open, FileAccess.Read);
+            imported = serializer.Deserialize(stream) as List<LauncherItem>;
+        }
+        catch (Exception ex)
+        {
+            var dialog = new ContentDialog
+            {
+                XamlRoot = XamlRoot,
+                Title = "Import Failed",
+                Content = $"Could not read the file: {ex.Message}",
+                CloseButtonText = "OK"
+            };
+            await dialog.ShowAsync();
+            return;
+        }
+
+        if (imported == null || imported.Count == 0)
+        {
+            var dialog = new ContentDialog
+            {
+                XamlRoot = XamlRoot,
+                Title = "Import",
+                Content = "The file contained no items.",
+                CloseButtonText = "OK"
+            };
+            await dialog.ShowAsync();
+            return;
+        }
+
+        // Ask user whether to replace or merge
+        var modeDialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = "Import Items",
+            Content = $"Found {imported.Count} item(s). Replace all existing items or add to the current list?",
+            PrimaryButtonText = "Replace",
+            SecondaryButtonText = "Add",
+            CloseButtonText = "Cancel"
+        };
+
+        var result = await modeDialog.ShowAsync();
+        if (result == ContentDialogResult.None) return;
+
+        var collection = SettingsManager.Current.LauncherItems;
+
+        if (result == ContentDialogResult.Primary)
+            collection.Clear();
+
+        foreach (var item in imported)
+        {
+            item.NormalizeGlyph();
+            collection.Add(item);
+        }
+
+        RefreshList();
+        SaveAndUpdateTaskbar();
+
+        // Fetch missing icons for imported items
+        await FaviconService.FetchMissingItemIconsAsync(imported);
+        SettingsManager.SaveSettings();
+        RefreshList();
+
+        // Invalidate the flyout so it picks up new items + icons
+        FlyoutWindow.InvalidateItems();
     }
 }

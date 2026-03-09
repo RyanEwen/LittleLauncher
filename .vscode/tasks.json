@@ -153,6 +153,20 @@
                 "${workspaceFolder}/LittleLauncher/LittleLauncher.csproj"
             ],
             "problemMatcher": []
+        },
+        {
+            "label": "msix-x64",
+            "type": "shell",
+            "command": ".\\build-msix.ps1 -Platform x64",
+            "dependsOn": "stop-app",
+            "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "msix-arm64",
+            "type": "shell",
+            "command": ".\\build-msix.ps1 -Platform ARM64",
+            "dependsOn": "stop-app",
+            "problemMatcher": "$msCompile"
         }
     ]
 }

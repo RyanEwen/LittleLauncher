@@ -212,6 +212,7 @@ public static class NativeMethods
     internal const uint SHCNE_ASSOCCHANGED = 0x08000000;
     internal const uint SHCNF_IDLIST = 0x0000;
     internal const uint SHCNF_PATHW = 0x0005;
+    internal const uint SHCNF_FLUSH = 0x1000;
     internal const uint SHCNF_FLUSHNOWAIT = 0x3000;
 
     #endregion
@@ -277,6 +278,27 @@ public static class NativeMethods
         pid = 5
     };
 
+    // PKEY_AppUserModel_RelaunchIconResource = { {9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3}, 3 }
+    internal static readonly PROPERTYKEY PKEY_AppUserModel_RelaunchIconResource = new()
+    {
+        fmtid = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"),
+        pid = 3
+    };
+
+    // PKEY_AppUserModel_RelaunchCommand = { {9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3}, 2 }
+    internal static readonly PROPERTYKEY PKEY_AppUserModel_RelaunchCommand = new()
+    {
+        fmtid = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"),
+        pid = 2
+    };
+
+    // PKEY_AppUserModel_RelaunchDisplayNameResource = { {9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3}, 4 }
+    internal static readonly PROPERTYKEY PKEY_AppUserModel_RelaunchDisplayNameResource = new()
+    {
+        fmtid = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"),
+        pid = 4
+    };
+
     [ComImport]
     [Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -298,31 +320,72 @@ public static class NativeMethods
     /// </summary>
     internal static void SetWindowAppUserModelId(IntPtr hwnd, string appId)
     {
+        SetWindowPropertyStoreString(hwnd, PKEY_AppUserModel_ID, appId);
+    }
+
+    /// <summary>
+    /// Sets the Relaunch properties (Icon, Command, DisplayName) on a HWND
+    /// so the taskbar/pinned entry uses the specified icon and relaunch command.
+    /// </summary>
+    internal static void SetWindowRelaunchProperties(IntPtr hwnd, string iconResource, string command, string displayName)
+    {
         var IID_IPropertyStore = new Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99");
         int hr = SHGetPropertyStoreForWindow(hwnd, ref IID_IPropertyStore, out var store);
         if (hr != S_OK || store == null) return;
 
-        // Allocate a PROPVARIANT with VT_LPWSTR (type 31)
-        // Layout: 2 bytes vt + 6 bytes padding + IntPtr string pointer
+        try
+        {
+            SetPropertyStoreString(store, PKEY_AppUserModel_RelaunchIconResource, iconResource);
+            SetPropertyStoreString(store, PKEY_AppUserModel_RelaunchCommand, command);
+            SetPropertyStoreString(store, PKEY_AppUserModel_RelaunchDisplayNameResource, displayName);
+            store.Commit();
+        }
+        finally
+        {
+            Marshal.ReleaseComObject(store);
+        }
+    }
+
+    /// <summary>
+    /// Sets a VT_LPWSTR string value on an IPropertyStore. Does NOT call Commit().
+    /// </summary>
+    private static void SetPropertyStoreString(IPropertyStore store, PROPERTYKEY key, string value)
+    {
         const int PROPVARIANT_SIZE = 24;
         IntPtr pv = Marshal.AllocCoTaskMem(PROPVARIANT_SIZE);
         try
         {
-            // Zero-init
             for (int i = 0; i < PROPVARIANT_SIZE; i++)
                 Marshal.WriteByte(pv, i, 0);
 
             Marshal.WriteInt16(pv, 0, 31); // VT_LPWSTR
-            Marshal.WriteIntPtr(pv, 8, Marshal.StringToCoTaskMemUni(appId));
+            Marshal.WriteIntPtr(pv, 8, Marshal.StringToCoTaskMemUni(value));
 
-            var key = PKEY_AppUserModel_ID;
             store.SetValue(ref key, pv);
-            store.Commit();
         }
         finally
         {
             PropVariantClear(pv);
             Marshal.FreeCoTaskMem(pv);
+        }
+    }
+
+    /// <summary>
+    /// Sets a single VT_LPWSTR property on a window's IPropertyStore.
+    /// </summary>
+    private static void SetWindowPropertyStoreString(IntPtr hwnd, PROPERTYKEY key, string value)
+    {
+        var IID_IPropertyStore = new Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99");
+        int hr = SHGetPropertyStoreForWindow(hwnd, ref IID_IPropertyStore, out var store);
+        if (hr != S_OK || store == null) return;
+
+        try
+        {
+            SetPropertyStoreString(store, key, value);
+            store.Commit();
+        }
+        finally
+        {
             Marshal.ReleaseComObject(store);
         }
     }

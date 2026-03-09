@@ -90,7 +90,10 @@ public static class AutoSyncService
         {
             var (success, message) = await SftpSyncService.DownloadLauncherItemsAsync();
             if (success)
+            {
                 Logger.Info("Auto-sync startup: downloaded launcher items");
+                Windows.FlyoutWindow.InvalidateItems();
+            }
             else
                 Logger.Warn($"Auto-sync startup skipped: {message}");
         }
@@ -130,7 +133,10 @@ public static class AutoSyncService
         {
             var (success, message) = await SftpSyncService.DownloadLauncherItemsAsync();
             if (success)
+            {
                 Logger.Info($"Auto-sync ({trigger}): downloaded launcher items");
+                Windows.FlyoutWindow.InvalidateItems();
+            }
             else
                 Logger.Warn($"Auto-sync ({trigger}) skipped: {message}");
         }

@@ -87,20 +87,40 @@
                 </ListView.ItemContainerStyle>
             </ListView>
 
-            <StackPanel Orientation="Horizontal" Margin="0,8,0,0" Spacing="8">
-                <Button Style="{ThemeResource AccentButtonStyle}" Click="ShowAddDialog_Click">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <FontIcon Glyph="&#xE710;" FontSize="14"/>
-                        <TextBlock Text="Add Item"/>
-                    </StackPanel>
-                </Button>
-                <Button Click="ShowAddCategoryDialog_Click">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <FontIcon Glyph="&#xE8FD;" FontSize="14"/>
-                        <TextBlock Text="Add Category"/>
-                    </StackPanel>
-                </Button>
-            </StackPanel>
+            <Grid Margin="0,8,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
+                    <Button Style="{ThemeResource AccentButtonStyle}" Click="ShowAddDialog_Click">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <FontIcon Glyph="&#xE710;" FontSize="14"/>
+                            <TextBlock Text="Add Item"/>
+                        </StackPanel>
+                    </Button>
+                    <Button Click="ShowAddCategoryDialog_Click">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <FontIcon Glyph="&#xE8FD;" FontSize="14"/>
+                            <TextBlock Text="Add Category"/>
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                    <Button Click="ImportItems_Click">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <FontIcon Glyph="&#xE8B5;" FontSize="14"/>
+                            <TextBlock Text="Import"/>
+                        </StackPanel>
+                    </Button>
+                    <Button Click="ExportItems_Click">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <FontIcon Glyph="&#xEDE1;" FontSize="14"/>
+                            <TextBlock Text="Export"/>
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+            </Grid>
         </StackPanel>
     </Grid>
     </ScrollViewer>

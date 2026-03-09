@@ -26,7 +26,7 @@ public partial class LauncherItem : ObservableObject
     public partial string Arguments { get; set; }
 
     /// <summary>
-    /// Segoe Fluent Icons glyph name (e.g. "Globe24", "Desktop24").
+    /// Segoe Fluent Icons glyph character (e.g. "\uE774" for globe).
     /// Used as the fallback icon when no favicon is available.
     /// </summary>
     [ObservableProperty]
@@ -77,7 +77,7 @@ public partial class LauncherItem : ObservableObject
         Name = string.Empty;
         Path = string.Empty;
         Arguments = string.Empty;
-        IconGlyph = "Open24";
+        IconGlyph = "\uE8E5";
         IconPath = string.Empty;
         IsWebsite = false;
         OpenInAppWindow = false;
@@ -108,4 +108,18 @@ public partial class LauncherItem : ObservableObject
         Name = name,
         IsCategory = true
     };
+
+    /// <summary>
+    /// Normalizes legacy glyph text names (e.g. "Globe24") to Unicode characters.
+    /// Called after deserialization from XML import/sync to fix old data.
+    /// </summary>
+    public void NormalizeGlyph()
+    {
+        IconGlyph = IconGlyph switch
+        {
+            "Globe24" => "\uE774",
+            "Open24" => "\uE8E5",
+            _ => IconGlyph
+        };
+    }
 }
