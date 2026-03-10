@@ -140,6 +140,10 @@ public sealed partial class MainWindow : Window
         _ = StartAutoSyncAsync();
         _ = FetchMissingIconsOnStartupAsync();
 
+        // Register for Windows toast notifications
+        Microsoft.Windows.AppNotifications.AppNotificationManager.Default.Register();
+        _ = CheckForUpdateOnStartupAsync();
+
         // Listen for OS theme changes to refresh icons
         _lastDarkTheme = Classes.ThemeManager.IsDarkTheme();
         _uiSettings.ColorValuesChanged += OnSystemThemeChanged;
@@ -211,6 +215,7 @@ public sealed partial class MainWindow : Window
             exitItem.Click += (s, e) =>
             {
                 SettingsManager.SaveSettings();
+                try { Microsoft.Windows.AppNotifications.AppNotificationManager.Default.Unregister(); } catch { }
                 nIcon?.Dispose();
                 Environment.Exit(0);
             };
@@ -604,6 +609,29 @@ public sealed partial class MainWindow : Window
         catch (Exception ex)
         {
             NLog.LogManager.GetCurrentClassLogger().Warn(ex, "Startup icon fetch failed");
+        }
+    }
+
+    /// <summary>
+    /// Checks for app updates on startup and shows a toast notification
+    /// if a newer version is available. The result is cached in
+    /// <see cref="UpdateService.LatestResult"/> for the HomePage to consume.
+    /// </summary>
+    private async Task CheckForUpdateOnStartupAsync()
+    {
+        try
+        {
+            var result = await UpdateService.CheckForUpdateAsync();
+            if (result is not { UpdateAvailable: true }) return;
+
+            var builder = new Microsoft.Windows.AppNotifications.Builder.AppNotificationBuilder()
+                .AddText("Update Available")
+                .AddText($"Little Launcher {result.LatestVersion} is available. You are running {result.CurrentVersion}.");
+            Microsoft.Windows.AppNotifications.AppNotificationManager.Default.Show(builder.BuildNotification());
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn(ex, "Startup update check failed");
         }
     }
 

@@ -41,6 +41,11 @@ public static class UpdateService
     }
 
     /// <summary>
+    /// Cached result from the most recent update check (set by <see cref="CheckForUpdateAsync"/>).
+    /// </summary>
+    public static UpdateCheckResult? LatestResult { get; private set; }
+
+    /// <summary>
     /// Checks GitHub for a newer release.
     /// Returns null on network/parse errors.
     /// </summary>
@@ -75,7 +80,7 @@ public static class UpdateService
                 }
             }
 
-            return new UpdateCheckResult
+            var result = new UpdateCheckResult
             {
                 UpdateAvailable = updateAvailable,
                 CurrentVersion = $"v{current.Major}.{current.Minor}.{current.Build}",
@@ -84,6 +89,8 @@ public static class UpdateService
                 MsiDownloadUrl = msiUrl,
                 ReleaseNotes = release.Body,
             };
+            LatestResult = result;
+            return result;
         }
         catch (Exception ex)
         {

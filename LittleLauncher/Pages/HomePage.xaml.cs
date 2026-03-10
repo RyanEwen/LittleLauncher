@@ -76,7 +76,8 @@ public partial class HomePage : Page
     {
         try
         {
-            var result = await UpdateService.CheckForUpdateAsync();
+            // Use the cached startup result if available; otherwise check now.
+            var result = UpdateService.LatestResult ?? await UpdateService.CheckForUpdateAsync();
             if (result is { UpdateAvailable: true })
             {
                 _updateResult = result;
