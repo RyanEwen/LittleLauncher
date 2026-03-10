@@ -260,6 +260,45 @@ public partial class FlyoutWindow : Window
         }
     }
 
+    private void ToggleGroupCollapse(LauncherItem group)
+    {
+        var list = ItemsListControl.ItemsSource as ObservableCollection<LauncherItem>;
+        if (list == null) return;
+
+        int groupIdx = list.IndexOf(group);
+        if (groupIdx < 0) return;
+
+        bool wasCollapsed = _collapsedGroups.Remove(group);
+        if (!wasCollapsed)
+        {
+            // Collapse: remove children after the group header
+            _collapsedGroups.Add(group);
+            int removeIdx = groupIdx + 1;
+            while (removeIdx < list.Count && list[removeIdx] != group && !SettingsManager.Current.LauncherItems.Contains(list[removeIdx]))
+                list.RemoveAt(removeIdx);
+        }
+        else
+        {
+            // Expand: insert children after the group header
+            int insertIdx = groupIdx + 1;
+            foreach (var child in group.Children)
+                list.Insert(insertIdx++, child);
+        }
+
+        PersistCollapsedGroups();
+
+        // Update the chevron glyph on the group header container
+        var container = ItemsListControl.ContainerFromIndex(groupIdx) as ListViewItem;
+        if (container != null)
+        {
+            var icon = FindDescendant<FontIcon>(container);
+            if (icon != null)
+                icon.Glyph = _collapsedGroups.Contains(group) ? "\uE76C" : "\uE70D";
+        }
+
+        ResizeFlyout();
+    }
+
     private void ResizeFlyout()
     {
         double dpiScale = GetDpiForWindow(_hwnd) / 96.0;
@@ -342,13 +381,7 @@ public partial class FlyoutWindow : Window
 
         if (item.IsGroup)
         {
-            // Toggle collapse state
-            if (!_collapsedGroups.Remove(item))
-                _collapsedGroups.Add(item);
-            PersistCollapsedGroups();
-            _lastItemsHash = -1; // Force rebuild
-            RebuildItemsIfNeeded();
-            ResizeFlyout();
+            ToggleGroupCollapse(item);
             return;
         }
 
@@ -770,7 +803,8 @@ public partial class FlyoutWindow : Window
             }
         }
 
-        _lastMeasuredHeight = Math.Clamp(contentHeight, 80, 560);
+        // Add a small buffer to cover accumulated sub-pixel font-height rounding.
+        _lastMeasuredHeight = Math.Clamp(contentHeight + 2, 80, 560);
         return _lastMeasuredHeight;
     }
 
