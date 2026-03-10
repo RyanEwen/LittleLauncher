@@ -1,4 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using System.Collections.ObjectModel;
+using System.Xml.Serialization;
 
 namespace LittleLauncher.Models;
 
@@ -73,11 +75,31 @@ public partial class LauncherItem : ObservableObject
     public partial bool IsPwa { get; set; }
 
     /// <summary>
-    /// Whether this item is a category heading (true) or a launchable item (false).
-    /// Category items only use the Name property; all other fields are ignored.
+    /// Whether this item is a heading (true) or a launchable item (false).
+    /// Heading items only use the Name property; all other fields are ignored.
+    /// Serialized as "IsCategory" for backward compatibility with older settings files.
     /// </summary>
     [ObservableProperty]
-    public partial bool IsCategory { get; set; }
+    [XmlElement("IsCategory")]
+    public partial bool IsHeading { get; set; }
+
+    /// <summary>
+    /// Whether this item is a collapsible group that contains child items/headings.
+    /// </summary>
+    [ObservableProperty]
+    public partial bool IsGroup { get; set; }
+
+    /// <summary>
+    /// Whether this group is currently expanded in the settings UI.
+    /// Not serialized — purely transient UI state.
+    /// </summary>
+    [XmlIgnore]
+    public bool IsExpanded { get; set; } = true;
+
+    /// <summary>
+    /// Child items belonging to this group. Only used when <see cref="IsGroup"/> is true.
+    /// </summary>
+    public ObservableCollection<LauncherItem> Children { get; set; } = [];
 
     public LauncherItem()
     {
@@ -91,7 +113,8 @@ public partial class LauncherItem : ObservableObject
         AppWindowBrowser = string.Empty;
         AppWindowBrowserProfile = string.Empty;
         IsPwa = false;
-        IsCategory = false;
+        IsHeading = false;
+        IsGroup = false;
     }
 
     public LauncherItem(string name, string path, string iconGlyph, bool isWebsite = false, string arguments = "", string iconPath = "", bool openInAppWindow = false)
@@ -106,16 +129,26 @@ public partial class LauncherItem : ObservableObject
         AppWindowBrowser = string.Empty;
         AppWindowBrowserProfile = string.Empty;
         IsPwa = false;
-        IsCategory = false;
+        IsHeading = false;
+        IsGroup = false;
     }
 
     /// <summary>
-    /// Creates a category heading item with only a name.
+    /// Creates a heading item with only a name.
     /// </summary>
-    public static LauncherItem CreateCategory(string name) => new()
+    public static LauncherItem CreateHeading(string name) => new()
     {
         Name = name,
-        IsCategory = true
+        IsHeading = true
+    };
+
+    /// <summary>
+    /// Creates a group item with only a name.
+    /// </summary>
+    public static LauncherItem CreateGroup(string name) => new()
+    {
+        Name = name,
+        IsGroup = true
     };
 
     /// <summary>

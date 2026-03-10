@@ -16,17 +16,20 @@ using Image = Microsoft.UI.Xaml.Controls.Image;
 namespace LittleLauncher.Pages;
 
 /// <summary>
-/// Selects the correct DataTemplate based on whether the item is a category or a launchable item.
+/// Selects the correct DataTemplate based on item type: group, heading, or launchable item.
 /// </summary>
 public class LauncherItemTemplateSelector : DataTemplateSelector
 {
     public DataTemplate? LauncherItemTemplate { get; set; }
-    public DataTemplate? CategoryItemTemplate { get; set; }
+    public DataTemplate? HeadingItemTemplate { get; set; }
+    public DataTemplate? GroupItemTemplate { get; set; }
 
     protected override DataTemplate? SelectTemplateCore(object item)
     {
-        if (item is LauncherItem { IsCategory: true })
-            return CategoryItemTemplate;
+        if (item is LauncherItem { IsGroup: true })
+            return GroupItemTemplate;
+        if (item is LauncherItem { IsHeading: true })
+            return HeadingItemTemplate;
         return LauncherItemTemplate;
     }
 }
@@ -37,6 +40,11 @@ public partial class LauncherItemsPage : Page
     /// When set, the edit dialog for this item opens automatically after the page loads.
     /// </summary>
     internal static LauncherItem? PendingEditItem { get; set; }
+
+    // -- Cross-list drag-and-drop tracking --
+    private LauncherItem? _dragItem;
+    private ObservableCollection<LauncherItem>? _dragSourceCollection;
+    private ListViewItem? _lastIndicatorContainer;
 
     public LauncherItemsPage()
     {
@@ -50,8 +58,10 @@ public partial class LauncherItemsPage : Page
         if (PendingEditItem is { } item)
         {
             PendingEditItem = null;
-            if (item.IsCategory)
-                await ShowCategoryDialog(item);
+            if (item.IsHeading)
+                await ShowHeadingDialog(item);
+            else if (item.IsGroup)
+                await ShowGroupDialog(item);
             else
                 await ShowItemDialog(item);
         }
@@ -63,9 +73,251 @@ public partial class LauncherItemsPage : Page
         ItemsList.ItemsSource = SettingsManager.Current.LauncherItems;
     }
 
+    /// <summary>
+    /// Refreshes the settings page ListView if the page is currently loaded.
+    /// Called from FlyoutWindow after drag-reorder.
+    /// </summary>
+    internal static void NotifyItemsChanged()
+    {
+        var settingsWindow = SettingsWindow.GetCurrent();
+        if (settingsWindow?.CurrentPage is LauncherItemsPage page)
+            page.RefreshList();
+    }
+
+    private void ItemsList_DragItemsStarting(object sender, DragItemsStartingEventArgs e)
+    {
+        if (e.Items.FirstOrDefault() is LauncherItem item)
+        {
+            _dragItem = item;
+            _dragSourceCollection = SettingsManager.Current.LauncherItems;
+            e.Data.RequestedOperation = global::Windows.ApplicationModel.DataTransfer.DataPackageOperation.Move;
+        }
+    }
+
+    private void ItemsList_DragOver(object sender, DragEventArgs e)
+    {
+        if (_dragItem == null || _dragSourceCollection == null) return;
+
+        e.AcceptedOperation = global::Windows.ApplicationModel.DataTransfer.DataPackageOperation.Move;
+
+        // Show insertion indicator
+        int dropIndex = GetDropIndex(ItemsList, e);
+        ShowInsertionIndicator(ItemsList, dropIndex);
+
+        e.DragUIOverride.IsCaptionVisible = true;
+        e.DragUIOverride.IsGlyphVisible = true;
+        if (dropIndex < SettingsManager.Current.LauncherItems.Count)
+        {
+            var targetItem = SettingsManager.Current.LauncherItems[dropIndex];
+            e.DragUIOverride.Caption = $"Move above {targetItem.Name}";
+        }
+        else
+        {
+            e.DragUIOverride.Caption = "Move to end";
+        }
+
+        e.Handled = true;
+    }
+
+    private void ItemsList_DragLeave(object sender, DragEventArgs e)
+    {
+        ClearInsertionIndicator();
+    }
+
+    private void ItemsList_Drop(object sender, DragEventArgs e)
+    {
+        ClearInsertionIndicator();
+        if (_dragItem == null || _dragSourceCollection == null) return;
+
+        var items = SettingsManager.Current.LauncherItems;
+        int dropIndex = GetDropIndex(ItemsList, e);
+
+        // If reordering within the same list, adjust for the removal shift
+        int originalIndex = _dragSourceCollection == items ? _dragSourceCollection.IndexOf(_dragItem) : -1;
+        _dragSourceCollection.Remove(_dragItem);
+        if (originalIndex >= 0 && originalIndex < dropIndex)
+            dropIndex--;
+        if (dropIndex > items.Count) dropIndex = items.Count;
+        items.Insert(dropIndex, _dragItem);
+
+        _dragItem = null;
+        _dragSourceCollection = null;
+
+        RefreshList();
+        SaveAndUpdateTaskbar();
+        e.Handled = true;
+    }
+
     private void ItemsList_DragItemsCompleted(ListViewBase sender, DragItemsCompletedEventArgs args)
     {
-        SaveAndUpdateTaskbar();
+        ClearInsertionIndicator();
+        TopLevelDropZone.Visibility = Visibility.Collapsed;
+        _dragItem = null;
+        _dragSourceCollection = null;
+    }
+
+    private void GroupRoot_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is not StackPanel groupRoot) return;
+        if (groupRoot.DataContext is not LauncherItem group || group.IsExpanded) return;
+
+        // Restore collapsed state after re-render
+        foreach (var child in groupRoot.Children)
+        {
+            if (child is StackPanel childPanel && childPanel.Tag as string == "GroupChildren")
+            {
+                childPanel.Visibility = Visibility.Collapsed;
+                break;
+            }
+        }
+
+        // Update chevron icon to right-pointing
+        if (groupRoot.Children[0] is Grid header)
+        {
+            foreach (var headerChild in header.Children)
+            {
+                if (headerChild is Button btn && btn.Content is FontIcon icon)
+                {
+                    icon.Glyph = "\uE76C";
+                    break;
+                }
+            }
+        }
+    }
+
+    private void ItemCard_PointerEntered(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        if (sender is Border border && FindGripIcon(border) is FontIcon grip)
+            grip.Opacity = 0.8;
+        this.ProtectedCursor = Microsoft.UI.Input.InputSystemCursor.Create(Microsoft.UI.Input.InputSystemCursorShape.SizeAll);
+    }
+
+    private void ItemCard_PointerExited(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        if (sender is Border border && FindGripIcon(border) is FontIcon grip)
+            grip.Opacity = 0.3;
+        this.ProtectedCursor = Microsoft.UI.Input.InputSystemCursor.Create(Microsoft.UI.Input.InputSystemCursorShape.Arrow);
+    }
+
+    private void ItemButtons_PointerEntered(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        this.ProtectedCursor = Microsoft.UI.Input.InputSystemCursor.Create(Microsoft.UI.Input.InputSystemCursorShape.Arrow);
+        e.Handled = true;
+    }
+
+    private void ItemButtons_PointerExited(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        this.ProtectedCursor = Microsoft.UI.Input.InputSystemCursor.Create(Microsoft.UI.Input.InputSystemCursorShape.SizeAll);
+        e.Handled = true;
+    }
+
+    private static FontIcon? FindGripIcon(Border border)
+    {
+        // The grip icon is the first FontIcon child of the first Grid/StackPanel inside the Border
+        if (border.Child is Panel panel)
+        {
+            // For group template, child is StackPanel > Grid; for item/heading, child is Grid directly
+            var grid = panel is Grid g ? g : (panel.Children.FirstOrDefault() as Grid);
+            if (grid?.Children.FirstOrDefault() is FontIcon icon)
+                return icon;
+        }
+        return null;
+    }
+
+    private void ToggleGroupExpand_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button button) return;
+
+        // Walk up to the StackPanel tagged "GroupRoot"
+        DependencyObject? current = button;
+        while (current != null)
+        {
+            if (current is StackPanel sp && sp.Tag as string == "GroupRoot")
+            {
+                // Update model state
+                if (sp.DataContext is LauncherItem group)
+                    group.IsExpanded = !group.IsExpanded;
+
+                foreach (var child in sp.Children)
+                {
+                    if (child is StackPanel childPanel && childPanel.Tag as string == "GroupChildren")
+                    {
+                        bool wasCollapsed = childPanel.Visibility == Visibility.Collapsed;
+                        childPanel.Visibility = wasCollapsed ? Visibility.Visible : Visibility.Collapsed;
+
+                        if (button.Content is FontIcon icon)
+                            icon.Glyph = wasCollapsed ? "\uE70D" : "\uE76C";
+
+                        break;
+                    }
+                }
+                break;
+            }
+            current = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(current);
+        }
+    }
+
+    private void MoveItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement fe || fe.Tag is not LauncherItem item) return;
+
+        var items = SettingsManager.Current.LauncherItems;
+
+        // Find the item's current parent collection
+        ObservableCollection<LauncherItem>? currentParent = null;
+        LauncherItem? currentGroup = null;
+        foreach (var group in items.Where(i => i.IsGroup))
+        {
+            if (group.Children.Contains(item))
+            {
+                currentParent = group.Children;
+                currentGroup = group;
+                break;
+            }
+        }
+
+        var flyout = new MenuFlyout();
+
+        // If in a group, offer "Move to Top Level"
+        if (currentParent != null)
+        {
+            var topLevelOption = new MenuFlyoutItem
+            {
+                Text = "Top Level",
+                Icon = new FontIcon { Glyph = "\uE74B" }
+            };
+            topLevelOption.Click += (s, ev) =>
+            {
+                currentParent.Remove(item);
+                items.Add(item);
+                RefreshList();
+                SaveAndUpdateTaskbar();
+            };
+            flyout.Items.Add(topLevelOption);
+        }
+
+        // Offer each group as a target (except the item's current group)
+        foreach (var group in items.Where(i => i.IsGroup))
+        {
+            if (group == currentGroup) continue;
+            var targetGroup = group;
+            var groupOption = new MenuFlyoutItem
+            {
+                Text = group.Name,
+                Icon = new FontIcon { Glyph = "\uF168" }
+            };
+            groupOption.Click += (s, ev) =>
+            {
+                (currentParent ?? items).Remove(item);
+                targetGroup.Children.Add(item);
+                RefreshList();
+                SaveAndUpdateTaskbar();
+            };
+            flyout.Items.Add(groupOption);
+        }
+
+        if (flyout.Items.Count > 0)
+            flyout.ShowAt(fe);
     }
 
     private async void ShowAddDialog_Click(object sender, RoutedEventArgs e)
@@ -73,18 +325,23 @@ public partial class LauncherItemsPage : Page
         await ShowItemDialog(null);
     }
 
-    private async void ShowAddCategoryDialog_Click(object sender, RoutedEventArgs e)
+    private async void ShowAddHeadingDialog_Click(object sender, RoutedEventArgs e)
     {
-        await ShowCategoryDialog(null);
+        await ShowHeadingDialog(null);
     }
 
-    private async Task ShowCategoryDialog(LauncherItem? existingItem)
+    private async void ShowAddGroupDialog_Click(object sender, RoutedEventArgs e)
+    {
+        await ShowGroupDialog(null);
+    }
+
+    private async Task ShowHeadingDialog(LauncherItem? existingItem, ObservableCollection<LauncherItem>? targetList = null)
     {
         bool isEdit = existingItem != null;
 
         var nameBox = new TextBox
         {
-            PlaceholderText = "Category name",
+            PlaceholderText = "Heading name",
             Margin = new Thickness(0, 0, 0, 8)
         };
 
@@ -108,7 +365,7 @@ public partial class LauncherItemsPage : Page
         var dialog = new ContentDialog
         {
             XamlRoot = this.XamlRoot,
-            Title = isEdit ? "Edit Category" : "Add Category",
+            Title = isEdit ? "Edit Heading" : "Add Heading",
             Content = form,
             PrimaryButtonText = isEdit ? "Save" : "Add",
             CloseButtonText = "Cancel",
@@ -144,7 +401,8 @@ public partial class LauncherItemsPage : Page
         }
         else
         {
-            SettingsManager.Current.LauncherItems.Add(LauncherItem.CreateCategory(name));
+            var target = targetList ?? SettingsManager.Current.LauncherItems;
+            target.Add(LauncherItem.CreateHeading(name));
         }
 
         RefreshList();
@@ -155,14 +413,259 @@ public partial class LauncherItemsPage : Page
     {
         if (sender is FrameworkElement fe && fe.Tag is LauncherItem item)
         {
-            if (item.IsCategory)
-                await ShowCategoryDialog(item);
+            if (item.IsHeading)
+                await ShowHeadingDialog(item);
+            else if (item.IsGroup)
+                await ShowGroupDialog(item);
             else
                 await ShowItemDialog(item);
         }
     }
 
-    private async Task ShowItemDialog(LauncherItem? existingItem)
+    private async Task ShowGroupDialog(LauncherItem? existingItem)
+    {
+        bool isEdit = existingItem != null;
+
+        var nameBox = new TextBox
+        {
+            PlaceholderText = "Group name",
+            Margin = new Thickness(0, 0, 0, 8)
+        };
+
+        if (isEdit)
+            nameBox.Text = existingItem!.Name;
+
+        var validationHint = new TextBlock
+        {
+            Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(
+                global::Windows.UI.Color.FromArgb(255, 255, 69, 0)),
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 8, 0, 0)
+        };
+
+        var form = new StackPanel { MinWidth = 400 };
+        form.Children.Add(Label("Name"));
+        form.Children.Add(nameBox);
+        form.Children.Add(validationHint);
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = this.XamlRoot,
+            Title = isEdit ? "Edit Group" : "Add Group",
+            Content = form,
+            PrimaryButtonText = isEdit ? "Save" : "Add",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary
+        };
+
+        void ValidateForm()
+        {
+            if (string.IsNullOrWhiteSpace(nameBox.Text))
+            {
+                validationHint.Text = "Name is required.";
+                validationHint.Visibility = Visibility.Visible;
+                dialog.IsPrimaryButtonEnabled = false;
+            }
+            else
+            {
+                validationHint.Visibility = Visibility.Collapsed;
+                dialog.IsPrimaryButtonEnabled = true;
+            }
+        }
+
+        nameBox.TextChanged += (s, ev) => ValidateForm();
+        ValidateForm();
+
+        var result = await dialog.ShowAsync();
+        if (result != ContentDialogResult.Primary) return;
+
+        var name = nameBox.Text.Trim();
+
+        if (isEdit)
+        {
+            existingItem!.Name = name;
+        }
+        else
+        {
+            SettingsManager.Current.LauncherItems.Add(LauncherItem.CreateGroup(name));
+        }
+
+        RefreshList();
+        SaveAndUpdateTaskbar();
+    }
+
+    private async void ShowAddItemToGroup_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.Tag is LauncherItem group)
+            await ShowItemDialog(null, group.Children);
+    }
+
+    private async void ShowAddHeadingToGroup_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.Tag is LauncherItem group)
+            await ShowHeadingDialog(null, group.Children);
+    }
+
+    private void GroupChildList_DragItemsStarting(object sender, DragItemsStartingEventArgs e)
+    {
+        if (sender is ListView lv && lv.Tag is LauncherItem group
+            && e.Items.FirstOrDefault() is LauncherItem item)
+        {
+            _dragItem = item;
+            _dragSourceCollection = group.Children;
+            e.Data.RequestedOperation = global::Windows.ApplicationModel.DataTransfer.DataPackageOperation.Move;
+
+            // Show the top-level drop zone so the user can pull items out of groups.
+            TopLevelDropZone.Visibility = Visibility.Visible;
+            TopLevelDropZone.BorderThickness = new Thickness(2);
+        }
+    }
+
+    private void GroupChildList_DragOver(object sender, DragEventArgs e)
+    {
+        if (sender is not ListView lv || lv.Tag is not LauncherItem group) return;
+        if (_dragItem == null || _dragSourceCollection == null) return;
+
+        // Reject groups being dropped into other groups.
+        if (_dragItem.IsGroup)
+        {
+            e.AcceptedOperation = global::Windows.ApplicationModel.DataTransfer.DataPackageOperation.None;
+            e.Handled = true;
+            return;
+        }
+
+        e.AcceptedOperation = global::Windows.ApplicationModel.DataTransfer.DataPackageOperation.Move;
+
+        // Show insertion indicator within the group
+        int dropIndex = GetDropIndex(lv, e);
+        ShowInsertionIndicator(lv, dropIndex);
+
+        e.DragUIOverride.IsCaptionVisible = true;
+        e.DragUIOverride.IsGlyphVisible = true;
+        if (dropIndex < group.Children.Count)
+            e.DragUIOverride.Caption = $"Move above {group.Children[dropIndex].Name}";
+        else
+            e.DragUIOverride.Caption = $"Move to end of {group.Name}";
+
+        e.Handled = true;
+    }
+
+    private void GroupChildList_DragLeave(object sender, DragEventArgs e)
+    {
+        ClearInsertionIndicator();
+    }
+
+    private void GroupChildList_Drop(object sender, DragEventArgs e)
+    {
+        ClearInsertionIndicator();
+        if (sender is not ListView lv || lv.Tag is not LauncherItem group) return;
+        if (_dragItem == null || _dragSourceCollection == null || _dragItem.IsGroup) return;
+
+        int dropIndex = GetDropIndex(lv, e);
+
+        // If reordering within the same group, adjust for the removal shift
+        int originalIndex = _dragSourceCollection == group.Children ? _dragSourceCollection.IndexOf(_dragItem) : -1;
+        _dragSourceCollection.Remove(_dragItem);
+        if (originalIndex >= 0 && originalIndex < dropIndex)
+            dropIndex--;
+        if (dropIndex > group.Children.Count) dropIndex = group.Children.Count;
+        group.Children.Insert(dropIndex, _dragItem);
+
+        _dragItem = null;
+        _dragSourceCollection = null;
+        TopLevelDropZone.Visibility = Visibility.Collapsed;
+
+        RefreshList();
+        SaveAndUpdateTaskbar();
+        e.Handled = true;
+    }
+
+    private void GroupChildList_DragItemsCompleted(ListViewBase sender, DragItemsCompletedEventArgs args)
+    {
+        ClearInsertionIndicator();
+        TopLevelDropZone.Visibility = Visibility.Collapsed;
+        _dragItem = null;
+        _dragSourceCollection = null;
+    }
+
+    // -- Top-level drop zone (visible when dragging from a group) --
+
+    private void TopLevelDropZone_DragOver(object sender, DragEventArgs e)
+    {
+        if (_dragItem == null || _dragSourceCollection == null) return;
+        if (_dragSourceCollection == SettingsManager.Current.LauncherItems) return;
+
+        ClearInsertionIndicator();
+        e.AcceptedOperation = global::Windows.ApplicationModel.DataTransfer.DataPackageOperation.Move;
+        e.DragUIOverride.IsCaptionVisible = true;
+        e.DragUIOverride.IsGlyphVisible = true;
+        e.DragUIOverride.Caption = "Move to top level";
+        e.Handled = true;
+    }
+
+    private void TopLevelDropZone_Drop(object sender, DragEventArgs e)
+    {
+        ClearInsertionIndicator();
+        if (_dragItem == null || _dragSourceCollection == null) return;
+        if (_dragSourceCollection == SettingsManager.Current.LauncherItems) return;
+
+        var items = SettingsManager.Current.LauncherItems;
+        _dragSourceCollection.Remove(_dragItem);
+        items.Add(_dragItem);
+
+        _dragItem = null;
+        _dragSourceCollection = null;
+        TopLevelDropZone.Visibility = Visibility.Collapsed;
+
+        RefreshList();
+        SaveAndUpdateTaskbar();
+        e.Handled = true;
+    }
+
+    // -- Insertion indicator helpers --
+
+    private void ShowInsertionIndicator(ListView listView, int dropIndex)
+    {
+        ClearInsertionIndicator();
+
+        // Show a colored top-border on the item at dropIndex, or bottom-border on the last item.
+        int targetIndex = dropIndex < listView.Items.Count ? dropIndex : listView.Items.Count - 1;
+        if (targetIndex < 0) return;
+
+        if (listView.ContainerFromIndex(targetIndex) is ListViewItem container)
+        {
+            _lastIndicatorContainer = container;
+            var accentBrush = Application.Current.Resources.TryGetValue("AccentFillColorDefaultBrush", out var brush)
+                ? (Microsoft.UI.Xaml.Media.Brush)brush
+                : new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.DodgerBlue);
+
+            if (dropIndex < listView.Items.Count)
+            {
+                // Show line above this item
+                container.BorderBrush = accentBrush;
+                container.BorderThickness = new Thickness(0, 3, 0, 0);
+            }
+            else
+            {
+                // Show line below the last item
+                container.BorderBrush = accentBrush;
+                container.BorderThickness = new Thickness(0, 0, 0, 3);
+            }
+        }
+    }
+
+    private void ClearInsertionIndicator()
+    {
+        if (_lastIndicatorContainer != null)
+        {
+            _lastIndicatorContainer.BorderBrush = null;
+            _lastIndicatorContainer.BorderThickness = new Thickness(0);
+            _lastIndicatorContainer = null;
+        }
+    }
+
+    private async Task ShowItemDialog(LauncherItem? existingItem, ObservableCollection<LauncherItem>? targetList = null)
     {
         bool isEdit = existingItem != null;
 
@@ -175,7 +678,7 @@ public partial class LauncherItemsPage : Page
         string appWindowBrowserProfile = existingItem?.AppWindowBrowserProfile ?? "";
 
         // -- 1. Type selector --
-        var typeCombo = new ComboBox { Margin = new Thickness(0, 0, 0, 8) };
+        var typeCombo = new ComboBox { Margin = new Thickness(0, 0, 0, 8), HorizontalAlignment = HorizontalAlignment.Stretch };
         typeCombo.Items.Add(new ComboBoxItem { Content = "Website or Web App" });
         typeCombo.Items.Add(new ComboBoxItem { Content = "Application" });
         typeCombo.Items.Add(new ComboBoxItem { Content = "Progressive Web App" });
@@ -190,7 +693,8 @@ public partial class LauncherItemsPage : Page
         var pathBox = new TextBox
         {
             PlaceholderText = "https://example.com",
-            Margin = new Thickness(0, 0, 0, 8)
+            Margin = new Thickness(0, 0, 0, 8),
+            HorizontalAlignment = HorizontalAlignment.Stretch
         };
 
         // App-mode: ComboBox with installed apps + Browse
@@ -198,7 +702,8 @@ public partial class LauncherItemsPage : Page
         {
             IsEditable = false,
             Margin = new Thickness(0, 0, 0, 0),
-            DisplayMemberPath = "DisplayName"
+            DisplayMemberPath = "DisplayName",
+            HorizontalAlignment = HorizontalAlignment.Stretch
         };
         bool appCatalogLoaded = false;
         void EnsureAppCatalogLoaded()
@@ -219,12 +724,16 @@ public partial class LauncherItemsPage : Page
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(4, 0, 0, 0)
         };
-        var appPathRow = new StackPanel
+        var appPathRow = new Grid
         {
-            Orientation = Orientation.Horizontal,
-            Margin = new Thickness(0, 0, 0, 8)
+            Margin = new Thickness(0, 0, 0, 8),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            ColumnSpacing = 4
         };
-        appPathCombo.MinWidth = 340;
+        appPathRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        appPathRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        Grid.SetColumn(appPathCombo, 0);
+        Grid.SetColumn(browseButton, 1);
         appPathRow.Children.Add(appPathCombo);
         appPathRow.Children.Add(browseButton);
 
@@ -234,8 +743,8 @@ public partial class LauncherItemsPage : Page
         {
             IsEditable = false,
             Margin = new Thickness(0, 0, 0, 0),
-            MinWidth = 340,
-            DisplayMemberPath = "DisplayName"
+            DisplayMemberPath = "DisplayName",
+            HorizontalAlignment = HorizontalAlignment.Stretch
         };
         var noPwasHint = new TextBlock
         {
@@ -264,7 +773,8 @@ public partial class LauncherItemsPage : Page
         var argsBox = new TextBox
         {
             PlaceholderText = "(optional)",
-            Margin = new Thickness(0, 0, 0, 8)
+            Margin = new Thickness(0, 0, 0, 8),
+            HorizontalAlignment = HorizontalAlignment.Stretch
         };
 
         // -- 4. Web app window mode (Website only) --
@@ -279,7 +789,7 @@ public partial class LauncherItemsPage : Page
 
         // -- 4a. Browser picker --
         var browserLabel = Label("Browser");
-        var browserCombo = new ComboBox { Margin = new Thickness(0, 0, 0, 8), MinWidth = 340 };
+        var browserCombo = new ComboBox { Margin = new Thickness(0, 0, 0, 8), HorizontalAlignment = HorizontalAlignment.Stretch };
         var installedBrowsers = GetInstalledBrowsers();
         browserCombo.Items.Add(new ComboBoxItem { Content = "Default browser", Tag = "" });
         foreach (var browser in installedBrowsers)
@@ -288,7 +798,7 @@ public partial class LauncherItemsPage : Page
 
         // -- 4b. Profile picker --
         var profileLabel = Label("Profile");
-        var profileCombo = new ComboBox { Margin = new Thickness(0, 0, 0, 8), MinWidth = 340 };
+        var profileCombo = new ComboBox { Margin = new Thickness(0, 0, 0, 8), HorizontalAlignment = HorizontalAlignment.Stretch };
 
         void PopulateProfileCombo()
         {
@@ -440,7 +950,8 @@ public partial class LauncherItemsPage : Page
         var nameBox = new TextBox
         {
             PlaceholderText = "Auto-detected",
-            Margin = new Thickness(0, 0, 0, 8)
+            Margin = new Thickness(0, 0, 0, 8),
+            HorizontalAlignment = HorizontalAlignment.Stretch
         };
 
         // -- 6. Icon --
@@ -582,6 +1093,28 @@ public partial class LauncherItemsPage : Page
                     iconStatus.Text = "Could not fetch icon";
                 }
             }
+            else if (path.StartsWith(@"shell:AppsFolder\", StringComparison.OrdinalIgnoreCase))
+            {
+                // Store / packaged app — extract icon via shell
+                string aumid = path[@"shell:AppsFolder\".Length..];
+                iconStatus.Text = "Extracting icon...";
+                refreshButton.IsEnabled = false;
+                nameBox.IsEnabled = false;
+                nameBox.PlaceholderText = "Detecting name...";
+                var appIcon = FaviconService.GetPwaIconFromShell(aumid);
+                refreshButton.IsEnabled = true;
+                nameBox.IsEnabled = true;
+                nameBox.PlaceholderText = "Auto-detected";
+                if (!string.IsNullOrEmpty(appIcon))
+                {
+                    fetchedIconPath = appIcon;
+                    UpdateIconPreview(iconPreview, iconStatus, fetchedIconPath, false);
+                }
+                else
+                {
+                    iconStatus.Text = "Could not extract icon";
+                }
+            }
             else
             {
                 if (force || string.IsNullOrEmpty(nameBox.Text))
@@ -664,6 +1197,8 @@ public partial class LauncherItemsPage : Page
                 }
                 populating = true;
                 pathBox.Text = app.ExePath;
+                if (string.IsNullOrEmpty(nameBox.Text))
+                    nameBox.Text = app.DisplayName;
                 populating = false;
                 ScheduleFetch();
             }
@@ -841,7 +1376,8 @@ public partial class LauncherItemsPage : Page
             newItem.IsPwa = isPwa;
             newItem.AppWindowBrowser = isWebsite && openInAppWindow ? appWindowBrowser : "";
             newItem.AppWindowBrowserProfile = isWebsite && openInAppWindow ? appWindowBrowserProfile : "";
-            SettingsManager.Current.LauncherItems.Add(newItem);
+            var target = targetList ?? SettingsManager.Current.LauncherItems;
+            target.Add(newItem);
         }
 
         RefreshList();
@@ -883,6 +1419,24 @@ public partial class LauncherItemsPage : Page
         FontWeight = Microsoft.UI.Text.FontWeights.Medium,
         Margin = new Thickness(0, 0, 0, 4)
     };
+
+    /// <summary>
+    /// Determines the item insertion index for a drop based on the cursor position
+    /// relative to the ListView item containers.
+    /// </summary>
+    private static int GetDropIndex(ListView listView, DragEventArgs e)
+    {
+        var position = e.GetPosition(listView);
+        for (int i = 0; i < listView.Items.Count; i++)
+        {
+            if (listView.ContainerFromIndex(i) is not ListViewItem container) continue;
+            var transform = container.TransformToVisual(listView);
+            var point = transform.TransformPoint(new global::Windows.Foundation.Point(0, 0));
+            if (position.Y < point.Y + container.ActualHeight / 2)
+                return i;
+        }
+        return listView.Items.Count;
+    }
 
     private static void InitializePicker(object picker)
     {
@@ -1132,10 +1686,48 @@ public partial class LauncherItemsPage : Page
     {
         if (sender is FrameworkElement fe && fe.Tag is LauncherItem item)
         {
-            SettingsManager.Current.LauncherItems.Remove(item);
+            var items = SettingsManager.Current.LauncherItems;
+            if (!items.Remove(item))
+            {
+                foreach (var group in items.Where(i => i.IsGroup))
+                    if (group.Children.Remove(item)) break;
+            }
             RefreshList();
             SaveAndUpdateTaskbar();
         }
+    }
+
+    private ObservableCollection<LauncherItem>? FindParentCollection(LauncherItem item)
+    {
+        var items = SettingsManager.Current.LauncherItems;
+        if (items.Contains(item)) return items;
+        foreach (var group in items.Where(i => i.IsGroup))
+            if (group.Children.Contains(item)) return group.Children;
+        return null;
+    }
+
+    private void MoveItemUp_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement fe || fe.Tag is not LauncherItem item) return;
+        var parent = FindParentCollection(item);
+        if (parent == null) return;
+        int index = parent.IndexOf(item);
+        if (index <= 0) return;
+        parent.Move(index, index - 1);
+        RefreshList();
+        SaveAndUpdateTaskbar();
+    }
+
+    private void MoveItemDown_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement fe || fe.Tag is not LauncherItem item) return;
+        var parent = FindParentCollection(item);
+        if (parent == null) return;
+        int index = parent.IndexOf(item);
+        if (index < 0 || index >= parent.Count - 1) return;
+        parent.Move(index, index + 1);
+        RefreshList();
+        SaveAndUpdateTaskbar();
     }
 
     private record InstalledApp(string DisplayName, string ExePath);
@@ -1267,6 +1859,43 @@ public partial class LauncherItemsPage : Page
             }
         }
 
+        // Also enumerate shell:AppsFolder for Store/packaged apps
+        try
+        {
+            var shellType = Type.GetTypeFromProgID("Shell.Application");
+            if (shellType != null)
+            {
+                dynamic shell = Activator.CreateInstance(shellType)!;
+                dynamic folder = shell.NameSpace("shell:AppsFolder");
+                if (folder != null)
+                {
+                    var pwaPattern = new System.Text.RegularExpressions.Regex(
+                        @"^[\w][\w.-]*\.[a-zA-Z]{2,}-[A-Fa-f0-9]+_[a-z0-9]+!App$");
+
+                    foreach (dynamic item in folder.Items())
+                    {
+                        string? path = item.Path as string;
+                        string? name = item.Name as string;
+                        if (string.IsNullOrEmpty(path) || string.IsNullOrEmpty(name)) continue;
+                        if (!path.EndsWith("!App", StringComparison.Ordinal)) continue;
+
+                        // Skip Chromium PWAs (handled by the PWA picker)
+                        if (pwaPattern.IsMatch(path)) continue;
+
+                        if (IsNonAppName(name)) continue;
+
+                        string launchPath = $"shell:AppsFolder\\{path}";
+                        if (!apps.ContainsKey(launchPath))
+                            apps[launchPath] = new InstalledApp(name, launchPath);
+                    }
+
+                    System.Runtime.InteropServices.Marshal.FinalReleaseComObject(folder);
+                    System.Runtime.InteropServices.Marshal.FinalReleaseComObject(shell);
+                }
+            }
+        }
+        catch { }
+
         return apps.Values
             .OrderBy(a => a.DisplayName, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -1349,6 +1978,7 @@ public partial class LauncherItemsPage : Page
     {
         SettingsManager.SaveSettings();
         Services.AutoSyncService.NotifyItemsChanged();
+        FlyoutWindow.InvalidateItems();
     }
 
     private async void ExportItems_Click(object sender, RoutedEventArgs e)

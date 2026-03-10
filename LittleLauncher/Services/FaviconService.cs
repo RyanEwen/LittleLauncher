@@ -540,7 +540,13 @@ internal static partial class FaviconService
     {
         foreach (var item in items)
         {
-            if (item.IsCategory || string.IsNullOrWhiteSpace(item.Path))
+            if (item.IsGroup)
+            {
+                await FetchMissingItemIconsAsync(item.Children);
+                continue;
+            }
+
+            if (item.IsHeading || string.IsNullOrWhiteSpace(item.Path))
                 continue;
 
             // Already has a valid local icon
@@ -572,6 +578,11 @@ internal static partial class FaviconService
                             iconPath = GetCachedPath(url) ?? await FetchAndCacheAsync(url);
                         }
                     }
+                }
+                else if (item.Path.StartsWith(@"shell:AppsFolder\", StringComparison.OrdinalIgnoreCase))
+                {
+                    string aumid = item.Path[@"shell:AppsFolder\".Length..];
+                    iconPath = GetPwaIconFromShell(aumid);
                 }
                 else
                 {

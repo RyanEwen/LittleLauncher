@@ -34,6 +34,10 @@ applyTo: "**/ViewModels/UserSettings*.cs"
 - Default values in field initializers are used when the element is missing from XML
 - After deserialization, `CompleteInitialization()` is called to finalize state
 
+## Non-Serialized Model Properties
+
+`LauncherItem.IsExpanded` is `[XmlIgnore]` (defaults `true`) — it tracks the group expand/collapse state in the settings UI but is not persisted to disk. It is a plain property (not `[ObservableProperty]`) since it doesn't need data binding or change notification.
+
 ## Property Categories
 
 Group related properties together with comment headers matching existing style:

@@ -34,27 +34,43 @@
             <Border Grid.Column="0" Margin="4" Padding="12,20" CornerRadius="4"
                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1"
-                    PointerReleased="LauncherItems_Click">
-                <StackPanel Orientation="Horizontal">
-                    <FontIcon Glyph="&#xE71D;" FontSize="30" Margin="0,0,12,0" />
-                    <StackPanel>
-                        <TextBlock FontWeight="Medium" Text="Launcher Items" />
-                        <TextBlock Text="Manage your shortcuts" Opacity="0.5" FontSize="12" />
+                    PointerReleased="LauncherItems_Click"
+                    PointerEntered="DashboardCard_PointerEntered" PointerExited="DashboardCard_PointerExited">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Orientation="Horizontal">
+                        <FontIcon Glyph="&#xE71D;" FontSize="30" Margin="0,0,12,0" />
+                        <StackPanel>
+                            <TextBlock FontWeight="Medium" Text="Launcher Items" />
+                            <TextBlock Text="Manage your shortcuts" Opacity="0.5" FontSize="12" />
+                        </StackPanel>
                     </StackPanel>
-                </StackPanel>
+                    <FontIcon Grid.Column="1" Glyph="&#xE76C;" FontSize="14" Opacity="0.3" VerticalAlignment="Center"/>
+                </Grid>
             </Border>
 
             <Border Grid.Column="1" Margin="4" Padding="12,20" CornerRadius="4"
                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1"
-                    PointerReleased="SyncSettings_Click">
-                <StackPanel Orientation="Horizontal">
-                    <FontIcon Glyph="&#xE895;" FontSize="30" Margin="0,0,12,0" />
-                    <StackPanel>
-                        <TextBlock FontWeight="Medium" Text="Cloud Sync" />
-                        <TextBlock Text="SSH/SFTP sync" Opacity="0.5" FontSize="12" />
+                    PointerReleased="SyncSettings_Click"
+                    PointerEntered="DashboardCard_PointerEntered" PointerExited="DashboardCard_PointerExited">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Orientation="Horizontal">
+                        <FontIcon Glyph="&#xE895;" FontSize="30" Margin="0,0,12,0" />
+                        <StackPanel>
+                            <TextBlock FontWeight="Medium" Text="Cloud Sync" />
+                            <TextBlock Text="SSH/SFTP sync" Opacity="0.5" FontSize="12" />
+                        </StackPanel>
                     </StackPanel>
-                </StackPanel>
+                    <FontIcon Grid.Column="1" Glyph="&#xE76C;" FontSize="14" Opacity="0.3" VerticalAlignment="Center"/>
+                </Grid>
             </Border>
         </Grid>
 

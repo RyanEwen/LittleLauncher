@@ -595,8 +595,9 @@ public sealed partial class MainWindow : Window
         try
         {
             var items = SettingsManager.Current.LauncherItems;
-            bool anyMissing = items.Any(i =>
-                !i.IsCategory &&
+            var allItems = items.SelectMany(i => i.IsGroup ? new[] { i }.Concat(i.Children) : [i]);
+            bool anyMissing = allItems.Any(i =>
+                !i.IsHeading && !i.IsGroup &&
                 !string.IsNullOrWhiteSpace(i.Path) &&
                 (string.IsNullOrEmpty(i.IconPath) || !File.Exists(i.IconPath)));
 

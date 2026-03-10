@@ -162,6 +162,9 @@ public sealed partial class SettingsWindow : Window
 
     internal static SettingsWindow? GetCurrent() => instance;
 
+    /// <summary>The currently displayed page, if any.</summary>
+    internal object? CurrentPage => ContentFrame?.Content;
+
     /// <summary>
     /// Re-reads the settings icon (app icon + gear overlay) and applies it to this window.
     /// Called when the tray icon mode or OS theme changes.

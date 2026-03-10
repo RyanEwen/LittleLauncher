@@ -13,6 +13,10 @@ App.xaml  →  MainWindow (invisible, owns tray icon)
                       └── AboutPage
 ```
 
+## LauncherItemsPage drag-and-drop
+
+The Launcher Items settings page supports full cross-list drag-and-drop: items can be dragged between the top-level list and group child lists, between different groups, and out of groups via a drop zone. All ListViews use `CanDragItems="True"` with custom `DragOver`/`Drop` handlers — WinUI 3's `CanReorderItems` is intentionally avoided because it takes full internal control of drag events and cannot support cross-collection moves. See `.github/instructions/drag-drop.instructions.md` for implementation details.
+
 ## Launch modes
 
 By default, launching the app opens the Settings window. Silent mode (tray icon only, no Settings window) is used for Windows startup and companion exe cold-starts:

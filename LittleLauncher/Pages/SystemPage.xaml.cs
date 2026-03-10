@@ -140,61 +140,6 @@ public partial class SystemPage : Page
             : Path.GetFileName(path);
     }
 
-    private async void RestartExplorer_Click(object sender, RoutedEventArgs e)
-    {
-        var dialog = new ContentDialog
-        {
-            Title = "Restart Explorer?",
-            Content = "This will briefly restart Windows Explorer to refresh cached taskbar icons. Your taskbar and desktop will disappear momentarily.",
-            PrimaryButtonText = "Restart",
-            CloseButtonText = "Cancel",
-            DefaultButton = ContentDialogButton.Close,
-            XamlRoot = this.XamlRoot
-        };
-
-        if (await dialog.ShowAsync() == ContentDialogResult.Primary)
-        {
-            try
-            {
-                // Delete the icon cache database so Windows rebuilds it
-                string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-                string cacheDir = Path.Combine(localAppData, "Microsoft", "Windows", "Explorer");
-                if (Directory.Exists(cacheDir))
-                {
-                    foreach (string file in Directory.GetFiles(cacheDir, "iconcache*"))
-                    {
-                        try { File.Delete(file); } catch { }
-                    }
-                    foreach (string file in Directory.GetFiles(cacheDir, "thumbcache*"))
-                    {
-                        try { File.Delete(file); } catch { }
-                    }
-                }
-
-                foreach (var proc in System.Diagnostics.Process.GetProcessesByName("explorer"))
-                {
-                    proc.Kill();
-                    proc.Dispose();
-                }
-
-                // Windows auto-restarts explorer, but launch it explicitly as a fallback
-                await Task.Delay(1000);
-                if (System.Diagnostics.Process.GetProcessesByName("explorer").Length == 0)
-                {
-                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                    {
-                        FileName = "explorer.exe",
-                        UseShellExecute = true
-                    });
-                }
-            }
-            catch (Exception ex)
-            {
-                Logger.Error(ex, "Failed to restart Explorer");
-            }
-        }
-    }
-
     private async void BrowseCustomIcon_Click(object sender, RoutedEventArgs e)
     {
         var picker = new FileOpenPicker();

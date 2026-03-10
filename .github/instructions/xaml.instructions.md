@@ -43,3 +43,20 @@ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
 
 - **SettingsWindow** uses `MicaBackdrop`
 - **FlyoutWindow** uses a transparent backdrop
+
+## Code-Built Dialogs
+
+The add/edit item dialog in `LauncherItemsPage` is built entirely in C# (not XAML). Conventions:
+
+- All input controls (`TextBox`, `ComboBox`, `ToggleSwitch`) use `HorizontalAlignment = HorizontalAlignment.Stretch` to fill the dialog width uniformly.
+- The form container is a `StackPanel` with `MinWidth = 400`.
+- When a row needs a stretch input + a fixed button (e.g. app path + Browse), use a `Grid` with `Star` + `Auto` column definitions instead of a horizontal `StackPanel`.
+- Labels are created via a `Label(string)` helper that returns a styled `TextBlock`.
+
+## Drag-and-Drop (LauncherItemsPage)
+
+ListViews use `CanDragItems="True"` with custom handlers — **never `CanReorderItems`**, which cannot be overridden for cross-list drops. See `drag-drop.instructions.md` for full details.
+
+## Group Expand/Collapse
+
+Groups use a manual `StackPanel` with `Tag="GroupRoot"` / `Tag="GroupChildren"` and a toggle button — **not WinUI Expanders**. This allows the entire group card to be a drag source. The `Loaded` event on `GroupRoot` restores `IsExpanded` state after `RefreshList()` rebuilds the visual tree.

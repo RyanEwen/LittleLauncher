@@ -145,6 +145,24 @@ public partial class HomePage : Page
         SettingsWindow.GetCurrent()?.NavigateTo(typeof(SyncPage));
     }
 
+    private void DashboardCard_PointerEntered(object sender, PointerRoutedEventArgs e)
+    {
+        if (sender is Border border)
+        {
+            border.Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["CardBackgroundFillColorSecondaryBrush"];
+            this.ProtectedCursor = Microsoft.UI.Input.InputSystemCursor.Create(Microsoft.UI.Input.InputSystemCursorShape.Hand);
+        }
+    }
+
+    private void DashboardCard_PointerExited(object sender, PointerRoutedEventArgs e)
+    {
+        if (sender is Border border)
+        {
+            border.Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["CardBackgroundFillColorDefaultBrush"];
+            this.ProtectedCursor = Microsoft.UI.Input.InputSystemCursor.Create(Microsoft.UI.Input.InputSystemCursorShape.Arrow);
+        }
+    }
+
     private void TrayIconSwitch_Toggled(object sender, RoutedEventArgs e)
     {
         bool show = TrayIconSwitch.IsOn;

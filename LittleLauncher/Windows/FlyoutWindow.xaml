@@ -17,11 +17,40 @@
 
             <local:FlyoutItemTemplateSelector
                 x:Key="ItemTemplateSelector"
-                CategoryTemplate="{StaticResource CategoryTemplate}"
+                GroupTemplate="{StaticResource GroupTemplate}"
+                HeadingTemplate="{StaticResource HeadingTemplate}"
                 ItemTemplate="{StaticResource LauncherItemTemplate}" />
 
-            <!-- Category heading row -->
-            <DataTemplate x:Key="CategoryTemplate">
+            <!-- Group heading row (clickable to expand/collapse) -->
+            <DataTemplate x:Key="GroupTemplate">
+                <Grid Margin="0,6,0,0"
+                      HorizontalAlignment="Stretch"
+                      ColumnSpacing="4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock
+                        Grid.Column="0"
+                        Text="{Binding Name}"
+                        FontSize="11"
+                        FontWeight="Bold"
+                        Opacity="0.6"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        VerticalAlignment="Center"
+                        TextWrapping="NoWrap"
+                        TextTrimming="CharacterEllipsis" />
+                    <FontIcon
+                        Grid.Column="1"
+                        Glyph="&#xE70D;"
+                        FontSize="9"
+                        Opacity="0.4"
+                        VerticalAlignment="Center" />
+                </Grid>
+            </DataTemplate>
+
+            <!-- Heading row -->
+            <DataTemplate x:Key="HeadingTemplate">
                 <Grid Margin="0,4,0,0"
                       HorizontalAlignment="Stretch">
                     <TextBlock
@@ -99,8 +128,8 @@
                 </Setter>
             </Style>
 
-            <!-- Container style for category headers (no hover effect) -->
-            <Style x:Key="CategoryItemContainerStyle" TargetType="ListViewItem">
+            <!-- Container style for heading items (no hover effect) -->
+            <Style x:Key="HeadingItemContainerStyle" TargetType="ListViewItem">
                 <Setter Property="IsTabStop" Value="False" />
                 <Setter Property="MinHeight" Value="0" />
                 <Setter Property="Padding" Value="8,6" />
@@ -121,9 +150,73 @@
                 </Setter>
             </Style>
 
+            <!-- Container style for group headers (clickable with hover effect) -->
+            <Style x:Key="GroupItemContainerStyle" TargetType="ListViewItem">
+                <Setter Property="IsTabStop" Value="False" />
+                <Setter Property="MinHeight" Value="0" />
+                <Setter Property="Padding" Value="8,6" />
+                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ListViewItem">
+                            <Grid>
+                                <VisualStateManager.VisualStateGroups>
+                                    <VisualStateGroup x:Name="CommonStates">
+                                        <VisualState x:Name="Normal" />
+                                        <VisualState x:Name="PointerOver">
+                                            <Storyboard>
+                                                <ObjectAnimationUsingKeyFrames Storyboard.TargetName="BackgroundBorder" Storyboard.TargetProperty="Background">
+                                                    <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource SubtleFillColorSecondaryBrush}" />
+                                                </ObjectAnimationUsingKeyFrames>
+                                            </Storyboard>
+                                        </VisualState>
+                                        <VisualState x:Name="Pressed">
+                                            <Storyboard>
+                                                <ObjectAnimationUsingKeyFrames Storyboard.TargetName="BackgroundBorder" Storyboard.TargetProperty="Background">
+                                                    <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource SubtleFillColorTertiaryBrush}" />
+                                                </ObjectAnimationUsingKeyFrames>
+                                            </Storyboard>
+                                        </VisualState>
+                                        <VisualState x:Name="Disabled" />
+                                        <VisualState x:Name="Selected" />
+                                        <VisualState x:Name="PointerOverSelected">
+                                            <Storyboard>
+                                                <ObjectAnimationUsingKeyFrames Storyboard.TargetName="BackgroundBorder" Storyboard.TargetProperty="Background">
+                                                    <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource SubtleFillColorSecondaryBrush}" />
+                                                </ObjectAnimationUsingKeyFrames>
+                                            </Storyboard>
+                                        </VisualState>
+                                        <VisualState x:Name="PressedSelected">
+                                            <Storyboard>
+                                                <ObjectAnimationUsingKeyFrames Storyboard.TargetName="BackgroundBorder" Storyboard.TargetProperty="Background">
+                                                    <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource SubtleFillColorTertiaryBrush}" />
+                                                </ObjectAnimationUsingKeyFrames>
+                                            </Storyboard>
+                                        </VisualState>
+                                    </VisualStateGroup>
+                                </VisualStateManager.VisualStateGroups>
+                                <Border
+                                    x:Name="BackgroundBorder"
+                                    CornerRadius="6"
+                                    Background="Transparent"
+                                    Padding="{TemplateBinding Padding}">
+                                    <ContentPresenter
+                                        Content="{TemplateBinding Content}"
+                                        ContentTemplate="{TemplateBinding ContentTemplate}"
+                                        ContentTransitions="{TemplateBinding ContentTransitions}"
+                                        HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                        VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}" />
+                                </Border>
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
             <local:FlyoutItemContainerStyleSelector
                 x:Key="ItemContainerStyleSelector"
-                CategoryStyle="{StaticResource CategoryItemContainerStyle}"
+                GroupStyle="{StaticResource GroupItemContainerStyle}"
+                HeadingStyle="{StaticResource HeadingItemContainerStyle}"
                 ItemStyle="{StaticResource LauncherItemContainerStyle}" />
 
             <!-- Launcher item row -->
@@ -165,11 +258,9 @@
             x:Name="ItemsListControl"
             Padding="8,6,8,6"
             IsItemClickEnabled="True"
-            CanReorderItems="True"
-            AllowDrop="True"
             ItemClick="ItemsListControl_ItemClick"
             RightTapped="ItemsListControl_RightTapped"
-            DragItemsCompleted="ItemsListControl_DragItemsCompleted"
+            ContainerContentChanging="ItemsListControl_ContainerContentChanging"
             ItemTemplateSelector="{StaticResource ItemTemplateSelector}"
             SelectionMode="None"
             IsTabStop="False"

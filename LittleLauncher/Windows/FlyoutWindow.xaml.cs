@@ -1,6 +1,7 @@
 using LittleLauncher.Classes;
 using LittleLauncher.Classes.Settings;
 using LittleLauncher.Models;
+using LittleLauncher.Pages;
 using LittleLauncher.Services;
 using System.Diagnostics;
 using System.IO;
@@ -8,6 +9,8 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Collections.Concurrent;
+using System.Collections.ObjectModel;
+using System.Linq;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
@@ -32,12 +35,23 @@ public partial class FlyoutWindow : Window
     private IntPtr _hwnd;
     private SUBCLASSPROC? _wndProcDelegate;
     private bool _isShowing;
+    private readonly HashSet<LauncherItem> _collapsedGroups = [];
 
     private FlyoutWindow(MainWindow owner)
     {
         _owner = owner;
         InitializeComponent();
         _hwnd = WindowNative.GetWindowHandle(this);
+
+        // Restore persisted collapsed-groups state
+        var savedNames = SettingsManager.Current.CollapsedFlyoutGroups;
+        if (savedNames.Count > 0)
+        {
+            var nameSet = new HashSet<string>(savedNames, StringComparer.OrdinalIgnoreCase);
+            foreach (var item in SettingsManager.Current.LauncherItems)
+                if (item.IsGroup && nameSet.Contains(item.Name))
+                    _collapsedGroups.Add(item);
+        }
 
         // Remove titlebar and make borderless, always on top so it
         // renders above the tray overflow popup.
@@ -46,7 +60,7 @@ public partial class FlyoutWindow : Window
         presenter.IsAlwaysOnTop = true;
         GetAppWindow().SetPresenter(presenter);
 
-        ItemsListControl.ItemsSource = SettingsManager.Current.LauncherItems;
+        ItemsListControl.ItemsSource = BuildFlatDisplayList();
 
         // Desktop Acrylic blurs whatever is behind the window (including other windows),
         // unlike Mica which only samples the wallpaper.
@@ -175,18 +189,48 @@ public partial class FlyoutWindow : Window
         var hash = new HashCode();
         foreach (var item in items)
         {
-            hash.Add(item.Name);
-            hash.Add(item.Path);
-            hash.Add(item.IconPath);
-            hash.Add(item.IconGlyph);
-            hash.Add(item.IsWebsite);
-            hash.Add(item.OpenInAppWindow);
-            hash.Add(item.AppWindowBrowser);
-            hash.Add(item.AppWindowBrowserProfile);
-            hash.Add(item.IsCategory);
-            hash.Add(item.IsPwa);
+            HashItem(ref hash, item);
+            if (item.IsGroup)
+            {
+                foreach (var child in item.Children)
+                    HashItem(ref hash, child);
+            }
         }
         return hash.ToHashCode();
+    }
+
+    private static void HashItem(ref HashCode hash, LauncherItem item)
+    {
+        hash.Add(item.Name);
+        hash.Add(item.Path);
+        hash.Add(item.IconPath);
+        hash.Add(item.IconGlyph);
+        hash.Add(item.IsWebsite);
+        hash.Add(item.OpenInAppWindow);
+        hash.Add(item.AppWindowBrowser);
+        hash.Add(item.AppWindowBrowserProfile);
+        hash.Add(item.IsHeading);
+        hash.Add(item.IsGroup);
+        hash.Add(item.IsPwa);
+    }
+
+    /// <summary>
+    /// Flattens the hierarchical items list into a single display list.
+    /// Groups are included as headers, followed by their children (unless collapsed).
+    /// </summary>
+    private ObservableCollection<LauncherItem> BuildFlatDisplayList()
+    {
+        var flat = new ObservableCollection<LauncherItem>();
+        foreach (var item in SettingsManager.Current.LauncherItems)
+        {
+            flat.Add(item);
+            if (item.IsGroup && !_collapsedGroups.Contains(item))
+            {
+                foreach (var child in item.Children)
+                    flat.Add(child);
+            }
+        }
+        return flat;
     }
 
     private void RebuildItemsIfNeeded()
@@ -198,7 +242,7 @@ public partial class FlyoutWindow : Window
             // Null first to force full container recreation — reassigning the
             // same ObservableCollection reference is a no-op in WinUI's ListView.
             ItemsListControl.ItemsSource = null;
-            ItemsListControl.ItemsSource = SettingsManager.Current.LauncherItems;
+            ItemsListControl.ItemsSource = BuildFlatDisplayList();
         }
     }
 
@@ -209,7 +253,28 @@ public partial class FlyoutWindow : Window
     internal static void InvalidateItems()
     {
         if (_instance != null)
+        {
+            _instance.SyncCollapsedGroupsFromModel();
             _instance._lastItemsHash = -1;
+            _instance.RebuildItemsIfNeeded();
+        }
+    }
+
+    private void ResizeFlyout()
+    {
+        double dpiScale = GetDpiForWindow(_hwnd) / 96.0;
+        if (dpiScale <= 0) dpiScale = 1.0;
+        int flyoutWidthPx = (int)(250 * dpiScale);
+        int newHeightPx = (int)Math.Ceiling(MeasureContentHeight() * dpiScale);
+
+        // Keep the bottom edge anchored: adjust the top when height changes.
+        GetWindowRect(_hwnd, out RECT rc);
+        int bottom = rc.Bottom;
+        int left = rc.Left;
+        int top = bottom - newHeightPx;
+
+        SetWindowPos(_hwnd, 0, left, top, flyoutWidthPx, newHeightPx,
+            SWP_NOZORDER | SWP_NOACTIVATE);
     }
 
 
@@ -273,7 +338,21 @@ public partial class FlyoutWindow : Window
 
     private void ItemsListControl_ItemClick(object sender, ItemClickEventArgs e)
     {
-        if (e.ClickedItem is not LauncherItem item || item.IsCategory) return;
+        if (e.ClickedItem is not LauncherItem item) return;
+
+        if (item.IsGroup)
+        {
+            // Toggle collapse state
+            if (!_collapsedGroups.Remove(item))
+                _collapsedGroups.Add(item);
+            PersistCollapsedGroups();
+            _lastItemsHash = -1; // Force rebuild
+            RebuildItemsIfNeeded();
+            ResizeFlyout();
+            return;
+        }
+
+        if (item.IsHeading) return;
 
         HideFlyout();
         _lastDismissed = DateTime.UtcNow;
@@ -294,6 +373,15 @@ public partial class FlyoutWindow : Window
                     UseShellExecute = false
                 });
             }
+            else if (item.Path.StartsWith("shell:", StringComparison.OrdinalIgnoreCase))
+            {
+                // Store / packaged apps use shell:AppsFolder\{AUMID}
+                Process.Start(new ProcessStartInfo("explorer.exe")
+                {
+                    Arguments = item.Path,
+                    UseShellExecute = false
+                });
+            }
             else
             {
                 Process.Start(new ProcessStartInfo(item.Path)
@@ -310,35 +398,11 @@ public partial class FlyoutWindow : Window
         }
     }
 
-    private void ItemsListControl_DragItemsCompleted(ListViewBase sender, DragItemsCompletedEventArgs args)
-    {
-        // WinUI 3's CanReorderItems reorders its internal items list but does NOT
-        // call Move() on the source ObservableCollection. Calling Move() while
-        // still bound causes visual duplicates because the ListView reacts to
-        // both its own reorder AND the CollectionChanged events.
-        // Fix: unbind, rebuild collection order, rebind.
-        var settings = SettingsManager.Current.LauncherItems;
-        var reordered = ItemsListControl.Items.OfType<LauncherItem>().ToList();
-
-        if (reordered.Count == settings.Count)
-        {
-            ItemsListControl.ItemsSource = null;
-            settings.Clear();
-            foreach (var item in reordered)
-                settings.Add(item);
-            ItemsListControl.ItemsSource = settings;
-        }
-
-        SettingsManager.SaveSettings();
-        _lastItemsHash = ComputeItemsHash();
-        AutoSyncService.NotifyItemsChanged();
-    }
-
     private void ItemsListControl_RightTapped(object sender, RightTappedRoutedEventArgs e)
     {
         if (e.OriginalSource is not FrameworkElement fe) return;
         var item = fe.DataContext as LauncherItem;
-        if (item == null || item.IsCategory) return;
+        if (item == null || item.IsHeading || item.IsGroup) return;
 
         var flyout = new MenuFlyout();
         var editItem = new MenuFlyoutItem { Text = "Edit" };
@@ -346,6 +410,32 @@ public partial class FlyoutWindow : Window
         flyout.Items.Add(editItem);
 
         flyout.ShowAt(ItemsListControl, e.GetPosition(ItemsListControl));
+    }
+
+    private void ItemsListControl_ContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
+    {
+        if (args.Item is not LauncherItem { IsGroup: true } group) return;
+        args.RegisterUpdateCallback((_, a) =>
+        {
+            var icon = FindDescendant<FontIcon>(a.ItemContainer);
+            if (icon != null)
+                icon.Glyph = _collapsedGroups.Contains(group) ? "\uE76C" : "\uE70D";
+        });
+    }
+
+
+
+    private static T? FindDescendant<T>(DependencyObject parent) where T : DependencyObject
+    {
+        int count = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(parent);
+        for (int i = 0; i < count; i++)
+        {
+            var child = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(parent, i);
+            if (child is T match) return match;
+            var desc = FindDescendant<T>(child);
+            if (desc != null) return desc;
+        }
+        return null;
     }
 
     private static void LaunchWebsite(LauncherItem item)
@@ -646,24 +736,59 @@ public partial class FlyoutWindow : Window
         // on a potentially hidden window. Forcing a XAML layout pass on a window hidden
         // via ShowWindow(SW_HIDE) while another WinUI 3 window is active causes a fatal
         // ExecutionEngineException in Microsoft.WinUI.dll.
-        const double itemHeight = 32;      // Content ~20px + Border Padding 6+6
-        const double categoryExtra = 0;    // Margin="0,4,0,0" is inside the Border padding, not additive
+        //
+        // Each ListViewItem container: MinHeight=0, Padding="8,6" → 12px vertical padding.
+        // Regular item content: Icon 20px tall → total ~32px
+        // Group header content: FontSize=11 (~15px) + Margin top 6 → total ~33px
+        // Heading content:      FontSize=11 (~15px) + Margin top 4 → total ~31px
+        const double itemHeight = 32;
+        const double groupHeight = 33;
+        const double headingHeight = 31;
         const double listPadding = 12;     // ListView Padding="8,6,8,6" → 6+6
 
-        int itemCount = 0;
-        int categoryCount = 0;
+        double contentHeight = listPadding;
         var items = SettingsManager.Current.LauncherItems;
         if (items == null) return _lastMeasuredHeight;
         foreach (var item in items)
         {
-            if (item.IsCategory) categoryCount++;
-            else itemCount++;
+            if (item.IsGroup)
+                contentHeight += groupHeight;
+            else if (item.IsHeading)
+                contentHeight += headingHeight;
+            else
+                contentHeight += itemHeight;
+
+            if (item.IsGroup && !_collapsedGroups.Contains(item))
+            {
+                foreach (var child in item.Children)
+                {
+                    if (child.IsHeading)
+                        contentHeight += headingHeight;
+                    else
+                        contentHeight += itemHeight;
+                }
+            }
         }
 
-        double contentHeight = ((itemCount + categoryCount) * itemHeight)
-                             + (categoryCount * categoryExtra)
-                             + listPadding;
         _lastMeasuredHeight = Math.Clamp(contentHeight, 80, 560);
         return _lastMeasuredHeight;
+    }
+
+    private void PersistCollapsedGroups()
+    {
+        var names = _collapsedGroups.Select(g => g.Name).ToList();
+        SettingsManager.Current.CollapsedFlyoutGroups = names;
+        SettingsManager.SaveSettings();
+    }
+
+    private void SyncCollapsedGroupsFromModel()
+    {
+        _collapsedGroups.Clear();
+        var savedNames = SettingsManager.Current.CollapsedFlyoutGroups;
+        if (savedNames.Count == 0) return;
+        var nameSet = new HashSet<string>(savedNames, StringComparer.OrdinalIgnoreCase);
+        foreach (var item in SettingsManager.Current.LauncherItems)
+            if (item.IsGroup && nameSet.Contains(item.Name))
+                _collapsedGroups.Add(item);
     }
 }

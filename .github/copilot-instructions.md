@@ -74,7 +74,10 @@ Release builds AOT-publish the companion exe (`LauncherShortcut`) automatically.
 | Website | `true` | `false` | URL | — | `UseShellExecute` or app-window mode |
 | Application | `false` | `false` | exe path | optional args | `Process.Start(Path, Arguments)` |
 | Progressive Web App | `false` | `true` | AUMID (e.g. `domain-HEX_hash!App`) | — | `explorer shell:AppsFolder\{Path}` |
-| Category | — | — | — | — | Not launchable |
+| Heading | — | — | — | — | Not launchable (visual divider, renamed from Category) |
+| Group | — | — | — | — | Not launchable (collapsible parent containing child items/headings via `Children` collection) |
+
+Groups have a `Children` (`ObservableCollection<LauncherItem>`) that holds nested items and headings. In the settings page, groups render as custom expand/collapse cards (StackPanel with `Tag="GroupRoot"` / `Tag="GroupChildren"`), not WinUI Expanders — this allows the entire group card to be a drag-and-drop source. `LauncherItem.IsExpanded` (`[XmlIgnore]`, defaults `true`) tracks the collapse state so it survives `RefreshList()` re-renders. In the flyout, the hierarchy is flattened for display. `IsHeading` is serialized as `<IsCategory>` in XML for backward compatibility.
 
 PWAs are auto-detected by enumerating `shell:AppsFolder` for Chromium-registered app entries (AUMIDs matching `{domain}-{HEX}_{hash}!App`). Icons are fetched from the PWA domain via `FaviconService.FetchAndCacheAsync()`.
 - **Release a new version:** Edit `<Version>` in `Directory.Build.props`, update fallback version in `Package.wxs`, commit, tag `vX.Y.Z`, push. The MSIX manifest version is auto-stamped by `build-msix.ps1`. See `versioning.instructions.md` for the full checklist.
@@ -93,6 +96,7 @@ After completing any feature, bug fix, or structural change, review and update t
 | Installer changes | `installer.instructions.md` |
 | Version bump | `versioning.instructions.md` if the process changed; fallback versions in `Package.wxs` + `Package.appxmanifest` |
 | New/changed XAML patterns | `xaml.instructions.md` |
+| Drag-and-drop changes | `drag-drop.instructions.md` |
 | New page or navigation change | `copilot-instructions.md` (Architecture section) |
 | New dependency added/removed | `copilot-instructions.md` (Dependencies list) |
 | Any structural change | `ARCHITECTURE.md`, `README.md` if affected |
