@@ -169,6 +169,7 @@ public partial class LauncherItemsPage : Page
         // Track state for this dialog session
         string fetchedIconPath = existingItem?.IconPath ?? "";
         bool isWebsite = existingItem?.IsWebsite ?? true;
+        bool isPwa = existingItem?.IsPwa ?? false;
         bool openInAppWindow = existingItem?.OpenInAppWindow ?? false;
         string appWindowBrowser = existingItem?.AppWindowBrowser ?? "";
         string appWindowBrowserProfile = existingItem?.AppWindowBrowserProfile ?? "";
@@ -177,7 +178,8 @@ public partial class LauncherItemsPage : Page
         var typeCombo = new ComboBox { Margin = new Thickness(0, 0, 0, 8) };
         typeCombo.Items.Add(new ComboBoxItem { Content = "Website or Web App" });
         typeCombo.Items.Add(new ComboBoxItem { Content = "Application" });
-        typeCombo.SelectedIndex = isEdit ? (existingItem!.IsWebsite ? 0 : 1) : 0;
+        typeCombo.Items.Add(new ComboBoxItem { Content = "Progressive Web App" });
+        typeCombo.SelectedIndex = isEdit ? (existingItem!.IsPwa ? 2 : existingItem.IsWebsite ? 0 : 1) : 0;
 
         // -- 2. URL / Path --
         Microsoft.UI.Dispatching.DispatcherQueueTimer? debounceTimer = null;
@@ -225,6 +227,37 @@ public partial class LauncherItemsPage : Page
         appPathCombo.MinWidth = 340;
         appPathRow.Children.Add(appPathCombo);
         appPathRow.Children.Add(browseButton);
+
+        // PWA-mode: ComboBox with installed PWAs
+        var pwaLabel = Label("Installed PWA");
+        var pwaCombo = new ComboBox
+        {
+            IsEditable = false,
+            Margin = new Thickness(0, 0, 0, 0),
+            MinWidth = 340,
+            DisplayMemberPath = "DisplayName"
+        };
+        var noPwasHint = new TextBlock
+        {
+            Text = "No installed PWAs were detected in your browsers.",
+            FontSize = 12,
+            Opacity = 0.6,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 8),
+            Visibility = Visibility.Collapsed
+        };
+        bool pwaCatalogLoaded = false;
+        void EnsurePwaCatalogLoaded()
+        {
+            if (pwaCatalogLoaded) return;
+            pwaCombo.Items.Clear();
+            var pwas = GetInstalledPwas();
+            foreach (var pwa in pwas)
+                pwaCombo.Items.Add(pwa);
+            noPwasHint.Visibility = pwas.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            pwaCombo.Visibility = pwas.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+            pwaCatalogLoaded = true;
+        }
 
         // -- 3. Arguments (Application only) --
         var argsLabel = Label("Arguments");
@@ -447,26 +480,38 @@ public partial class LauncherItemsPage : Page
         void UpdateTypeUI()
         {
             bool wasWebsite = isWebsite;
+            bool wasPwa = isPwa;
             isWebsite = typeCombo.SelectedIndex == 0;
-            if (!isWebsite)
+            isPwa = typeCombo.SelectedIndex == 2;
+            if (!isWebsite && !isPwa)
             {
                 // Registry + app scanning is expensive; only load on-demand.
                 EnsureAppCatalogLoaded();
             }
+            if (isPwa)
+                EnsurePwaCatalogLoaded();
+
             pathLabel.Text = isWebsite ? "URL" : "Application";
             pathBox.PlaceholderText = isWebsite ? "https://example.com" : @"e.g. notepad.exe or C:\Program Files\...";
+            pathLabel.Visibility = isPwa ? Visibility.Collapsed : Visibility.Visible;
             pathBox.Visibility = isWebsite ? Visibility.Visible : Visibility.Collapsed;
-            appPathRow.Visibility = isWebsite ? Visibility.Collapsed : Visibility.Visible;
-            argsLabel.Visibility = isWebsite ? Visibility.Collapsed : Visibility.Visible;
-            argsBox.Visibility = isWebsite ? Visibility.Collapsed : Visibility.Visible;
+            appPathRow.Visibility = !isWebsite && !isPwa ? Visibility.Visible : Visibility.Collapsed;
+            pwaLabel.Visibility = isPwa ? Visibility.Visible : Visibility.Collapsed;
+            pwaCombo.Visibility = isPwa && pwaCombo.Items.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+            noPwasHint.Visibility = isPwa && pwaCombo.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            argsLabel.Visibility = !isWebsite && !isPwa ? Visibility.Visible : Visibility.Collapsed;
+            argsBox.Visibility = !isWebsite && !isPwa ? Visibility.Visible : Visibility.Collapsed;
             appWindowToggle.Visibility = isWebsite ? Visibility.Visible : Visibility.Collapsed;
+            refreshButton.Visibility = isWebsite ? Visibility.Visible : Visibility.Collapsed;
             UpdateAppWindowOptionsVisibility();
 
-            if (wasWebsite != isWebsite && !populating)
+            bool typeChanged = wasWebsite != isWebsite || wasPwa != isPwa;
+            if (typeChanged && !populating)
             {
                 populating = true;
                 pathBox.Text = "";
                 appPathCombo.SelectedIndex = -1;
+                pwaCombo.SelectedIndex = -1;
                 argsBox.Text = "";
                 nameBox.Text = "";
                 fetchedIconPath = "";
@@ -624,12 +669,57 @@ public partial class LauncherItemsPage : Page
             }
         };
 
+        // -- PWA combo selection --
+        pwaCombo.SelectionChanged += async (s, ev) =>
+        {
+            if (populating) return;
+            if (pwaCombo.SelectedItem is InstalledPwa pwa)
+            {
+                populating = true;
+                pathBox.Text = pwa.Aumid;
+                argsBox.Text = "";
+                if (string.IsNullOrEmpty(nameBox.Text))
+                    nameBox.Text = pwa.DisplayName;
+                populating = false;
+
+                // Extract icon from Windows shell registration (preferred), fall back to web favicon
+                iconStatus.Text = "Fetching icon...";
+                refreshButton.IsEnabled = false;
+                var iconPath = FaviconService.GetPwaIconFromShell(pwa.Aumid)
+                    ?? await FaviconService.FetchAndCacheAsync($"https://{pwa.Domain}/");
+                refreshButton.IsEnabled = true;
+                if (!string.IsNullOrEmpty(iconPath))
+                {
+                    fetchedIconPath = iconPath;
+                    UpdateIconPreview(iconPreview, iconStatus, fetchedIconPath, true);
+                }
+                else
+                {
+                    iconStatus.Text = "No icon available";
+                }
+            }
+        };
+
         // -- Populate for edit mode --
         if (isEdit)
         {
             populating = true;
             pathBox.Text = existingItem!.Path;
-            if (!existingItem.IsWebsite)
+            if (existingItem.IsPwa)
+            {
+                EnsurePwaCatalogLoaded();
+                // Try to match by AUMID stored in Path
+                for (int i = 0; i < pwaCombo.Items.Count; i++)
+                {
+                    if (pwaCombo.Items[i] is InstalledPwa pwa &&
+                        string.Equals(pwa.Aumid, existingItem.Path, StringComparison.OrdinalIgnoreCase))
+                    {
+                        pwaCombo.SelectedIndex = i;
+                        break;
+                    }
+                }
+            }
+            else if (!existingItem.IsWebsite)
             {
                 EnsureAppCatalogLoaded();
                 for (int i = 0; i < appPathCombo.Items.Count; i++)
@@ -652,6 +742,9 @@ public partial class LauncherItemsPage : Page
         var form = new StackPanel { MinWidth = 400 };
         form.Children.Add(Label("Type"));
         form.Children.Add(typeCombo);
+        form.Children.Add(pwaLabel);
+        form.Children.Add(pwaCombo);
+        form.Children.Add(noPwasHint);
         form.Children.Add(pathLabel);
         form.Children.Add(pathBox);
         form.Children.Add(appPathRow);
@@ -690,8 +783,15 @@ public partial class LauncherItemsPage : Page
         void ValidateForm()
         {
             var missing = new List<string>();
-            if (string.IsNullOrWhiteSpace(pathBox.Text))
+            if (isPwa)
+            {
+                if (pwaCombo.SelectedIndex < 0)
+                    missing.Add("PWA selection");
+            }
+            else if (string.IsNullOrWhiteSpace(pathBox.Text))
+            {
                 missing.Add(isWebsite ? "URL" : "Path");
+            }
             if (string.IsNullOrWhiteSpace(nameBox.Text))
                 missing.Add("Name");
 
@@ -710,6 +810,7 @@ public partial class LauncherItemsPage : Page
 
         pathBox.TextChanged += (s, ev) => ValidateForm();
         nameBox.TextChanged += (s, ev) => ValidateForm();
+        pwaCombo.SelectionChanged += (s, ev) => ValidateForm();
         ValidateForm();
 
         var result = await dialog.ShowAsync();
@@ -719,7 +820,7 @@ public partial class LauncherItemsPage : Page
         var name = nameBox.Text.Trim();
         var finalPath = pathBox.Text.Trim();
         var args = argsBox.Text.Trim();
-        var glyph = isWebsite ? "\uE774" : "\uE8E5";
+        var glyph = isWebsite || isPwa ? "\uE774" : "\uE8E5";
 
         if (isEdit)
         {
@@ -729,6 +830,7 @@ public partial class LauncherItemsPage : Page
             existingItem.IconGlyph = glyph;
             existingItem.IconPath = fetchedIconPath;
             existingItem.IsWebsite = isWebsite;
+            existingItem.IsPwa = isPwa;
             existingItem.OpenInAppWindow = isWebsite && openInAppWindow;
             existingItem.AppWindowBrowser = isWebsite && openInAppWindow ? appWindowBrowser : "";
             existingItem.AppWindowBrowserProfile = isWebsite && openInAppWindow ? appWindowBrowserProfile : "";
@@ -736,6 +838,7 @@ public partial class LauncherItemsPage : Page
         else
         {
             var newItem = new LauncherItem(name, finalPath, glyph, isWebsite, args, fetchedIconPath, isWebsite && openInAppWindow);
+            newItem.IsPwa = isPwa;
             newItem.AppWindowBrowser = isWebsite && openInAppWindow ? appWindowBrowser : "";
             newItem.AppWindowBrowserProfile = isWebsite && openInAppWindow ? appWindowBrowserProfile : "";
             SettingsManager.Current.LauncherItems.Add(newItem);
@@ -1036,6 +1139,47 @@ public partial class LauncherItemsPage : Page
     }
 
     private record InstalledApp(string DisplayName, string ExePath);
+
+    private record InstalledPwa(string DisplayName, string Aumid, string Domain);
+
+    /// <summary>
+    /// Discovers installed Progressive Web Apps by enumerating shell:AppsFolder
+    /// for Chromium-based PWA entries (registered with AUMIDs like domain-HEX_hash!App).
+    /// </summary>
+    private static List<InstalledPwa> GetInstalledPwas()
+    {
+        var pwas = new List<InstalledPwa>();
+        try
+        {
+            var shellType = Type.GetTypeFromProgID("Shell.Application");
+            if (shellType == null) return pwas;
+            dynamic shell = Activator.CreateInstance(shellType)!;
+            dynamic folder = shell.NameSpace("shell:AppsFolder");
+            if (folder == null) return pwas;
+
+            foreach (dynamic item in folder.Items())
+            {
+                string? path = item.Path as string;
+                string? name = item.Name as string;
+                if (string.IsNullOrEmpty(path) || string.IsNullOrEmpty(name)) continue;
+                if (!path.EndsWith("!App", StringComparison.Ordinal)) continue;
+
+                // Chromium PWA AUMIDs: {domain}-{HEX}_{hash}!App
+                var match = System.Text.RegularExpressions.Regex.Match(path,
+                    @"^([\w][\w.-]*\.[a-zA-Z]{2,})-[A-Fa-f0-9]+_[a-z0-9]+!App$");
+                if (!match.Success) continue;
+
+                string domain = match.Groups[1].Value;
+                pwas.Add(new InstalledPwa(name, path, domain));
+            }
+
+            System.Runtime.InteropServices.Marshal.FinalReleaseComObject(folder);
+            System.Runtime.InteropServices.Marshal.FinalReleaseComObject(shell);
+        }
+        catch { }
+
+        return pwas.OrderBy(p => p.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
+    }
 
     /// <summary>
     /// Builds a list of installed applications by scanning Start Menu shortcuts

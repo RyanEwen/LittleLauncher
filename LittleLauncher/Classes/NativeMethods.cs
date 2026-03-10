@@ -71,6 +71,24 @@ public static class NativeMethods
         public int Right;
         public int Bottom;
     }
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct SIZE
+    {
+        public int cx;
+        public int cy;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct BITMAP
+    {
+        public int bmType;
+        public int bmWidth;
+        public int bmHeight;
+        public int bmWidthBytes;
+        public ushort bmPlanes;
+        public ushort bmBitsPixel;
+        public IntPtr bmBits;
+    }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
     internal struct MONITORINFOEX
@@ -214,6 +232,31 @@ public static class NativeMethods
     internal const uint SHCNF_PATHW = 0x0005;
     internal const uint SHCNF_FLUSH = 0x1000;
     internal const uint SHCNF_FLUSHNOWAIT = 0x3000;
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = true)]
+    internal static extern int SHCreateItemFromParsingName(
+        string pszPath, IntPtr pbc, ref Guid riid,
+        [MarshalAs(UnmanagedType.Interface)] out IShellItemImageFactory ppv);
+
+    [ComImport]
+    [Guid("bcc18b79-ba16-442f-80c4-8a59c30c463b")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IShellItemImageFactory
+    {
+        [PreserveSig]
+        int GetImage(SIZE size, int flags, out IntPtr phbm);
+    }
+
+    #endregion
+
+    #region gdi32.dll
+
+    [DllImport("gdi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool DeleteObject(IntPtr hObject);
+
+    [DllImport("gdi32.dll")]
+    internal static extern int GetObject(IntPtr hgdiobj, int cbBuffer, out BITMAP lpvObject);
 
     #endregion
 

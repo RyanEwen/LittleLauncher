@@ -3,7 +3,7 @@
 
   <!-- Version is injected by the build: -d ProductVersion=1.0.0.0 -->
   <?ifndef ProductVersion ?>
-    <?define ProductVersion = "1.4.0.0" ?>
+    <?define ProductVersion = "1.6.0.0" ?>
   <?endif ?>
 
   <Package Name="Little Launcher"
@@ -76,7 +76,7 @@
 
     <InstallExecuteSequence>
       <Custom Action="LaunchApp" After="InstallFinalize" Condition="NOT REMOVE" />
-      <Custom Action="CleanupAppData" Before="RemoveFiles" Condition="REMOVE=&quot;ALL&quot;" />
+      <Custom Action="CleanupAppData" Before="RemoveFiles" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
     </InstallExecuteSequence>
 
   </Package>

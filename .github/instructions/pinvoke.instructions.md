@@ -44,3 +44,7 @@ Helpers:
 - `SetWindowAppUserModelId(hwnd, appId)` — sets AUMID on a window (used by SettingsWindow)
 - `SetWindowRelaunchProperties(hwnd, icon, command, displayName)` — sets all three relaunch PKEYs (currently unused — kept for future use)
 - `SetPropertyStoreString(store, key, value)` — low-level VT_LPWSTR setter (private)
+
+## IShellItemImageFactory COM Section
+
+The `#region shell32.dll` section includes `SHCreateItemFromParsingName` and the `IShellItemImageFactory` COM interface for extracting app icons from `shell:AppsFolder` items (used for PWA icons). The `#region gdi32.dll` section provides `DeleteObject` (HBITMAP cleanup) and `GetObject` (reading DIB pixel data via the `BITMAP` struct).

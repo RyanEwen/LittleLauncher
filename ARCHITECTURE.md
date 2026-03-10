@@ -34,7 +34,7 @@ By default, launching the app opens the Settings window. Silent mode (tray icon 
 
 ## Launcher item icons
 
-`FaviconService.FetchMissingItemIconsAsync(items)` is the **single pipeline** for fetching launcher item icons. It iterates the items and, for each one missing a valid local icon, fetches a favicon (websites) or extracts an exe icon (apps). All entry points use this one method:
+`FaviconService.FetchMissingItemIconsAsync(items)` is the **single pipeline** for fetching launcher item icons. It iterates the items and, for each one missing a valid local icon, fetches a favicon (websites), extracts a shell icon (PWAs via `IShellItemImageFactory`), or extracts an exe icon (apps). All entry points use this one method:
 
 | Trigger | Caller |
 |---|---|
@@ -42,6 +42,7 @@ By default, launching the app opens the Settings window. Silent mode (tray icon 
 | SFTP sync download | `SftpSyncService.DownloadLauncherItemsAsync()` |
 | File import (Launcher Items page) | `LauncherItemsPage.ImportItems_Click()` |
 | Manual add/edit | `DoFetch()` in add/edit dialog (calls `FaviconService` directly for the single item) |
+| PWA add | PWA combo selection handler (extracts shell icon via `FaviconService.GetPwaIconFromShell`, falls back to web favicon) |
 
 After bulk icon changes, callers invoke `FlyoutWindow.InvalidateItems()` so the flyout rebuilds its containers on the next toggle.
 

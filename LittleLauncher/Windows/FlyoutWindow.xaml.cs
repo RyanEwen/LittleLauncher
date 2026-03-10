@@ -184,6 +184,7 @@ public partial class FlyoutWindow : Window
             hash.Add(item.AppWindowBrowser);
             hash.Add(item.AppWindowBrowserProfile);
             hash.Add(item.IsCategory);
+            hash.Add(item.IsPwa);
         }
         return hash.ToHashCode();
     }
@@ -283,6 +284,15 @@ public partial class FlyoutWindow : Window
                                || item.Path.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
             {
                 LaunchWebsite(item);
+            }
+            else if (item.IsPwa)
+            {
+                // PWA items store a shell:AppsFolder AUMID in Path
+                Process.Start(new ProcessStartInfo("explorer.exe")
+                {
+                    Arguments = $"shell:AppsFolder\\{item.Path}",
+                    UseShellExecute = false
+                });
             }
             else
             {

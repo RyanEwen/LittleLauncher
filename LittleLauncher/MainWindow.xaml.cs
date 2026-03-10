@@ -767,6 +767,17 @@ public sealed partial class MainWindow : Window
             // Always overwrite so the companion exe stays current after updates
             File.Copy(sourceExe, destExe, overwrite: true);
 
+            // In debug (framework-dependent) builds, the companion exe also
+            // needs its .dll, .deps.json, and .runtimeconfig.json to run.
+            // Release builds are Native AOT single-file and don't need these.
+            string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+            foreach (var ext in new[] { ".dll", ".deps.json", ".runtimeconfig.json" })
+            {
+                string src = Path.Combine(baseDir, "LittleLauncherFlyout" + ext);
+                if (File.Exists(src))
+                    File.Copy(src, Path.Combine(appDataDir, "LittleLauncherFlyout" + ext), overwrite: true);
+            }
+
             // Write a breadcrumb so the companion exe can launch the main app
             // if it isn't running (FindWindow returns null).
             string mainExePath = Environment.ProcessPath ?? "";

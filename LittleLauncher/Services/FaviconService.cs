@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+using LittleLauncher.Classes;
 using LittleLauncher.Models;
 using System.Diagnostics;
 using System.Drawing;
@@ -448,6 +450,85 @@ internal static partial class FaviconService
         return null;
     }
 
+    // ── PWA icon extraction ─────────────────────────────────────
+
+    /// <summary>
+    /// Extracts the icon for a shell:AppsFolder app (e.g., a PWA) using IShellItemImageFactory.
+    /// Returns the cached PNG path, or null on failure.
+    /// </summary>
+    public static string? GetPwaIconFromShell(string aumid)
+    {
+        try
+        {
+            Directory.CreateDirectory(CacheDir);
+            string safeName = string.Join("_", aumid.Split(Path.GetInvalidFileNameChars()));
+            string localPath = Path.Combine(CacheDir, $"pwa_{safeName}.png");
+
+            var IID_IShellItemImageFactory = new Guid("bcc18b79-ba16-442f-80c4-8a59c30c463b");
+            int hr = NativeMethods.SHCreateItemFromParsingName(
+                $@"shell:AppsFolder\{aumid}", IntPtr.Zero,
+                ref IID_IShellItemImageFactory, out var factory);
+            if (hr != 0 || factory == null)
+                return null;
+
+            IntPtr hBitmap = IntPtr.Zero;
+            try
+            {
+                var size = new NativeMethods.SIZE { cx = 64, cy = 64 };
+                hr = factory.GetImage(size, 0, out hBitmap);
+                if (hr != 0 || hBitmap == IntPtr.Zero)
+                    return null;
+
+                // GetObject retrieves the DIB pixel data pointer so we can
+                // copy it directly, preserving the alpha channel that
+                // Bitmap.FromHbitmap would discard.
+                NativeMethods.GetObject(hBitmap,
+                    Marshal.SizeOf<NativeMethods.BITMAP>(), out var bm);
+
+                if (bm.bmBits != IntPtr.Zero && bm.bmBitsPixel == 32)
+                {
+                    using var bmp = new Bitmap(bm.bmWidth, bm.bmHeight,
+                        System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+                    var rect = new Rectangle(0, 0, bm.bmWidth, bm.bmHeight);
+                    var data = bmp.LockBits(rect,
+                        System.Drawing.Imaging.ImageLockMode.WriteOnly,
+                        System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+                    try
+                    {
+                        int byteCount = bm.bmHeight * data.Stride;
+                        unsafe
+                        {
+                            Buffer.MemoryCopy(
+                                (void*)bm.bmBits, (void*)data.Scan0,
+                                byteCount, byteCount);
+                        }
+                    }
+                    finally { bmp.UnlockBits(data); }
+                    bmp.Save(localPath, System.Drawing.Imaging.ImageFormat.Png);
+                }
+                else
+                {
+                    using var fallback = Bitmap.FromHbitmap(hBitmap);
+                    fallback.Save(localPath, System.Drawing.Imaging.ImageFormat.Png);
+                }
+
+                Logger.Info($"PWA icon cached for {aumid} → {localPath}");
+                return localPath;
+            }
+            finally
+            {
+                if (hBitmap != IntPtr.Zero)
+                    NativeMethods.DeleteObject(hBitmap);
+                Marshal.ReleaseComObject(factory);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn(ex, $"Failed to extract shell icon for PWA {aumid}");
+            return null;
+        }
+    }
+
     // ── Batch icon pipeline ────────────────────────────────────────
 
     /// <summary>
@@ -474,6 +555,23 @@ internal static partial class FaviconService
                 {
                     iconPath = GetCachedPath(item.Path)
                         ?? await FetchAndCacheAsync(item.Path);
+                }
+                else if (item.IsPwa)
+                {
+                    // Try extracting icon from Windows shell registration first
+                    iconPath = GetPwaIconFromShell(item.Path);
+
+                    // Fall back to web favicon from the PWA domain
+                    if (string.IsNullOrEmpty(iconPath))
+                    {
+                        var match = System.Text.RegularExpressions.Regex.Match(item.Path,
+                            @"^([\w][\w.-]*\.[a-zA-Z]{2,})-[A-Fa-f0-9]+_[a-z0-9]+!App$");
+                        if (match.Success)
+                        {
+                            string url = $"https://{match.Groups[1].Value}/";
+                            iconPath = GetCachedPath(url) ?? await FetchAndCacheAsync(url);
+                        }
+                    }
                 }
                 else
                 {

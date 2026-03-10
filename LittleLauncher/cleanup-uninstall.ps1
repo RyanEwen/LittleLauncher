@@ -1,4 +1,5 @@
-# Uninstall cleanup for Little Launcher (invoked by the MSI on REMOVE="ALL").
+# Uninstall cleanup for Little Launcher (invoked by the MSI on uninstall only,
+# not during upgrades — conditioned on REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE).
 # Removes app data, companion exe, shortcuts, startup registry entry, and
 # pinned taskbar shortcuts targeting the companion flyout exe.
 

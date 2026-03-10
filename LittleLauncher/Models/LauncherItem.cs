@@ -66,6 +66,13 @@ public partial class LauncherItem : ObservableObject
     public partial string AppWindowBrowserProfile { get; set; }
 
     /// <summary>
+    /// Whether this item is a Progressive Web App installed in a browser.
+    /// PWA items store the browser exe in Path and --app-id args in Arguments.
+    /// </summary>
+    [ObservableProperty]
+    public partial bool IsPwa { get; set; }
+
+    /// <summary>
     /// Whether this item is a category heading (true) or a launchable item (false).
     /// Category items only use the Name property; all other fields are ignored.
     /// </summary>
@@ -83,6 +90,7 @@ public partial class LauncherItem : ObservableObject
         OpenInAppWindow = false;
         AppWindowBrowser = string.Empty;
         AppWindowBrowserProfile = string.Empty;
+        IsPwa = false;
         IsCategory = false;
     }
 
@@ -97,6 +105,7 @@ public partial class LauncherItem : ObservableObject
         OpenInAppWindow = openInAppWindow;
         AppWindowBrowser = string.Empty;
         AppWindowBrowserProfile = string.Empty;
+        IsPwa = false;
         IsCategory = false;
     }
 

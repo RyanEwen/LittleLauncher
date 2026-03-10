@@ -107,18 +107,8 @@
                     </Button>
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
-                    <Button Click="ImportItems_Click">
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <FontIcon Glyph="&#xE8B5;" FontSize="14"/>
-                            <TextBlock Text="Import"/>
-                        </StackPanel>
-                    </Button>
-                    <Button Click="ExportItems_Click">
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <FontIcon Glyph="&#xEDE1;" FontSize="14"/>
-                            <TextBlock Text="Export"/>
-                        </StackPanel>
-                    </Button>
+                    <Button Content="Export Items..." Click="ExportItems_Click"/>
+                    <Button Content="Import Items..." Click="ImportItems_Click"/>
                 </StackPanel>
             </Grid>
         </StackPanel>
