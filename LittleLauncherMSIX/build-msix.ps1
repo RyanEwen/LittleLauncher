@@ -39,10 +39,10 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
-$repoRoot      = $PSScriptRoot
+$msixDir       = $PSScriptRoot
+$repoRoot      = Split-Path $msixDir -Parent
 $mainProj      = Join-Path $repoRoot "LittleLauncher\LittleLauncher.csproj"
 $flyoutProj    = Join-Path $repoRoot "LauncherShortcut\LauncherShortcut.csproj"
-$msixDir       = Join-Path $repoRoot "LittleLauncherMSIX"
 $manifestSrc   = Join-Path $msixDir  "Package.appxmanifest"
 $imagesDir     = Join-Path $msixDir  "Images"
 $pfxFile       = Join-Path $msixDir  "LittleLauncher.pfx"
@@ -50,8 +50,8 @@ $pfxFile       = Join-Path $msixDir  "LittleLauncher.pfx"
 $rid           = if ($Platform -eq "ARM64") { "win-arm64" } else { "win-x64" }
 $publishDir    = Join-Path $repoRoot "LittleLauncher\bin\$Platform\$Configuration\net10.0-windows10.0.22000.0\$rid\publish"
 $flyoutPublish = Join-Path $repoRoot "LauncherShortcut\bin\$Platform\$Configuration\net10.0-windows10.0.22000.0\$rid\publish"
-$layoutDir     = Join-Path $repoRoot "build\msix-layout\$Platform"
-$outputDir     = Join-Path $repoRoot "build\msix-output"
+$layoutDir     = Join-Path $msixDir  "bin\msix-layout\$Platform"
+$outputDir     = Join-Path $msixDir  "bin\msix-output"
 $msixFile      = Join-Path $outputDir "LittleLauncher-$Platform.msix"
 
 # Windows SDK tools — use native host architecture binaries

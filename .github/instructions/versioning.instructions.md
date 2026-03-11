@@ -21,7 +21,7 @@ All other consumers derive from this automatically:
 |---|---|
 | **App (in-code display)** | `MainWindow.xaml.cs` reads `Assembly.GetName().Version` at startup — set by MSBuild from `<Version>` |
 | **WiX MSI installer** | `LittleLauncherSetup.wixproj` passes `ProductVersion=$(Version).0` via `DefineConstants`; CI also passes `-p:Version=...` explicitly |
-| **MSIX manifest** | `build-msix.ps1` replaces `VERSION_PLACEHOLDER` in `Package.appxmanifest` with the version from `Directory.Build.props` at build time |
+| **MSIX manifest** | `LittleLauncherMSIX/build-msix.ps1` replaces `VERSION_PLACEHOLDER` in `Package.appxmanifest` with the version from `Directory.Build.props` at build time |
 | **Git tag** | Created manually to match: `git tag -a v1.1.0 ...` |
 
 **To bump the version, edit `Directory.Build.props` first, then update the fallback versions** in the files below. CI handles injection at build time, but the fallbacks must stay current so local/manual builds produce the correct version.
@@ -34,7 +34,7 @@ After changing `Directory.Build.props`, also update these hardcoded fallback val
 |---|---|
 | `LittleLauncherSetup/Package.wxs` | `<?define ProductVersion = "X.Y.Z.0" ?>` (line ~6) |
 
-The MSIX manifest (`Package.appxmanifest`) uses `VERSION_PLACEHOLDER` which is automatically stamped by `build-msix.ps1` — no manual update needed.
+The MSIX manifest (`Package.appxmanifest`) uses `VERSION_PLACEHOLDER` which is automatically stamped by `LittleLauncherMSIX/build-msix.ps1` — no manual update needed.
 
 The WiX fallback only matters when CI version injection doesn't run (local/manual WiX builds). **If you forget, the MSI ships with the old version number.**
 

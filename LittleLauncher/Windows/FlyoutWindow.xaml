@@ -7,7 +7,6 @@
         x:Name="RootGrid"
         Width="250"
         MinHeight="80"
-        MaxHeight="640"
         Background="Transparent"
         Padding="0">
 
@@ -265,7 +264,7 @@
             SelectionMode="None"
             IsTabStop="False"
             TabNavigation="Once"
-            ScrollViewer.VerticalScrollBarVisibility="Hidden"
+            ScrollViewer.VerticalScrollBarVisibility="Auto"
             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
             ItemContainerStyleSelector="{StaticResource ItemContainerStyleSelector}">
         </ListView>

@@ -144,11 +144,15 @@ public sealed partial class MainWindow : Window
         Microsoft.Windows.AppNotifications.AppNotificationManager.Default.Register();
         _ = CheckForUpdateOnStartupAsync();
 
+        // Tell Windows to include --silent when auto-restarting the app
+        // (e.g. "Restart apps" after sign-in). Without this, Windows
+        // relaunches the exe with no args, which opens the Settings window.
+        RegisterApplicationRestart("--silent", 0);
+
         // Listen for OS theme changes to refresh icons
         _lastDarkTheme = Classes.ThemeManager.IsDarkTheme();
         _uiSettings.ColorValuesChanged += OnSystemThemeChanged;
 
-        // Show settings unless launched silently (Windows startup or companion exe cold-start).
         if (!IsSilentLaunch())
             SettingsWindow.ShowInstance(this);
     }

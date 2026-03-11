@@ -260,6 +260,13 @@ public static class NativeMethods
 
     #endregion
 
+    #region kernel32.dll
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    internal static extern int RegisterApplicationRestart(string pwzCommandline, int dwFlags);
+
+    #endregion
+
     #region dwmapi.dll
 
     [DllImport("dwmapi.dll")]

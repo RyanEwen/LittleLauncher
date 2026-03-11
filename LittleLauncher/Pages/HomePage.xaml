@@ -7,7 +7,8 @@
         <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,0,8">
             <Image x:Name="AppIcon" Width="32" Height="32" VerticalAlignment="Center" Margin="0,0,10,0" />
             <TextBlock Text="Little Launcher" FontSize="24" FontWeight="Medium" VerticalAlignment="Center" />
-            <TextBlock x:Name="VersionTextBlock" FontSize="14" FontWeight="Normal" VerticalAlignment="Bottom" Margin="10" Opacity="0.5" />
+            <TextBlock x:Name="VersionTextBlock" FontSize="14" FontWeight="Normal" VerticalAlignment="Bottom" Margin="10,10,4,10" Opacity="0.5" />
+            <TextBlock x:Name="BuildTypeTextBlock" FontSize="14" FontWeight="Normal" VerticalAlignment="Bottom" Margin="0,10,10,10" Opacity="0.35" />
         </StackPanel>
 
         <!-- Update banner (hidden by default) -->

@@ -804,8 +804,26 @@ public partial class FlyoutWindow : Window
         }
 
         // Add a small buffer to cover accumulated sub-pixel font-height rounding.
-        _lastMeasuredHeight = Math.Clamp(contentHeight + 2, 80, 560);
+        // Clamp to the available work-area height so the flyout never exceeds the screen.
+        double maxContentHeight = GetWorkAreaHeightDips() - 16; // 16 = gap from taskbar edges
+        _lastMeasuredHeight = Math.Clamp(contentHeight + 2, 80, maxContentHeight);
         return _lastMeasuredHeight;
+    }
+
+    private double GetWorkAreaHeightDips()
+    {
+        var pt = new POINT();
+        GetCursorPos(out pt);
+        IntPtr hMonitor = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+
+        GetDpiForMonitor(hMonitor, MonitorDpiType.MDT_EFFECTIVE_DPI, out uint dpiY, out _);
+        double scale = dpiY / 96.0;
+        if (scale <= 0) scale = 1.0;
+
+        var monitorInfo = new MONITORINFOEX { cbSize = Marshal.SizeOf<MONITORINFOEX>() };
+        GetMonitorInfo(hMonitor, ref monitorInfo);
+        int workAreaHeightPx = monitorInfo.rcWork.Bottom - monitorInfo.rcWork.Top;
+        return workAreaHeightPx / scale;
     }
 
     private void PersistCollapsedGroups()

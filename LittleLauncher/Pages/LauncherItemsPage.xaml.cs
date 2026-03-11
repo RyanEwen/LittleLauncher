@@ -679,10 +679,10 @@ public partial class LauncherItemsPage : Page
 
         // -- 1. Type selector --
         var typeCombo = new ComboBox { Margin = new Thickness(0, 0, 0, 8), HorizontalAlignment = HorizontalAlignment.Stretch };
-        typeCombo.Items.Add(new ComboBoxItem { Content = "Website or Web App" });
         typeCombo.Items.Add(new ComboBoxItem { Content = "Application" });
         typeCombo.Items.Add(new ComboBoxItem { Content = "Progressive Web App" });
-        typeCombo.SelectedIndex = isEdit ? (existingItem!.IsPwa ? 2 : existingItem.IsWebsite ? 0 : 1) : 0;
+        typeCombo.Items.Add(new ComboBoxItem { Content = "Website" });
+        typeCombo.SelectedIndex = isEdit ? (existingItem!.IsPwa ? 1 : existingItem.IsWebsite ? 2 : 0) : 0;
 
         // -- 2. URL / Path --
         Microsoft.UI.Dispatching.DispatcherQueueTimer? debounceTimer = null;
@@ -992,8 +992,8 @@ public partial class LauncherItemsPage : Page
         {
             bool wasWebsite = isWebsite;
             bool wasPwa = isPwa;
-            isWebsite = typeCombo.SelectedIndex == 0;
-            isPwa = typeCombo.SelectedIndex == 2;
+            isWebsite = typeCombo.SelectedIndex == 2;
+            isPwa = typeCombo.SelectedIndex == 1;
             if (!isWebsite && !isPwa)
             {
                 // Registry + app scanning is expensive; only load on-demand.
@@ -1877,7 +1877,7 @@ public partial class LauncherItemsPage : Page
                         string? path = item.Path as string;
                         string? name = item.Name as string;
                         if (string.IsNullOrEmpty(path) || string.IsNullOrEmpty(name)) continue;
-                        if (!path.EndsWith("!App", StringComparison.Ordinal)) continue;
+                        if (!path.Contains('!')) continue;
 
                         // Skip Chromium PWAs (handled by the PWA picker)
                         if (pwaPattern.IsMatch(path)) continue;

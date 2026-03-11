@@ -24,8 +24,18 @@ public partial class HomePage : Page
         InitializeComponent();
         LoadAppIcon();
         VersionTextBlock.Text = SettingsManager.Current.LastKnownVersion;
+        BuildTypeTextBlock.Text = GetBuildTypeLabel();
         TrayIconSwitch.IsOn = !SettingsManager.Current.NIconHide;
         _ = CheckForUpdateAsync();
+    }
+
+    private static string GetBuildTypeLabel()
+    {
+#if DEBUG
+        return "(Debug)";
+#else
+        return MainWindow.IsPackaged ? "(MSIX)" : "(WiX)";
+#endif
     }
 
     private void LoadAppIcon()

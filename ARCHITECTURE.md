@@ -95,7 +95,7 @@ At startup, `EnsureFlyoutShortcut()` copies the companion exe to `%AppData%\\Lit
 
 ## MSIX packaging
 
-`build-msix.ps1` produces a sideloadable MSIX package for Windows Store-like installation. Key details:
+`LittleLauncherMSIX/build-msix.ps1` produces a sideloadable MSIX package for Windows Store-like installation. Key details:
 
 - **Publishes with `-p:WindowsPackageType=MSIX`** to suppress the unpackaged-only auto-bootstrapper (`MICROSOFT_WINDOWSAPPSDK_BOOTSTRAP_AUTO_INITIALIZE`), which fails in a packaged context.
 - **Declares `<PackageDependency>`** on `Microsoft.WindowsAppRuntime.1.8` so the framework package provides WinRT activation factories.
