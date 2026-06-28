@@ -9,6 +9,12 @@
 </p>
 
 <p align="center">
+  <a href="https://apps.microsoft.com/detail/9p3zzbdq6pjf">
+    <img src="https://get.microsoft.com/images/en-us%20dark.svg" alt="Download Little Launcher from the Microsoft Store" height="56">
+  </a>
+</p>
+
+<p align="center">
   <img src="LittleLauncher/Resources/AppIcons/Blue.png" width="48">&nbsp;
   <img src="LittleLauncher/Resources/AppIcons/Green.png" width="48">&nbsp;
   <img src="LittleLauncher/Resources/AppIcons/Teal.png" width="48">&nbsp;
