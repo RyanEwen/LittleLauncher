@@ -78,3 +78,15 @@ On `REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE`, a `CustomAction` runs `cleanup-u
 The action uses `Return="check"` so the uninstall does not report completion until the cleanup script has finished.
 
 **MSIX limitation:** MSIX has no custom uninstall actions. When an MSIX package is removed, Windows deletes the package files, its own Start Menu entry, **and all VFS-redirected data** (settings, cached icons, companion exe) because the entire `%LocalAppData%\Packages\{PFN}\` tree is removed. Pinned taskbar shortcuts survive as dead `.lnk` files — Windows 11 eventually detects and offers to remove stale pins. Settings **do** survive MSIX upgrades — Windows preserves package data during version updates, including updates initiated through the Store API path above.
+
+## Building the MSIX (`build-msix.ps1`)
+
+`LittleLauncherMSIX/build-msix.ps1 -Platform {x64|ARM64}` publishes the app (self-contained) + the AOT companion, assembles the layout, runs `makepri`/`makeappx`, and signs. Toolchain requirements (see also the local-build memory):
+
+- **Windows SDK** packaging tools (`makeappx`/`makepri`/`signtool`). The script auto-detects the newest installed `C:\Program Files (x86)\Windows Kits\10\bin\10.*` that has them — don't hardcode a version.
+- **VS C++ build tools** (incl. `VC.Tools.ARM64`) for the Native AOT companion. The script prepends the **VS Installer dir to `PATH`** when `vswhere.exe` isn't resolvable, because the ILCompiler targets shell out to `vswhere`; without it the native link fails with **exit code 123**.
+- **`-NoSign`** is Store mode: skips signing and leaves the Store `Identity`/`Publisher` intact for the Store to re-sign on ingestion. Without it, the manifest publisher is rewritten to the dev cert subject so `signtool` can sign locally.
+
+## Microsoft Store auto-publish (CI)
+
+`.github/workflows/store-publish.yml` runs on every `v*` tag (and `workflow_dispatch`): it builds both `-NoSign` MSIX packages, zips them into a single `LittleLauncher.msixupload`, and submits a package update with the [Microsoft Store Developer CLI](https://learn.microsoft.com/windows/apps/publish/msstore-dev-cli/overview) (`microsoft/microsoft-store-apppublisher@v1.1` → `msstore reconfigure` → `msstore publish <upload> -id 9P3ZZBDQ6PJF`). `msstore publish` takes a **single** package, so multi-arch must be bundled into one `.msixupload`. The submission step is gated on the `AZURE_AD_TENANT_ID` / `AZURE_AD_APPLICATION_CLIENT_ID` / `AZURE_AD_APPLICATION_SECRET` / `SELLER_ID` secrets (skipped if unset; the `.msixupload` is still uploaded as an artifact). Microsoft supports this GitHub Actions update path for **free products only**. To stage a draft instead of committing, add `-nc`/`--noCommit` to the publish command. This is separate from `build-msix.yml`, which builds the MSI + GitHub Release.

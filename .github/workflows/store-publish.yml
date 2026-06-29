@@ -1,0 +1,113 @@
+name: Publish to Microsoft Store
+
+# Builds the unsigned MSIX packages (x64 + ARM64), bundles them into a single
+# .msixupload, and submits a package update to the Microsoft Store via the
+# Microsoft Store Developer CLI (msstore). The Store re-signs on ingestion.
+#
+# Runs automatically on every v* tag (alongside the MSI release in build-msix.yml),
+# and can be run manually. The submission step only runs when the Partner Center
+# secrets below are configured; otherwise it just builds and uploads the
+# .msixupload as a workflow artifact.
+#
+# Required repository secrets (Settings > Secrets and variables > Actions):
+#   AZURE_AD_TENANT_ID              Microsoft Entra tenant ID
+#   AZURE_AD_APPLICATION_CLIENT_ID  App registration (client/application) ID
+#   AZURE_AD_APPLICATION_SECRET     Client secret for that app registration
+#   SELLER_ID                       Partner Center seller / publisher ID
+# The Entra app must have the "Manager" role in Partner Center, and the Store app
+# must already be published. NOTE: Microsoft currently supports this GitHub Actions
+# update path for FREE products only.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+# A free product allows only one in-flight submission; serialize publishes.
+concurrency:
+  group: store-publish
+  cancel-in-progress: false
+
+jobs:
+  store:
+    runs-on: windows-2025
+    env:
+      # Microsoft Store product ID (from https://apps.microsoft.com/detail/9p3zzbdq6pjf)
+      STORE_PRODUCT_ID: 9P3ZZBDQ6PJF
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build MSIX packages (x64 + ARM64, unsigned for Store)
+        shell: pwsh
+        run: |
+          foreach ($plat in @('x64', 'ARM64')) {
+            Write-Host "::group::Build $plat MSIX"
+            & "$env:GITHUB_WORKSPACE\LittleLauncherMSIX\build-msix.ps1" -Platform $plat -NoSign
+            if ($LASTEXITCODE -ne 0) { throw "build-msix.ps1 failed for $plat (exit $LASTEXITCODE)" }
+            Write-Host "::endgroup::"
+          }
+
+      - name: Bundle packages into .msixupload
+        shell: pwsh
+        run: |
+          $out = "$env:GITHUB_WORKSPACE\LittleLauncherMSIX\bin\msix-output"
+          $msix = @(Get-ChildItem "$out\LittleLauncher-*.msix")
+          if ($msix.Count -lt 2) { throw "Expected 2 .msix files, found $($msix.Count)" }
+          $upload = "$out\LittleLauncher.msixupload"
+          if (Test-Path $upload) { Remove-Item $upload -Force }
+          # A .msixupload is a zip containing the per-architecture packages.
+          $zip = "$out\LittleLauncher-store.zip"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path $msix.FullName -DestinationPath $zip -Force
+          Move-Item $zip $upload -Force
+          Write-Host "Created $upload"
+
+      - name: Upload .msixupload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Store-msixupload
+          path: LittleLauncherMSIX/bin/msix-output/LittleLauncher.msixupload
+
+      - name: Check Store credentials
+        id: creds
+        shell: bash
+        env:
+          TENANT: ${{ secrets.AZURE_AD_TENANT_ID }}
+        run: |
+          if [ -n "$TENANT" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Store credentials not configured — skipping submission (artifact still uploaded)."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Microsoft Store Developer CLI
+        if: steps.creds.outputs.configured == 'true'
+        uses: microsoft/microsoft-store-apppublisher@v1.1
+
+      - name: Configure msstore credentials
+        if: steps.creds.outputs.configured == 'true'
+        run: >
+          msstore reconfigure
+          --tenantId ${{ secrets.AZURE_AD_TENANT_ID }}
+          --sellerId ${{ secrets.SELLER_ID }}
+          --clientId ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+          --clientSecret ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+
+      - name: Publish package update to the Microsoft Store
+        if: steps.creds.outputs.configured == 'true'
+        shell: pwsh
+        run: |
+          $upload = "$env:GITHUB_WORKSPACE\LittleLauncherMSIX\bin\msix-output\LittleLauncher.msixupload"
+          # Commits a new submission with the updated packages. Add -nc/--noCommit
+          # to leave it as a draft in Partner Center for manual review instead.
+          msstore publish "$upload" -id $env:STORE_PRODUCT_ID
+          if ($LASTEXITCODE -ne 0) { throw "msstore publish failed (exit $LASTEXITCODE)" }

@@ -92,4 +92,24 @@ LauncherShortcut/              # Companion console exe for pin-to-taskbar helper
 
 ## Releasing
 
-Version is defined once in `Directory.Build.props`. Pushing a `v*` tag triggers the GitHub Action that builds the signed MSI installers, portable zips, and a GitHub Release. The Store MSIX packages are built locally via `LittleLauncherMSIX/build-msix.ps1`. See the versioning and installer guides under [`.claude/docs/`](.claude/docs/) for the full process.
+Version is defined once in `Directory.Build.props`. Pushing a `v*` tag triggers two GitHub Actions:
+
+- **`build-msix.yml`** — builds the signed MSI installers, portable zips, and the GitHub Release.
+- **`store-publish.yml`** — builds the unsigned MSIX packages (x64 + ARM64), bundles them into a single `.msixupload`, and submits a package update to the Microsoft Store via the [Microsoft Store Developer CLI](https://learn.microsoft.com/windows/apps/publish/msstore-dev-cli/overview) (`msstore`). The Store re-signs on ingestion.
+
+You can also build the Store MSIX locally with `LittleLauncherMSIX/build-msix.ps1 -NoSign`.
+
+### Microsoft Store auto-publish setup
+
+`store-publish.yml` only submits when the following repository secrets are set (otherwise it just builds and uploads the `.msixupload` as an artifact). Add them under **Settings → Secrets and variables → Actions**:
+
+| Secret | Value |
+|---|---|
+| `AZURE_AD_TENANT_ID` | Microsoft Entra tenant ID |
+| `AZURE_AD_APPLICATION_CLIENT_ID` | App registration (client) ID |
+| `AZURE_AD_APPLICATION_SECRET` | Client secret for that app registration |
+| `SELLER_ID` | Partner Center seller / publisher ID |
+
+One-time Partner Center setup: register an app in Microsoft Entra ID, then add it under **Account settings → User management → Microsoft Entra applications** with the **Manager** role. The Store product ID (`9P3ZZBDQ6PJF`) is set as `STORE_PRODUCT_ID` in the workflow. See [Publish app updates with GitHub Actions](https://learn.microsoft.com/windows/apps/publish/msstore-dev-cli/github-actions). Note: Microsoft currently supports this GitHub Actions update path for **free products only**, and the submission goes through normal Store certification before going live.
+
+See the versioning and installer guides under [`.claude/docs/`](.claude/docs/) for more detail.

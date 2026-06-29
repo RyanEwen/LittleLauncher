@@ -66,19 +66,36 @@ $layoutDir     = Join-Path $msixDir  "bin\msix-layout\$Platform"
 $outputDir     = Join-Path $msixDir  "bin\msix-output"
 $msixFile      = Join-Path $outputDir "LittleLauncher-$Platform.msix"
 
-# Windows SDK tools — use native host architecture binaries
-$sdkHostArch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x64" }
-$sdkBin      = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\$sdkHostArch"
-$makeappx    = Join-Path $sdkBin "makeappx.exe"
-$signtool    = Join-Path $sdkBin "signtool.exe"
-$makepri     = Join-Path $sdkBin "makepri.exe"
-
-foreach ($tool in @($makeappx, $signtool, $makepri)) {
-    if (-not (Test-Path $tool)) {
-        Write-Error "Missing SDK tool: $tool`nInstall Windows SDK 10.0.26100.0"
-        exit 1
-    }
+# The Native AOT companion build shells out to vswhere.exe (via the ILCompiler
+# targets) to locate the VC toolchain. If the VS Installer dir isn't on PATH the
+# native link step fails with exit code 123, so add it when vswhere isn't resolvable.
+$vsInstaller = "C:\Program Files (x86)\Microsoft Visual Studio\Installer"
+if ((Test-Path $vsInstaller) -and -not (Get-Command vswhere.exe -ErrorAction SilentlyContinue)) {
+    $env:PATH = "$vsInstaller;$env:PATH"
 }
+
+# Windows SDK packaging tools — pick the newest installed 10.x SDK that has them,
+# using native host-architecture binaries (so this works across SDK versions / CI runners).
+$sdkHostArch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x64" }
+$sdkRoot     = "C:\Program Files (x86)\Windows Kits\10\bin"
+$sdkBin      = if (Test-Path $sdkRoot) {
+    Get-ChildItem $sdkRoot -Directory |
+        Where-Object { $_.Name -match '^10\.' -and (Test-Path (Join-Path $_.FullName "$sdkHostArch\makeappx.exe")) } |
+        Sort-Object { [version]$_.Name } -Descending |
+        Select-Object -First 1 -ExpandProperty FullName |
+        ForEach-Object { Join-Path $_ $sdkHostArch }
+}
+if (-not $sdkBin) {
+    Write-Error "Windows SDK packaging tools (makeappx/makepri/signtool) not found under '$sdkRoot'.`nInstall a recent Windows SDK, e.g. winget install Microsoft.WindowsSDK.10.0.26100"
+    exit 1
+}
+$makeappx = Join-Path $sdkBin "makeappx.exe"
+$signtool = Join-Path $sdkBin "signtool.exe"
+$makepri  = Join-Path $sdkBin "makepri.exe"
+foreach ($tool in @($makeappx, $signtool, $makepri)) {
+    if (-not (Test-Path $tool)) { Write-Error "Missing SDK tool: $tool"; exit 1 }
+}
+Write-Host "Toolchain: $sdkBin" -ForegroundColor DarkCyan
 
 # ── Version (from Directory.Build.props) ───────────────────────────────────────
 $propsXml    = [xml](Get-Content (Join-Path $repoRoot "Directory.Build.props"))
