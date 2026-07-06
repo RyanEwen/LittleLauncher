@@ -296,6 +296,7 @@ public sealed partial class SettingsWindow : Window
         "LauncherItemsPage" => typeof(LauncherItemsPage),
         "SyncPage" => typeof(SyncPage),
         "SystemPage" => typeof(SystemPage),
+        "PromotedAppsPage" => typeof(TechnicallyReal.Promo.PromotedAppsPage),
         "AboutPage" => typeof(AboutPage),
         _ => null
     };

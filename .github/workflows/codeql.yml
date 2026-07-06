@@ -58,6 +58,11 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+      with:
+        # Private cross-promo submodule (external/promo) needs a PAT with read
+        # access; add it as the SUBMODULES_TOKEN repository secret.
+        submodules: true
+        token: ${{ secrets.SUBMODULES_TOKEN || github.token }}
 
     # Add any setup steps before running the `github/codeql-action/init` action.
     # This includes steps like installing compilers or runtimes (`actions/setup-node`
