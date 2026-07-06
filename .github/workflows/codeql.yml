@@ -45,8 +45,10 @@ jobs:
         include:
         - language: actions
           build-mode: none
+        # Buildless analysis so CI never has to compile the app (a manual build
+        # would need the private external/promo submodule checked out).
         - language: csharp
-          build-mode: manual
+          build-mode: none
         # CodeQL supports the following values keywords for 'language': 'actions', 'c-cpp', 'csharp', 'go', 'java-kotlin', 'javascript-typescript', 'python', 'ruby', 'rust', 'swift'
         # Use `c-cpp` to analyze code written in C, C++ or both
         # Use 'java-kotlin' to analyze code written in Java, Kotlin or both
@@ -58,11 +60,6 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-      with:
-        # Private cross-promo submodule (external/promo) needs a PAT with read
-        # access; add it as the SUBMODULES_TOKEN repository secret.
-        submodules: true
-        token: ${{ secrets.SUBMODULES_TOKEN || github.token }}
 
     # Add any setup steps before running the `github/codeql-action/init` action.
     # This includes steps like installing compilers or runtimes (`actions/setup-node`
@@ -82,25 +79,6 @@ jobs:
 
         # For more details on CodeQL's query packs, refer to: https://docs.github.com/en/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-code-scanning#using-queries-in-ql-packs
         # queries: security-extended,security-and-quality
-
-    - name: Setup MSBuild
-      if: matrix.build-mode == 'manual'
-      uses: microsoft/setup-msbuild@v2
-
-    - name: Restore NuGet packages
-      if: matrix.build-mode == 'manual'
-      run: nuget restore LittleLauncher.sln
-
-    # If the analyze step fails for one of the languages you are analyzing with
-    # "We were unable to automatically build your code", modify the matrix above
-    # to set the build mode to "manual" for that language. Then modify this step
-    # to build your code.
-    # ℹ️ Command-line programs to run using the OS shell.
-    # 📚 See https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#jobsjob_idstepsrun
-    - name: Run manual build steps
-      if: matrix.build-mode == 'manual'
-      run: |
-        msbuild LittleLauncher.sln
 
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v4
