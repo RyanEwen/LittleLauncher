@@ -131,6 +131,9 @@ public sealed partial class MainWindow : Window
     private readonly global::Windows.UI.ViewManagement.UISettings _uiSettings = new();
     private bool _lastDarkTheme;
 
+    /// <summary>Daily timer that refreshes stale auto-fetched item icons while the app runs.</summary>
+    private System.Threading.Timer? _iconRefreshTimer;
+
     public MainWindow()
     {
         // ── Singleton check ─────────────────────────────────────────
@@ -199,6 +202,16 @@ public sealed partial class MainWindow : Window
         FlyoutWindow.WarmUp(this, SettingsManager.Current.Launchers);
         _ = StartAutoSyncAsync();
         _ = FetchMissingIconsOnStartupAsync();
+
+        // The app stays resident in the tray for weeks, so a launch-only refresh
+        // isn't enough. Check daily; downloads only happen once a cached icon
+        // is older than FaviconService.IconMaxAge. Marshal to the UI thread so
+        // IconPath change notifications are safe for bindings.
+        _iconRefreshTimer = new System.Threading.Timer(
+            _ => App.MainDispatcherQueue.TryEnqueue(() => _ = RefreshStaleIconsPeriodicAsync()),
+            null,
+            TimeSpan.FromHours(24),
+            TimeSpan.FromHours(24));
 
         // Register for Windows toast notifications (may fail in packaged/MSIX builds
         // that lack a COM activator declaration — non-critical, only used for update toasts).
@@ -1107,7 +1120,9 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Scans launcher items on startup and fetches any missing icons.
+    /// Scans launcher items on startup, fetches any missing icons, and refreshes
+    /// stale auto-fetched icons (favicons, app icons, PWA icons older than
+    /// <see cref="FaviconService.IconMaxAge"/>). Custom icons are never touched.
     /// Covers settings-import-then-restart and machine-migration scenarios.
     /// </summary>
     private async Task FetchMissingIconsOnStartupAsync()
@@ -1129,26 +1144,70 @@ public sealed partial class MainWindow : Window
                 }
             }
 
-            if (!anyMissing) return;
+            if (anyMissing)
+            {
+                foreach (var launcher in SettingsManager.Current.Launchers)
+                    await FaviconService.FetchMissingItemIconsAsync(launcher.Items);
+            }
 
-            foreach (var launcher in SettingsManager.Current.Launchers)
-                await FaviconService.FetchMissingItemIconsAsync(launcher.Items);
+            bool anyRefreshed = await RefreshStaleIconsCoreAsync();
 
-            SettingsManager.SaveSettings();
-            FlyoutWindow.InvalidateAllItems();
+            if (!anyMissing && !anyRefreshed) return;
 
-            // Re-save tray icons now that item icons have been re-fetched.
-            // This matters for Composite mode when switching install types
-            // (e.g. MSIX → WiX) where IconPath values pointed to dead VFS paths.
-            // Use RefreshLauncherIcon (batch-friendly) and SaveSettingsIconToAppData once.
-            foreach (var launcher in SettingsManager.Current.Launchers)
-                RefreshLauncherIcon(launcher);
-            SaveSettingsIconToAppData();
-            SettingsWindow.GetCurrent()?.RefreshIcon();
+            ApplyItemIconChanges();
         }
         catch (Exception ex)
         {
             NLog.LogManager.GetCurrentClassLogger().Warn(ex, "Startup icon fetch failed");
+        }
+    }
+
+    /// <summary>
+    /// Runs the stale-icon refresh across all launchers with one shared
+    /// visited-path set so items sharing a favicon aren't fetched twice.
+    /// </summary>
+    private static async Task<bool> RefreshStaleIconsCoreAsync()
+    {
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        bool changed = false;
+        foreach (var launcher in SettingsManager.Current.Launchers)
+            changed |= await FaviconService.RefreshStaleItemIconsAsync(launcher.Items, visited);
+        return changed;
+    }
+
+    /// <summary>
+    /// Persists item icon changes and pushes them to every surface: flyouts,
+    /// tray icons (Composite mode reads item icons), and the Settings window icon.
+    /// </summary>
+    private void ApplyItemIconChanges()
+    {
+        SettingsManager.SaveSettings();
+        FlyoutWindow.InvalidateAllItems();
+
+        // Re-save tray icons now that item icons have changed. This matters for
+        // Composite mode, whose bitmap is built from the first 4 item icons.
+        // Use RefreshLauncherIcon (batch-friendly) and SaveSettingsIconToAppData once.
+        foreach (var launcher in SettingsManager.Current.Launchers)
+            RefreshLauncherIcon(launcher);
+        SaveSettingsIconToAppData();
+        SettingsWindow.GetCurrent()?.RefreshIcon();
+    }
+
+    /// <summary>
+    /// Periodic stale-icon refresh while the app stays resident in the tray.
+    /// The daily cadence only checks file timestamps; downloads happen when a
+    /// cached icon crosses <see cref="FaviconService.IconMaxAge"/>.
+    /// </summary>
+    private async Task RefreshStaleIconsPeriodicAsync()
+    {
+        try
+        {
+            if (!await RefreshStaleIconsCoreAsync()) return;
+            ApplyItemIconChanges();
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn(ex, "Periodic icon refresh failed");
         }
     }
 

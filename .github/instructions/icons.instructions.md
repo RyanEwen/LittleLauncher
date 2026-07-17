@@ -166,10 +166,20 @@ The MSI (`Package.wxs`) creates an initial Start Menu shortcut at `Programs\Litt
 `FaviconService.FetchMissingItemIconsAsync(IEnumerable<LauncherItem>)` is the **unified pipeline** for fetching launcher item icons. It handles both websites (favicon download) and apps (exe icon extraction). All bulk import paths must use this single method — do not duplicate the fetch logic.
 
 Entry points that call the pipeline:
-- **Startup**: `MainWindow.FetchMissingIconsOnStartupAsync()` — fire-and-forget, covers settings-import-then-restart and machine migration scenarios.
+- **Startup**: `MainWindow.FetchMissingIconsOnStartupAsync()` — fire-and-forget, covers settings-import-then-restart and machine migration scenarios. Also runs the stale-icon refresh (below).
 - **Sync download**: `SftpSyncService.DownloadLauncherItemsAsync()` — awaited before save.
 - **File import**: `LauncherItemsPage.ImportItems_Click()` — awaited before save.
 - **Manual add/edit**: calls `FaviconService.FetchAndCacheAsync()` / `GetApplicationIcon()` directly for the single item in the dialog.
+
+### Stale icon refresh
+
+`FaviconService.RefreshStaleItemIconsAsync()` re-fetches **auto-fetched** item icons whose cached file is older than `FaviconService.IconMaxAge` (7 days), so favicons, extracted app icons, and PWA icons don't rot as sites and apps update. Rules:
+
+- **Custom icons are never touched.** Auto-fetched vs custom is decided by `IsAutoFetchedIconPath()`: auto-fetched icons all live in the `favicons` cache folder (`{host}.png`, `app_{name}.png`, `pwa_{aumid}.png`); user-chosen images live in the separate `icons` folder (`custom-*`, `selfhst-*`) or an arbitrary path.
+- **Failures keep the existing file** — `FetchAndCacheCoreAsync` only writes on success, so icons only ever improve. A failed fetch leaves the old timestamp, so it's retried on the next check.
+- Items sharing a cache file (same host) are deduped per pass via a shared visited-path set.
+- Triggered from `MainWindow`: on startup (inside `FetchMissingIconsOnStartupAsync`) and by `_iconRefreshTimer`, a daily `System.Threading.Timer` (the tray app stays resident for weeks, so launch-only would not be enough). The timer callback marshals to the UI thread via `App.MainDispatcherQueue` before touching `IconPath`. After any change, `ApplyItemIconChanges()` saves settings, invalidates flyouts, and re-renders tray/settings icons (Composite mode embeds item icons).
+- **Cache-busting:** the refresh rewrites cache files in place (same path), so the item-icon `BitmapImage` loads in `IconPathToImageConverter` and `FlyoutWindow.CreateIconTile` set `BitmapCreateOptions.IgnoreImageCache` — without it, WinUI's per-URI decoded-image cache keeps showing the old bitmap for the rest of the session.
 
 For Chromium PWAs, prefer the site's own icon/manifest asset when the AUMID encodes a domain (for example `example.com-HEX_hash!App`). The shell image factory often returns a softer rasterized bitmap than the original web icon. `GetBestPwaIconAsync()` handles this preference, but it must reject off-origin login redirects and skip generic Google favicon-service fallbacks for PWAs; when the site does not expose a real app icon, it should fall back to `GetPwaIconFromShell()`.
 

@@ -55,6 +55,8 @@ By default, launching the app opens the Settings window. Silent mode (tray icon 
 
 After bulk icon changes, callers invoke `FlyoutWindow.InvalidateItems()` so the flyout rebuilds its containers on the next toggle and the open `LauncherItemsPage` refreshes if it is showing the affected launcher.
 
+`FaviconService.RefreshStaleItemIconsAsync(items)` complements the missing-icon pipeline by **re-fetching auto-fetched icons** whose cached file is older than 7 days (`FaviconService.IconMaxAge`), so favicons, app icons, and PWA icons track upstream changes. Custom user-chosen icons are never touched (auto-fetched icons are identified by living in the `favicons` cache folder), and a failed fetch keeps the existing file. It runs at startup (inside `FetchMissingIconsOnStartupAsync`) and on a daily timer in `MainWindow` while the app stays resident in the tray. Because refreshed files keep the same path, item-icon `BitmapImage` loads use `BitmapCreateOptions.IgnoreImageCache` to bypass WinUI's per-URI decoded-image cache.
+
 ## SFTP sync
 
 `SftpSyncService` provides static async methods:

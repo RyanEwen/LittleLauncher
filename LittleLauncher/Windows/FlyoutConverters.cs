@@ -25,6 +25,9 @@ public sealed class IconPathToImageConverter : IValueConverter
             {
                 DecodePixelType = DecodePixelType.Logical,
                 DecodePixelWidth = decodePixelWidth,
+                // The stale-icon refresh rewrites cached files in place (same path),
+                // so the per-URI decoded-image cache would keep showing the old bitmap.
+                CreateOptions = BitmapCreateOptions.IgnoreImageCache,
             };
             bmp.UriSource = new Uri(path, UriKind.Absolute);
             return bmp;

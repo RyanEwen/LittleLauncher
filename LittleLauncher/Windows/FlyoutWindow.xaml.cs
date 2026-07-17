@@ -837,6 +837,9 @@ public partial class FlyoutWindow : Window
             {
                 DecodePixelType = DecodePixelType.Logical,
                 DecodePixelWidth = iconSize + 4,
+                // The stale-icon refresh rewrites cached files in place (same path),
+                // so the per-URI decoded-image cache would keep showing the old bitmap.
+                CreateOptions = BitmapCreateOptions.IgnoreImageCache,
             };
             bmp.UriSource = new Uri(item.IconPath, UriKind.Absolute);
             iconElement = new Image

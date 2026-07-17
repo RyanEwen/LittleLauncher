@@ -724,6 +724,107 @@ internal static partial class FaviconService
         }
     }
 
+    // ── Stale icon refresh ─────────────────────────────────────────
+
+    /// <summary>How old a cached auto-fetched icon may get before it is re-fetched.</summary>
+    public static readonly TimeSpan IconMaxAge = TimeSpan.FromDays(7);
+
+    /// <summary>
+    /// True when the path points into the favicon cache directory — i.e. the icon was
+    /// auto-fetched (website favicon, extracted app icon, or PWA icon). User-chosen
+    /// custom images live elsewhere (the "icons" folder or an arbitrary path) and are
+    /// never considered auto-fetched.
+    /// </summary>
+    public static bool IsAutoFetchedIconPath(string? path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return false;
+        try
+        {
+            string? dir = Path.GetDirectoryName(Path.GetFullPath(path));
+            return string.Equals(dir, Path.GetFullPath(CacheDir), StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Re-fetches auto-fetched icons that are older than <see cref="IconMaxAge"/>.
+    /// Items with custom icons (outside the favicon cache) are never touched.
+    /// A failed fetch keeps the existing cached file, so icons only ever improve.
+    /// Returns true when any icon file was rewritten or any IconPath changed.
+    /// </summary>
+    /// <param name="visitedPaths">
+    /// Tracks cache files already examined this pass so items sharing a favicon
+    /// (same host) don't trigger duplicate downloads. Pass one set across launchers.
+    /// </param>
+    public static async Task<bool> RefreshStaleItemIconsAsync(
+        IEnumerable<LauncherItem> items, HashSet<string>? visitedPaths = null)
+    {
+        visitedPaths ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        bool changed = false;
+
+        foreach (var item in items)
+        {
+            if (item.IsGroup)
+            {
+                changed |= await RefreshStaleItemIconsAsync(item.Children, visitedPaths);
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(item.Path) || !IsAutoFetchedIconPath(item.IconPath))
+                continue;
+
+            // Dead paths are handled by the missing-icon pipeline, not here.
+            if (!File.Exists(item.IconPath))
+                continue;
+
+            if (!visitedPaths.Add(item.IconPath))
+                continue;
+
+            if (DateTime.UtcNow - File.GetLastWriteTimeUtc(item.IconPath) < IconMaxAge)
+                continue;
+
+            try
+            {
+                string? newPath;
+                if (item.IsWebsite)
+                {
+                    newPath = await FetchAndCacheCoreAsync(item.Path,
+                        allowGoogleFaviconFallback: true, preferCachedResult: false);
+                }
+                else if (item.IsPwa)
+                {
+                    newPath = await GetBestPwaIconAsync(item.Path);
+                }
+                else if (item.Path.StartsWith(@"shell:AppsFolder\", StringComparison.OrdinalIgnoreCase))
+                {
+                    newPath = await GetBestPwaIconAsync(item.Path[@"shell:AppsFolder\".Length..]);
+                }
+                else
+                {
+                    newPath = GetApplicationIcon(item.Path);
+                }
+
+                if (string.IsNullOrEmpty(newPath))
+                    continue;
+
+                Logger.Info($"Refreshed stale icon for {item.Path} → {newPath}");
+                changed = true;
+                if (!string.Equals(newPath, item.IconPath, StringComparison.OrdinalIgnoreCase))
+                    item.IconPath = newPath;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn(ex, $"Failed to refresh icon for {item.Path}");
+            }
+        }
+
+        return changed;
+    }
+
     [GeneratedRegex(@"<title[^>]*>(.*?)</title>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
     private static partial Regex TitleRegex();
 
