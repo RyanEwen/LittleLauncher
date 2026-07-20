@@ -34,6 +34,18 @@ internal static readonly IntPtr HWND_TOPMOST = new(-1);
 If a call inexplicably returns `false` or does nothing, check the signature's parameter widths
 before anything else, and log `Marshal.GetLastWin32Error()`.
 
+## DWM window attributes
+
+`DwmSetWindowAttribute` covers window chrome that XAML cannot reach:
+
+| Attribute | Use |
+|---|---|
+| `DWMWA_WINDOW_CORNER_PREFERENCE` | Windows 11 rounded corners on borderless windows |
+| `DWMWA_BORDER_COLOR` | Border tint (COLORREF `0x00BBGGRR` — reverse of RGB); `DWMWA_COLOR_DEFAULT` restores the system colour |
+
+Prefer these over XAML borders when a window must not change layout: a `BorderThickness` insets
+content, whereas the DWM border costs nothing.
+
 ## Constants & Enums
 
 - Win32 constants as `internal const int` or `internal const uint`

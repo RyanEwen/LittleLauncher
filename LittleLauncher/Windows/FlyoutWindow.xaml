@@ -585,9 +585,9 @@
 
         <Grid.ContextFlyout>
             <MenuFlyout>
-                <MenuFlyoutItem x:Name="ContextEditLauncherSettings" Text="Edit Launcher Settings" Click="ContextEditLauncherSettings_Click">
+                <MenuFlyoutItem x:Name="ContextEditMode" Text="Edit items" Click="ContextEditMode_Click">
                     <MenuFlyoutItem.Icon>
-                        <FontIcon Glyph="&#xE713;" />
+                        <FontIcon Glyph="&#xE70F;" />
                     </MenuFlyoutItem.Icon>
                 </MenuFlyoutItem>
                 <MenuFlyoutSeparator />

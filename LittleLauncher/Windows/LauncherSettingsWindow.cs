@@ -31,7 +31,12 @@ namespace LittleLauncher.Windows;
 public sealed class LauncherSettingsWindow : Window
 {
     private const int WindowWidthDips = 560;
-    private const int WindowHeightDips = 620;
+
+    /// <summary>Fallback height, used only if the form cannot be measured.</summary>
+    private const int FallbackHeightDips = 560;
+
+    /// <summary>Chrome around the form: title bar, body padding and the button row.</summary>
+    private const int ChromeHeightDips = 130;
 
     private readonly TaskCompletionSource<bool> _completion = new();
     private readonly IntPtr _hwnd;
@@ -42,15 +47,23 @@ public sealed class LauncherSettingsWindow : Window
     /// Opens launcher settings. Completes when the window closes.
     /// <paramref name="ownerHwnd"/> keeps it above an always-on-top flyout.
     /// </summary>
-    public static Task<bool> ShowAsync(Launcher launcher, IntPtr ownerHwnd = default, Action<Window>? onCreated = null)
+    /// <param name="isNewLauncher">
+    /// Changes the accept button from "Done" to wording that signals a further step, since a
+    /// launcher created this way goes straight on to item editing.
+    /// </param>
+    public static Task<bool> ShowAsync(
+        Launcher launcher,
+        IntPtr ownerHwnd = default,
+        Action<Window>? onCreated = null,
+        bool isNewLauncher = false)
     {
-        var window = new LauncherSettingsWindow(launcher, ownerHwnd);
+        var window = new LauncherSettingsWindow(launcher, ownerHwnd, isNewLauncher);
         onCreated?.Invoke(window);
         window.Activate();
         return window._completion.Task;
     }
 
-    private LauncherSettingsWindow(Launcher launcher, IntPtr ownerHwnd)
+    private LauncherSettingsWindow(Launcher launcher, IntPtr ownerHwnd, bool isNewLauncher)
     {
         _launcher = launcher;
         _hwnd = WindowNative.GetWindowHandle(this);
@@ -66,7 +79,9 @@ public sealed class LauncherSettingsWindow : Window
 
         var doneButton = new Button
         {
-            Content = "Done",
+            // A launcher created here goes straight on to item editing, so "Done" would be a
+            // lie — the user has one more step.
+            Content = isNewLauncher ? "Next: Add Items" : "Done",
             Style = (Style)Application.Current.Resources["AccentButtonStyle"],
             MinWidth = 90,
             HorizontalAlignment = HorizontalAlignment.Right,
@@ -78,9 +93,10 @@ public sealed class LauncherSettingsWindow : Window
         body.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         body.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
+        var form = BuildForm(launcher);
         var scroller = new ScrollViewer
         {
-            Content = BuildForm(launcher),
+            Content = form,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollMode = ScrollMode.Disabled,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
@@ -103,6 +119,9 @@ public sealed class LauncherSettingsWindow : Window
         WindowChrome.ApplyIcon(_hwnd);
 
         SizeAndCentre();
+
+        // Real sizing happens once layout has produced an ActualHeight.
+        form.Loaded += (_, _) => ResizeToContent(form);
 
         // Hidden: WinUI otherwise pops an "Esc" accelerator tooltip over the window.
         root.KeyboardAcceleratorPlacementMode = KeyboardAcceleratorPlacementMode.Hidden;
@@ -130,6 +149,46 @@ public sealed class LauncherSettingsWindow : Window
         FlyoutWindow.InvalidateItems(_launcher.Id);
     }
 
+    /// <summary>
+    /// Resizes to the form's real height once layout has run.
+    /// </summary>
+    /// <remarks>
+    /// Must happen on <c>Loaded</c>, not during construction. Before the window is shown the
+    /// form has never been laid out, so its <c>DesiredSize</c> is meaningless — feeding that
+    /// into the work-area clamp produced a full-height window. <c>ActualHeight</c> after layout
+    /// is the real number. The form's height varies (the "Icons Per Row" row only exists in
+    /// icon mode), which is why a single constant does not do.
+    /// </remarks>
+    private void ResizeToContent(FrameworkElement form)
+    {
+        var appWindow = AppWindow.GetFromWindowId(Win32Interop.GetWindowIdFromWindow(_hwnd));
+        if (appWindow == null) return;
+
+        double contentHeight = form.ActualHeight > 0 ? form.ActualHeight : form.DesiredSize.Height;
+        if (contentHeight <= 0) return;   // keep the fallback size
+
+        double scale = NativeMethods.GetDpiForWindow(_hwnd) / 96.0;
+        if (scale <= 0) scale = 1.0;
+
+        double heightDips = contentHeight + ChromeHeightDips;
+
+        var area = DisplayArea.GetFromWindowId(appWindow.Id, DisplayAreaFallback.Nearest);
+        if (area != null)
+            heightDips = Math.Min(heightDips, (area.WorkArea.Height / scale) - 40);
+
+        int width = (int)(WindowWidthDips * scale);
+        int height = (int)(heightDips * scale);
+        appWindow.Resize(new SizeInt32(width, height));
+
+        if (area != null)
+        {
+            appWindow.Move(new PointInt32(
+                area.WorkArea.X + ((area.WorkArea.Width - width) / 2),
+                area.WorkArea.Y + ((area.WorkArea.Height - height) / 2)));
+        }
+    }
+
+    /// <summary>Initial size, replaced by <see cref="ResizeToContent"/> once laid out.</summary>
     private void SizeAndCentre()
     {
         var appWindow = AppWindow.GetFromWindowId(Win32Interop.GetWindowIdFromWindow(_hwnd));
@@ -139,7 +198,7 @@ public sealed class LauncherSettingsWindow : Window
         if (scale <= 0) scale = 1.0;
 
         int width = (int)(WindowWidthDips * scale);
-        int height = (int)(WindowHeightDips * scale);
+        int height = (int)(FallbackHeightDips * scale);
         appWindow.Resize(new SizeInt32(width, height));
 
         var area = DisplayArea.GetFromWindowId(appWindow.Id, DisplayAreaFallback.Nearest);

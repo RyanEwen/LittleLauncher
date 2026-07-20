@@ -382,6 +382,12 @@ public static partial class NativeMethods
     internal const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
     internal const int DWMWCP_ROUND = 2;
 
+    /// <summary>Windows 11 window border colour, as a COLORREF (0x00BBGGRR).</summary>
+    internal const int DWMWA_BORDER_COLOR = 34;
+
+    /// <summary>Sentinel restoring the system default border colour.</summary>
+    internal const uint DWMWA_COLOR_DEFAULT = 0xFFFFFFFF;
+
     #endregion
 
     #region shcore.dll

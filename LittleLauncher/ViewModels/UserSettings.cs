@@ -114,18 +114,6 @@ public partial class UserSettings : ObservableObject
     /// fresh install and on files written before this was introduced.
     /// </summary>
     public string LastRunVersion { get; set; } = "";
-
-    /// <summary>
-    /// Show the one-time "item editing has moved to the flyout" notice on the Launchers page.
-    /// </summary>
-    /// <remarks>
-    /// Only set for installs upgrading from a build that had the in-settings item editor — a
-    /// fresh install has never seen it, so the notice would refer to something the user has
-    /// no memory of. Cleared permanently once dismissed.
-    /// </remarks>
-    [ObservableProperty]
-    public partial bool ShowEditingMovedNotice { get; set; }
-
     // ── SFTP Sync ───────────────────────────────────────────────────
 
     /// <summary>SSH/SFTP hostname or IP address.</summary>

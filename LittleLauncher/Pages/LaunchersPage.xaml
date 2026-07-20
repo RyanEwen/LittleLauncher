@@ -3,27 +3,8 @@
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <Grid>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-        </Grid.RowDefinitions>
 
-        <!-- Outside LaunchersPanel on purpose: RebuildLauncherCards() clears that panel down
-             to its last child, so anything placed inside it is destroyed on the first rebuild.
-             Shown once to installs upgrading from the build that had the in-settings item
-             editor; never shown on a fresh install. -->
-        <InfoBar x:Name="EditingMovedNotice"
-                 Grid.Row="0"
-                 IsOpen="False"
-                 Severity="Warning"
-                 Title="Item editing has moved"
-                 Message="To add, edit or reorder items, open a launcher from the system tray or taskbar, hover over it, then click the pencil in the top corner."
-                 Closed="EditingMovedNotice_Closed"
-                 MaxWidth="450"
-                 HorizontalAlignment="Center"
-                 Margin="16,16,16,0"/>
-
-        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
             <Grid>
                 <StackPanel x:Name="LaunchersPanel" MaxWidth="450" Margin="16">
 

@@ -31,10 +31,21 @@ button, Escape (first press exits edit mode, second dismisses), or hiding the fl
 Edit mode may grow the flyout's **height**. It must never change its **width**, or the size of
 any item or group.
 
-- `GetFlyoutWidth()` sums fixed column widths arithmetically and is never measured, so chrome
-  wider than the content is **clipped**. The toolbar therefore uses icon-only 28px buttons
-  sized for the narrowest case (small-icon mode, ~136px → ~120px usable). Column operations
-  live in an overflow menu for this reason.
+- The **toolbar floats in its own window** (`EditToolbarWindow`) above the flyout, so it
+  contributes no height at all and cannot crowd the launcher's content. It is
+  `WS_EX_NOACTIVATE` so clicking it does not steal focus, and the flyout drops its
+  always-on-top flag while an owned editor is open — ownership alone does not beat a topmost
+  owner. Reposition it **after** the flyout settles: `ResizeWindowToCurrentContent` moves the
+  window with `SWP_ASYNCWINDOWPOS`, so reading its rect immediately returns the *old* bounds.
+- The **edit-mode border tint** uses the DWM border colour (`DWMWA_BORDER_COLOR`), not a XAML
+  border — a `BorderThickness` on `RootGrid` would inset the content.
+- `GetFlyoutWidth()` sums fixed column widths arithmetically and is never measured, so anything
+  wider than the content is **clipped**.
+- Per-column headers and the empty-launcher placeholder *do* add height, and both are counted
+  in the arithmetic (`CurrentColumnHeaderHeight`, `CurrentEmptyPlaceholderHeight`). Anything
+  that reserves space must be added there, or the content overflows the window — an empty
+  column's drop-target `MinHeight` is skipped when the whole launcher is empty precisely
+  because only the placeholder is accounted for.
 - Per-item/group affordances must be **non-reflowing**: use `Background` and `CornerRadius`
   only, which have no layout effect. A border was tried and rejected — compensating for it with
   negative padding only works when the container already has padding on every side to give
@@ -50,10 +61,19 @@ forcing a layout pass on a window hidden via `ShowWindow(SW_HIDE)` while another
 is active causes a fatal `ExecutionEngineException`. Do not "fix" this by calling
 `UpdateLayout()`.
 
-Edit-mode toggles are the one exception: the window is visible, so `ResizeForEditChrome()`
-measures `ContentStack` directly and sizes to the real value, falling back to the arithmetic
-estimate if the measure fails. Hiding the flyout exits edit mode, so the hidden-window path
-never has to account for edit chrome.
+**Compute, don't measure.** Three separate height bugs came from measuring: a "learned" chrome
+constant that fed its own output back into the arithmetic and grew without bound; a
+`ContentStack` measure taken straight after a rebuild, before the new containers were laid out;
+and a double-counted margin (`DesiredSize` already includes the element's own margin). Edit
+chrome heights are now derived from geometry that is known up front — toolbar rows × slot,
+header height × 1.
+
+Where a real measurement genuinely is needed, take it **after layout**, never during
+construction or mid-animation. `LauncherSettingsWindow` sizes itself on `Loaded` for this
+reason; sizing during the constructor read a `DesiredSize` of zero and produced a full-height
+window. Likewise, entering edit mode from the settings app waits out the open animation:
+`ShowAnimated` drives geometry on a rendering loop, and a resize partway through is overwritten
+by the animation's next frame.
 
 ## Source of truth
 

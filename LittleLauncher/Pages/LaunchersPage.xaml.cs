@@ -28,7 +28,6 @@ public sealed partial class LaunchersPage : Page
     {
         InitializeComponent();
         RebuildLauncherCards();
-        EditingMovedNotice.IsOpen = SettingsManager.Current.ShowEditingMovedNotice;
 
         if (PendingSettingsLauncher is not null)
         {
@@ -36,15 +35,6 @@ public sealed partial class LaunchersPage : Page
             // so the ContentDialog can't show until the page is in the visual tree.
             Loaded += LaunchersPage_PendingSettingsLoaded;
         }
-    }
-
-    /// <summary>Dismissing the upgrade notice retires it permanently.</summary>
-    private void EditingMovedNotice_Closed(InfoBar sender, InfoBarClosedEventArgs args)
-    {
-        if (!SettingsManager.Current.ShowEditingMovedNotice) return;
-
-        SettingsManager.Current.ShowEditingMovedNotice = false;
-        SettingsManager.SaveSettings();
     }
 
     private void LaunchersPage_PendingSettingsLoaded(object sender, RoutedEventArgs e)
@@ -355,14 +345,14 @@ public sealed partial class LaunchersPage : Page
     /// Opens launcher settings in its own window (shared with the flyout) and refreshes the
     /// cards afterwards so name and icon changes show up.
     /// </summary>
-    private async Task ShowLauncherSettingsDialog(Launcher launcher)
+    private async Task ShowLauncherSettingsDialog(Launcher launcher, bool isNewLauncher = false)
     {
         IntPtr owner = IntPtr.Zero;
         var settingsWindow = SettingsWindow.GetCurrent();
         if (settingsWindow != null)
             owner = WinRT.Interop.WindowNative.GetWindowHandle(settingsWindow);
 
-        await LauncherSettingsWindow.ShowAsync(launcher, owner);
+        await LauncherSettingsWindow.ShowAsync(launcher, owner, isNewLauncher: isNewLauncher);
         RebuildLauncherCards();
     }
 
@@ -440,6 +430,10 @@ public sealed partial class LaunchersPage : Page
         {
             Id = Guid.NewGuid().ToString(),
             Name = $"Launcher {SettingsManager.Current.Launchers.Count + 1}",
+            // Set here rather than as the model default: changing the default would flip
+            // ShowTitle on for every existing launcher, since the property is omitted from
+            // settings.json when it holds its default value.
+            ShowTitle = true,
         };
         SettingsManager.Current.Launchers.Add(newLauncher);
         SettingsManager.SaveSettings();
@@ -450,8 +444,13 @@ public sealed partial class LaunchersPage : Page
         RebuildLauncherCards();
 
         // Show settings dialog for new launcher
-        await ShowLauncherSettingsDialog(newLauncher);
+        await ShowLauncherSettingsDialog(newLauncher, isNewLauncher: true);
         RebuildLauncherCards();
+
+        // A brand-new launcher is empty, so there is nothing on screen to discover editing
+        // from. Open it in edit mode; the flyout's own empty-state text takes it from there.
+        if (MainWindow.Current is { } owner)
+            FlyoutWindow.ShowInEditMode(owner, newLauncher.Id);
     }
 
     /// <summary>
@@ -466,6 +465,22 @@ public sealed partial class LaunchersPage : Page
         bool readOnly = launcher is { IsShared: true, IsSharedOwner: false };
 
         var menu = new MenuFlyout();
+
+        // First entry, because this row used to be the drill-in to the item editor — it
+        // should still answer "how do I edit this?".
+        var edit = new MenuFlyoutItem
+        {
+            Text = "Edit items",
+            Icon = new FontIcon { Glyph = "" },
+            IsEnabled = !readOnly,
+        };
+        edit.Click += (_, _) =>
+        {
+            if (MainWindow.Current is { } main)
+                FlyoutWindow.ShowInEditMode(main, launcher.Id);
+        };
+        menu.Items.Add(edit);
+        menu.Items.Add(new MenuFlyoutSeparator());
 
         var export = new MenuFlyoutItem { Text = "Export items…", Icon = new FontIcon { Glyph = "" } };
         export.Click += async (_, _) => await LauncherBulkOps.ExportItemsAsync(XamlRoot, launcher);

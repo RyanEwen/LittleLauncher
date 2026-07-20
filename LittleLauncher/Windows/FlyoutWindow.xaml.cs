@@ -130,6 +130,7 @@ public partial class FlyoutWindow : Window
 
         InitializeResizeGrips();
         RebuildColumnsPanel();
+        InitializeEmptyPlaceholder();
         InitializeEditChrome();
 
         // Desktop Acrylic blurs whatever is behind the window (including other windows),
@@ -266,6 +267,9 @@ public partial class FlyoutWindow : Window
     {
         if (_instances.TryGetValue(launcherId, out var fw))
         {
+            // The edit chrome lives in its own top-level windows, which closing the flyout
+            // does not touch — without this they outlive the launcher they belong to.
+            fw.CloseEditChrome();
             fw.Close();
             _instances.Remove(launcherId);
         }
@@ -1050,6 +1054,7 @@ public partial class FlyoutWindow : Window
         }
 
         ApplyColumnChrome();
+        UpdateEmptyPlaceholder();
     }
 
     /// <summary>
@@ -2239,13 +2244,15 @@ public partial class FlyoutWindow : Window
         if (flyout.Items.Count > 0)
             flyout.Items.Add(new MenuFlyoutSeparator());
 
-        var editLauncherSettings = new MenuFlyoutItem
+        // Enters edit mode rather than opening launcher settings directly \u2014 settings are
+        // reachable from the edit toolbar, so this keeps one obvious way in.
+        var editMode = new MenuFlyoutItem
         {
-            Text = "Edit Launcher Settings",
-            Icon = new FontIcon { Glyph = "\uE713" }
+            Text = "Edit items",
+            Icon = new FontIcon { Glyph = "" }
         };
-        editLauncherSettings.Click += ContextEditLauncherSettings_Click;
-        flyout.Items.Add(editLauncherSettings);
+        editMode.Click += ContextEditMode_Click;
+        flyout.Items.Add(editMode);
 
         flyout.Items.Add(new MenuFlyoutSeparator());
 
@@ -2507,12 +2514,12 @@ public partial class FlyoutWindow : Window
     private sealed record WindowBounds(int Left, int Top, int Width, int Height, bool IsMaximized = false);
 
     /// <summary>
-    /// Opens this launcher's settings in its own window, owned by the flyout — no detour
-    /// through the settings window.
+    /// Enters edit mode. Launcher settings are reached from the edit toolbar rather than
+    /// from here, so there is a single obvious entry point into editing.
     /// </summary>
-    private void ContextEditLauncherSettings_Click(object sender, RoutedEventArgs e)
+    private void ContextEditMode_Click(object sender, RoutedEventArgs e)
     {
-        _ = OpenLauncherSettingsAsync();
+        EnterEditMode();
     }
 
     private async Task OpenLauncherSettingsAsync()
@@ -2589,7 +2596,7 @@ public partial class FlyoutWindow : Window
         // Add a small buffer to cover accumulated sub-pixel font-height rounding.
         // Clamp to the available work-area height so the flyout never exceeds the screen.
         double titleHeight = _launcher.ShowTitle ? LauncherTitleHeight : 0;
-        double editHeight = CurrentEditChromeHeight + CurrentColumnHeaderHeight;
+        double editHeight = CurrentEditChromeHeight + CurrentColumnHeaderHeight + CurrentEmptyPlaceholderHeight;
         double outerPadding = FlyoutOuterPadding * 2;
         double maxContentHeight = GetWorkAreaHeightDips() - 16; // 16 = gap from taskbar edges
         _lastMeasuredHeight = Math.Clamp(maxColumnHeight + titleHeight + editHeight + outerPadding + 2, GetMinimumFlyoutHeight(), maxContentHeight);
@@ -2647,7 +2654,7 @@ public partial class FlyoutWindow : Window
         }
 
         double titleHeight = _launcher.ShowTitle ? LauncherTitleHeight : 0;
-        double editHeight = CurrentEditChromeHeight + CurrentColumnHeaderHeight;
+        double editHeight = CurrentEditChromeHeight + CurrentColumnHeaderHeight + CurrentEmptyPlaceholderHeight;
         double outerPadding = FlyoutOuterPadding * 2;
         double maxContentHeight = GetWorkAreaHeightDips() - 16;
         _lastMeasuredHeight = Math.Clamp(maxColumnHeight + titleHeight + editHeight + outerPadding + 2, GetMinimumFlyoutHeight(), maxContentHeight);

@@ -60,8 +60,10 @@ public partial class FlyoutWindow
             int rows = (int)Math.Ceiling(count / (double)perRow);
             int columns = Math.Min(count, perRow);
 
-            return ((columns * EditButtonSlot) + (EditToolbarPadding * 2),
-                    (rows * EditButtonSlot) + (EditToolbarPadding * 2));
+            int width = (columns * EditButtonSlot) + (EditToolbarPadding * 2);
+            int height = (rows * EditButtonSlot) + (EditToolbarPadding * 2);
+
+            return (width, height);
         }
     }
 
@@ -77,6 +79,161 @@ public partial class FlyoutWindow
     /// <summary>Padded container for the toolbar buttons; hosted by the floating bar window.</summary>
     private Border? _editToolbarHost;
 
+    // ── Empty state ─────────────────────────────────────────────────
+
+    /// <summary>Reserved height for the empty-launcher placeholder.</summary>
+    private const int EmptyPlaceholderHeight = 56;
+
+    private TextBlock? _emptyPlaceholder;
+
+    /// <summary>True when the launcher has no real items (column breaks are not content).</summary>
+    private bool LauncherIsEmpty => !_launcher.Items.Any(i => !i.IsColumnBreak);
+
+    private double CurrentEmptyPlaceholderHeight => LauncherIsEmpty ? EmptyPlaceholderHeight : 0;
+
+    /// <summary>
+    /// Creates the empty-state text.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately not part of <c>InitializeEditChrome</c>: that returns early for read-only
+    /// launchers and runs after the first rebuild, so the placeholder was still null at the
+    /// exact moment an empty launcher needed it.
+    /// </remarks>
+    private void InitializeEmptyPlaceholder()
+    {
+        _emptyPlaceholder = new TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap,
+            TextAlignment = TextAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            FontSize = 12,
+            Opacity = 0.6,
+            Margin = new Thickness(8, 4, 8, 8),
+            Visibility = Visibility.Collapsed,
+        };
+        ContentStack.Children.Add(_emptyPlaceholder);
+        UpdateEmptyPlaceholder();
+    }
+
+    /// <summary>
+    /// Shows guidance inside an empty launcher, so it never renders as a blank box.
+    /// </summary>
+    /// <remarks>
+    /// In the flyout rather than a one-off tip on creation: an empty launcher needs this
+    /// explanation whenever it is empty, not only in the moments after it is made.
+    /// </remarks>
+    private void UpdateEmptyPlaceholder()
+    {
+        if (_emptyPlaceholder == null) return;
+
+        bool empty = LauncherIsEmpty;
+        _emptyPlaceholder.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
+        if (!empty) return;
+
+        _emptyPlaceholder.Text = _isEditMode
+            ? "This launcher is empty.\nAdd your first item with + above."
+            : "This launcher is empty.\nHover here and click the pencil to add items.";
+
+        _emptyPlaceholder.MaxWidth = Math.Max(120, GetFlyoutWidth() - (FlyoutOuterPadding * 4));
+    }
+
+    /// <summary>
+    /// Opens a launcher's flyout directly in edit mode.
+    /// </summary>
+    /// <remarks>
+    /// Removing the settings-side items page left no answer to "how do I edit this?" — most
+    /// acutely for a launcher just created, which is empty and so has nothing on screen to
+    /// hover. This is the actionable route from settings into editing.
+    /// </remarks>
+    internal static void ShowInEditMode(MainWindow owner, string launcherId)
+    {
+        bool alreadyVisible =
+            _instances.TryGetValue(launcherId, out var existing) &&
+            existing._hwnd != IntPtr.Zero &&
+            IsWindow(existing._hwnd) &&
+            (GetWindowLong(existing._hwnd, GWL_STYLE) & WS_VISIBLE) != 0;
+
+        // Toggle would *close* an already-open flyout.
+        if (!alreadyVisible)
+        {
+            // A launcher hidden from the tray has no icon to anchor to, so the tray corner
+            // would point at nothing — centre it instead.
+            var launcher = SettingsManager.Current.Launchers.FirstOrDefault(l => l.Id == launcherId);
+            bool hasTrayIcon = launcher is { NIconHide: false };
+
+            var (x, y) = hasTrayIcon ? GetTrayAnchorPoint() : GetScreenCentreAnchor();
+            Toggle(owner, x, y, launcherId);
+        }
+
+        if (!_instances.TryGetValue(launcherId, out var flyout)) return;
+
+        if (alreadyVisible)
+        {
+            flyout.DispatcherQueue.TryEnqueue(flyout.EnterEditMode);
+            return;
+        }
+
+        // Wait out the open animation before entering edit mode.
+        //
+        // ShowAnimated drives the window's position on a rendering loop for
+        // ShowAnimationDurationMs. Resizing partway through gets overwritten when the
+        // animation's next frame writes the geometry it was aiming for — which is why the
+        // flyout opened from settings ignored the height of the column headers.
+        var settle = flyout.DispatcherQueue.CreateTimer();
+        settle.Interval = TimeSpan.FromMilliseconds(
+            AreAnimationsEnabled ? ShowAnimationDurationMs + 60 : 0);
+        settle.IsRepeating = false;
+        settle.Tick += (s, _) =>
+        {
+            s.Stop();
+            flyout.EnterEditMode();
+        };
+        settle.Start();
+    }
+
+    /// <summary>Approximate on-screen position of the notification area, for anchoring.</summary>
+    private static (int X, int Y) GetTrayAnchorPoint()
+    {
+        try
+        {
+            GetCursorPos(out var cursor);
+            IntPtr monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+            var info = new MONITORINFOEX { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<MONITORINFOEX>() };
+            GetMonitorInfo(monitor, ref info);
+            // Bottom-right of the work area: where the tray sits in the default layout.
+            // CalculatePlacement re-detects the real taskbar edge and clamps from there.
+            return (info.rcWork.Right - 8, info.rcWork.Bottom - 8);
+        }
+        catch
+        {
+            GetCursorPos(out var fallback);
+            return (fallback.X, fallback.Y);
+        }
+    }
+
+    /// <summary>
+    /// Horizontally centred on the work area, but at the taskbar edge — so a launcher with no
+    /// tray icon still opens like a normal flyout, just centred rather than off in the corner.
+    /// </summary>
+    private static (int X, int Y) GetScreenCentreAnchor()
+    {
+        try
+        {
+            GetCursorPos(out var cursor);
+            IntPtr monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+            var info = new MONITORINFOEX { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<MONITORINFOEX>() };
+            GetMonitorInfo(monitor, ref info);
+            var work = info.rcWork;
+            return (work.Left + ((work.Right - work.Left) / 2), work.Bottom - 8);
+        }
+        catch
+        {
+            GetCursorPos(out var fallback);
+            return (fallback.X, fallback.Y);
+        }
+    }
+
     /// <summary>The floating bar above the flyout. Created lazily on first entry to edit mode.</summary>
     private EditToolbarWindow? _editToolbarBar;
 
@@ -89,6 +246,26 @@ public partial class FlyoutWindow
     /// opened it and would commit into a launcher the user has already navigated away from.
     /// </summary>
     private Window? _openModal;
+
+    /// <summary>
+    /// Tears down every window this flyout owns. Called when its launcher is deleted.
+    /// </summary>
+    /// <remarks>
+    /// The floating toolbar and any open editor are separate top-level windows, so closing the
+    /// flyout leaves them on screen — orphaned UI for a launcher that no longer exists.
+    /// </remarks>
+    internal void CloseEditChrome()
+    {
+        _isEditMode = false;
+
+        var modal = _openModal;
+        _openModal = null;
+        try { modal?.Close(); } catch { /* already closing */ }
+
+        var bar = _editToolbarBar;
+        _editToolbarBar = null;
+        try { bar?.Close(); } catch { /* already closing */ }
+    }
 
     /// <summary>Closes any open editor/prompt window. Safe to call when none is open.</summary>
     private void CloseOpenModal()
@@ -108,6 +285,39 @@ public partial class FlyoutWindow
     /// not win against a topmost owner. Dropping the flag while a modal is open is what
     /// actually lets the editor sit in front.
     /// </remarks>
+    /// <summary>
+    /// Tints the flyout's window border while editing, so the whole surface reads as "in edit
+    /// mode" rather than only the floating toolbar.
+    /// </summary>
+    /// <remarks>
+    /// Uses the DWM border colour rather than a XAML border: it costs no layout at all, so it
+    /// cannot change the flyout's width or inset its content — which a <c>BorderThickness</c>
+    /// on <c>RootGrid</c> would.
+    /// </remarks>
+    private void SetEditModeBorder(bool editing)
+    {
+        if (_hwnd == IntPtr.Zero || !IsWindow(_hwnd)) return;
+
+        try
+        {
+            int value;
+            if (editing)
+            {
+                var accent = Application.Current.Resources["AccentFillColorDefaultBrush"] as SolidColorBrush;
+                var c = accent?.Color ?? global::Windows.UI.Color.FromArgb(255, 0x60, 0xA0, 0xE0);
+                // COLORREF is 0x00BBGGRR, the reverse of the usual RGB order.
+                value = (c.B << 16) | (c.G << 8) | c.R;
+            }
+            else
+            {
+                value = unchecked((int)DWMWA_COLOR_DEFAULT);
+            }
+
+            DwmSetWindowAttribute(_hwnd, DWMWA_BORDER_COLOR, ref value, sizeof(int));
+        }
+        catch { /* border tint is cosmetic */ }
+    }
+
     private void SetFlyoutTopmost(bool topmost)
     {
         try
@@ -206,6 +416,7 @@ public partial class FlyoutWindow
         // Lives in its own floating bar above the flyout, not inside ContentStack — see
         // EditToolbarWindow for why.
         _editToolbar = BuildEditToolbar();
+
         _editToolbarHost = new Border
         {
             Child = _editToolbar,
@@ -499,6 +710,7 @@ public partial class FlyoutWindow
         }
         UpdateEditToolbarColumns();
         UpdateResizeGripVisibility();
+        SetEditModeBorder(true);
         ApplyEditVisuals();
         ResizeForEditChrome();
         ShowEditToolbarBar();
@@ -517,11 +729,22 @@ public partial class FlyoutWindow
         _editToolbarBar.PositionAbove(_hwnd, width, height);
     }
 
-    /// <summary>Keeps the bar parked over the flyout after a move or resize.</summary>
+    /// <summary>
+    /// Keeps the bar parked over the flyout after a move or resize.
+    /// </summary>
+    /// <remarks>
+    /// Deferred to the dispatcher because <c>ResizeWindowToCurrentContent</c> moves the flyout
+    /// with <c>SWP_ASYNCWINDOWPOS</c>: reading its rect immediately afterwards returns the
+    /// <i>old</i> bounds, so the bar would centre itself on the flyout's previous width and
+    /// end up visibly off to one side.
+    /// </remarks>
     private void RepositionEditToolbarBar()
     {
         if (!_isEditMode || _editToolbarBar == null) return;
-        ShowEditToolbarBar();
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (_isEditMode) ShowEditToolbarBar();
+        });
     }
 
     internal void ExitEditMode()
@@ -533,6 +756,7 @@ public partial class FlyoutWindow
         CloseOpenModal();
 
         _editToolbarBar?.HideBar();
+        SetEditModeBorder(false);
 
         UpdateResizeGripVisibility();
         ApplyEditVisuals();
@@ -598,6 +822,8 @@ public partial class FlyoutWindow
         ApplyEmptyGroupDropTargets();
         ApplyEmptyColumnPlaceholders();
         ApplyColumnChrome();
+        // Wording differs between modes ("+ above" only makes sense while editing).
+        UpdateEmptyPlaceholder();
     }
 
     /// <summary>
@@ -610,11 +836,16 @@ public partial class FlyoutWindow
     /// </remarks>
     private void ApplyEmptyColumnPlaceholders()
     {
+        // When the whole launcher is empty the placeholder text is the empty state, and there
+        // is nothing to drag anyway. Reserving column height on top of it pushed the
+        // placeholder out of the window, since only one of the two is in the arithmetic.
+        bool launcherEmpty = LauncherIsEmpty;
+
         foreach (var columnListView in ColumnListViews())
         {
             bool isEmpty = columnListView.Items.Count == 0;
 
-            if (isEmpty && _isEditMode)
+            if (isEmpty && _isEditMode && !launcherEmpty)
             {
                 columnListView.MinHeight = IsIconMode ? GetActiveIconCellHeight() : EmptyGroupListModeHeight;
                 columnListView.AllowDrop = true;

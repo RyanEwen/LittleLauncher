@@ -74,33 +74,28 @@ applyTo: "{**/ViewModels/UserSettings*.cs,**/Models/Launcher.cs}"
 
 **Do not** add `[ObservableProperty]` to the legacy migration fields (`LauncherItems`, `TrayIconMode`, `NIconHide`, `CustomTrayIconPath` on `UserSettings`) — they are plain migration-only properties marked with `[JsonIgnore]`.
 
-## Upgrade tracking & one-time notices
+## Upgrade tracking
 
-Two properties support version-aware, one-time UI:
+`LastRunVersion` (plain `string`, serialized) records the app version that last wrote the
+settings file. `SettingsManager.StampVersion()` sets it on **all three** load paths (JSON,
+legacy XML migration, and the defaults fallback).
 
-- `LastRunVersion` (plain `string`, serialized) — the app version that last wrote the settings
-  file. Empty on a fresh install and on any file written before this field existed.
-- `ShowEditingMovedNotice` (`[ObservableProperty]`, `bool`) — drives the one-time "item editing
-  has moved" `InfoBar` on `LaunchersPage`. Cleared permanently when dismissed.
+It exists so a future release can detect an upgrade. Two rules if you add a one-time notice:
 
-`SettingsManager.StampVersion(bool existingInstall)` runs on **all three** load paths (JSON,
-legacy XML migration, and the defaults fallback) and records the running version.
-
-**Only raise an upgrade notice when `existingInstall` is true.** A fresh install has never seen
-the feature being described, so the notice is pure noise. `RestoreSettings` passes `false` only
-on the defaults path, where no settings file was found.
-
-A settings file with **no** recorded version necessarily predates the field, so it is treated as
-older than any threshold — that is what catches everyone upgrading, since no existing file has
-the field yet:
+- **Only fire when a settings file already existed.** A fresh install has never seen whatever
+  is being announced, so the notice is pure noise. `RestoreSettings` reaches the defaults path
+  only when no file was found.
+- **Treat a missing version as older than any threshold.** No file in the wild carries the
+  field yet, so `previous == null` is what identifies an upgrader.
 
 ```csharp
-if (existingInstall && (previous == null || previous < EditingMovedToFlyoutVersion))
-    _current.ShowEditingMovedNotice = true;
+if (existingInstall && (previous == null || previous < SomeFeatureVersion))
+    _current.ShowSomeNotice = true;
 ```
 
-To add another one-time notice, add a `bool` property, compare against a new threshold
-`Version` constant in `StampVersion`, and clear the flag from the UI when dismissed.
+Prefer making the new behaviour discoverable in place over announcing it. The "item editing has
+moved" notice was removed once the Launchers page gained an **Edit items** entry that opens the
+flyout directly — an action beats an explanation, and it needs no version tracking at all.
 
 ## Property Categories
 
