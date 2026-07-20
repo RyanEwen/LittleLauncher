@@ -371,20 +371,10 @@ public sealed partial class MainWindow : Window
                 var editSettings = new H.NotifyIcon.Core.PopupMenuItem { Text = "Edit Launcher Settings" };
                 editSettings.Click += (s, e) =>
                 {
-                    SettingsWindow.ShowInstance(this);
-                    var sw = SettingsWindow.GetCurrent();
-                    sw?.DispatcherQueue.TryEnqueue(() => sw.NavigateToLauncherSettings(launcher));
+                    // Opens directly rather than routing through the settings window.
+                    DispatcherQueue.TryEnqueue(() => _ = Windows.LauncherSettingsWindow.ShowAsync(launcher));
                 };
                 popup.Items.Add(editSettings);
-
-                var editItems = new H.NotifyIcon.Core.PopupMenuItem { Text = "Edit Launcher Items" };
-                editItems.Click += (s, e) =>
-                {
-                    SettingsWindow.ShowInstance(this);
-                    var sw = SettingsWindow.GetCurrent();
-                    sw?.DispatcherQueue.TryEnqueue(() => sw.NavigateToLauncherItems(launcher));
-                };
-                popup.Items.Add(editItems);
 
                 popup.Items.Add(new H.NotifyIcon.Core.PopupMenuSeparator());
             }

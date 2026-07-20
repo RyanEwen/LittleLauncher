@@ -2,6 +2,10 @@
 description: "Use when working with app icons, tray icons, shortcut icons, or window icons. Covers which icon files exist, where each icon surface pulls from, and how to update them correctly."
 applyTo: "**/MainWindow.xaml.cs,**/SettingsWindow.xaml.cs,**/LaunchersPage.xaml*,**/LauncherShortcut/**,**/HomePage.xaml.cs,**/FlyoutConverters.cs,**/FlyoutWindow.xaml*,**/IconGallery.cs"
 ---
+> **Scope:** Use when working with app icons, tray icons, shortcut icons, or window icons. Covers which icon files exist, where each icon surface pulls from, and how to update them correctly.
+> **Governs:** `**/MainWindow.xaml.cs`, `**/SettingsWindow.xaml.cs`, `**/LaunchersPage.xaml*`, `**/LauncherShortcut/**`, `**/HomePage.xaml.cs`, `**/FlyoutConverters.cs`, `**/FlyoutWindow.xaml*`, `**/IconGallery.cs`.
+
+> **Note on glyph code points:** Segoe Fluent Icons glyphs below are written in `U+XXXX` code-point notation. In C# they are string escapes — e.g. `U+E840` is written `""`.
 
 # Icon System
 
@@ -47,12 +51,12 @@ Little Launcher uses a flat upright rocket as its identity icon. The **app ident
 | `"Red"` | Red rocket | `AppIcons/Red.png` |
 | `"Orange"` | Orange rocket | `AppIcons/Orange.png` |
 | `"Purple"` | Purple rocket | `AppIcons/Purple.png` |
-| `"Pin"` | Pin glyph | Segoe Fluent Icons `\uE840` |
-| `"Star"` | Star glyph | Segoe Fluent Icons `\uE734` |
-| `"Heart"` | Heart glyph | Segoe Fluent Icons `\uEB51` |
-| `"Lightning"` | Lightning glyph | Segoe Fluent Icons `\uE945` |
-| `"Search"` | Search glyph | Segoe Fluent Icons `\uE721` |
-| `"Globe"` | Globe glyph | Segoe Fluent Icons `\uE774` |
+| `"Pin"` | Pin glyph | Segoe Fluent Icons `U+E840` |
+| `"Star"` | Star glyph | Segoe Fluent Icons `U+E734` |
+| `"Heart"` | Heart glyph | Segoe Fluent Icons `U+EB51` |
+| `"Lightning"` | Lightning glyph | Segoe Fluent Icons `U+E945` |
+| `"Search"` | Search glyph | Segoe Fluent Icons `U+E721` |
+| `"Globe"` | Globe glyph | Segoe Fluent Icons `U+E774` |
 | `"Custom"` | Custom | User-provided file |
 | `"Glyph:X"` | Gallery glyph/emoji | Arbitrary Fluent icon or emoji from the icon gallery |
 | `"Glyph:#RRGGBB:X"` | Colored gallery glyph/emoji | Gallery glyph with a custom color |
@@ -168,7 +172,7 @@ The MSI (`Package.wxs`) creates an initial Start Menu shortcut at `Programs\Litt
 Entry points that call the pipeline:
 - **Startup**: `MainWindow.FetchMissingIconsOnStartupAsync()` — fire-and-forget, covers settings-import-then-restart and machine migration scenarios. Also runs the stale-icon refresh (below).
 - **Sync download**: `SftpSyncService.DownloadLauncherItemsAsync()` — awaited before save.
-- **File import**: `LauncherItemsPage.ImportItems_Click()` — awaited before save.
+- **File import**: `LauncherBulkOps.ImportItemsAsync()` — awaited before save.
 - **Manual add/edit**: calls `FaviconService.FetchAndCacheAsync()` / `GetApplicationIcon()` directly for the single item in the dialog.
 
 ### Stale icon refresh
@@ -181,6 +185,12 @@ Entry points that call the pipeline:
 - Triggered from `MainWindow`: on startup (inside `FetchMissingIconsOnStartupAsync`) and by `_iconRefreshTimer`, a daily `System.Threading.Timer` (the tray app stays resident for weeks, so launch-only would not be enough). The timer callback marshals to the UI thread via `App.MainDispatcherQueue` before touching `IconPath`. After any change, `ApplyItemIconChanges()` saves settings, invalidates flyouts, and re-renders tray/settings icons (Composite mode embeds item icons).
 - **Cache-busting:** the refresh rewrites cache files in place (same path), so the item-icon `BitmapImage` loads in `IconPathToImageConverter` and `FlyoutWindow.CreateIconTile` set `BitmapCreateOptions.IgnoreImageCache` — without it, WinUI's per-URI decoded-image cache keeps showing the old bitmap for the rest of the session.
 
+The add/edit dialog's unified app/PWA picker shows its own **transient list icons** (not the persisted item icon): `AppPickerService.LoadIcons` extracts them via `ShellIcons.Extract` (`IShellItemImageFactory`, 32px BGRA → `WriteableBitmap`) on a background STA thread. These are display-only — the item's saved `IconPath` is still produced by the `FaviconService` calls above when a row is selected.
+
+**Gotcha:** `IShellItemImageFactory.GetImage` returns `E_PENDING` (0x8000000A) the first time it's asked for an icon the shell hasn't rasterized into its cache yet — common for a freshly-seen PWA/Store tile. `ShellIcons.Extract` **must retry** on `E_PENDING` (short sleeps) or those icons silently come back blank while already-cached ones (e.g. a PWA you've launched before) work. This is why a PWA can show no list icon for no obvious reason.
+
+**Raster-only:** `FetchAndCacheCoreAsync` saves whatever it downloads to a `.png` file rendered by WinUI `BitmapImage`, which **cannot decode SVG**. A site whose favicon/manifest icon is an SVG would otherwise be cached as a `.png` that displays blank. `RasterOrNull`/`IsRasterImage` (magic-byte check for PNG/JPEG/GIF/BMP/ICO/WEBP) rejects SVG and other non-raster payloads at each fetch step, so websites continue down the favicon fallback chain and **PWAs fall back to the shell-extracted icon** (`GetPwaIconFromShell`) — which is why a PWA could show its list icon (shell) but a blank selection/preview icon (the rejected SVG web icon). `GetPwaIconFromShell` requests 64px and, like the 32px list path, must retry on `E_PENDING`.
+
 For Chromium PWAs, prefer the site's own icon/manifest asset when the AUMID encodes a domain (for example `example.com-HEX_hash!App`). The shell image factory often returns a softer rasterized bitmap than the original web icon. `GetBestPwaIconAsync()` handles this preference, but it must reject off-origin login redirects and skip generic Google favicon-service fallbacks for PWAs; when the site does not expose a real app icon, it should fall back to `GetPwaIconFromShell()`.
 
 After any bulk icon change, call `FlyoutWindow.InvalidateItems()` so the flyout rebuilds its item containers on the next toggle. The flyout's `RebuildItemsIfNeeded()` nulls `ItemsSource` before reassigning to force full container recreation.
@@ -188,7 +198,7 @@ After any bulk icon change, call `FlyoutWindow.InvalidateItems()` so the flyout 
 ## Gotchas
 
 - **MSIX VFS redirection** — see the [dedicated section below](#msix-vfs-redirection). All file paths referenced by external processes (shell `.lnk` files, companion exe) **must** use the physical path from `MainWindow.GetPhysicalAppDataDir()`, never raw `Environment.GetFolderPath(ApplicationData)`. The latter is VFS-redirected inside MSIX and invisible to the shell.
-- **`LauncherItem.IconGlyph` must be a Unicode character**, not a text name. Use `"\uE774"` (globe) for websites and `"\uE8E5"` (open) for apps. Text strings like `"Globe24"` render as rectangle tofu in `FontIcon`.
+- **`LauncherItem.IconGlyph` must be a Unicode character**, not a text name. Use `""` (globe, `U+E774`) for websites and `""` (open, `U+E8E5`) for apps. Text strings like `"Globe24"` render as rectangle tofu in `FontIcon`.
 - **`LauncherItem.IconGlyph` can be an emoji character** (e.g. `"🚀"`, `"💻"`). Use `IconGallery.IsFluentGlyph()` to determine whether a glyph is a Segoe Fluent icon (PUA range U+E000–U+F8FF) or an emoji. Fluent glyphs render via `FontIcon`; emojis render via `TextBlock`. The `IsFluentGlyphConverter` XAML converter handles this in data templates. In `System.Drawing` code (composite tray icon), use `"Segoe UI Emoji"` font for emoji glyphs instead of `"Segoe Fluent Icons"`.
 - **Icon Gallery** (`Classes/IconGallery.cs`) provides a gallery-style Flyout for choosing glyphs, emojis, bundled app color icons, selfh.st catalog icons, or custom images. It is shown from the item edit dialog via a "Choose" button and from the launcher icon chooser. The item gallery has tabs (Glyphs, Emoji, App Icons, selfh.st) plus a color palette for choosing glyph colors; the launcher tray icon gallery now exposes presets, glyphs, emojis, and a selfh.st tab that feeds image-based selections into `TrayIconModes.Custom`. Selected colors are returned in `IconResult.Color` and stored as `LauncherItem.IconColor` (hex string) or encoded in the launcher `TrayIconMode` string (`"Glyph:#RRGGBB:X"`). selfh.st icons are fetched manually from the public catalog/index and cached locally as `AppData\LittleLauncher\icons\selfhst-{reference}.png` when selected. When a selfh.st tab is active, the gallery shows attribution links for selfh.st and the CC BY 4.0 license in the footer. When opened, the gallery pre-selects the current icon: it opens the correct tab, highlights the matching color swatch, and highlights + selects the matching icon button so the user can immediately Confirm or change just the color. Pre-selection is driven by `currentGlyph`/`currentColor`/`currentImagePath` params on `CreateFlyout()` and by parsing `currentMode` in `CreateLauncherIconFlyout()`.
 - The bundled `.ico` is the Blue rocket only — it's the exe identity icon and fallback.

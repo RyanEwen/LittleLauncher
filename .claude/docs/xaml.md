@@ -44,10 +44,10 @@ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
 
 ## Code-Built Dialogs
 
-The add/edit item dialog in `LauncherItemsPage` is built entirely in C# (not XAML). Conventions:
+The add/edit item form in `ItemEditorWindow` is built entirely in C# (not XAML). Conventions:
 
 - All input controls (`TextBox`, `ComboBox`, `ToggleSwitch`) use `HorizontalAlignment = HorizontalAlignment.Stretch` to fill the dialog width uniformly.
-- The form container is a `StackPanel` with `MinWidth = 460`, wrapped in a `ScrollViewer` (`MaxHeight = 620`) so a tall form never overflows off-screen.
+- The form container is a `StackPanel` with `MinWidth = 460`, wrapped in a `ScrollViewer` so a tall form never overflows off-screen.
 - When a row needs a stretch input + a fixed button (e.g. path + Browse), use a `Grid` with `Star` + `Auto` column definitions instead of a horizontal `StackPanel`.
 - Labels are created via a `Label(string)` helper that returns a styled `TextBlock`.
 
@@ -65,10 +65,22 @@ There is **no type dropdown**. The target is chosen via a two-item `SelectorBar`
 - **Target resolution:** `ResolveTarget()` keys off the active tab — `custom` → the typed path/link (classified by `LooksLikeWebUrl` / `LooksLikeFilePath` into website vs application); `list` → the selected `AppPickerEntry`. It returns `(path, isPwa, isWebsite)`; `SyncDerived()` pushes that into the derived flags and the app-window options' visibility.
 - Stored values are unchanged from before (PWA → AUMID in `Path` + `IsPwa`; Store app → `shell:AppsFolder\…` path; exe → file path; website URL → `IsWebsite`), so launch behaviour in `FlyoutWindow` is preserved.
 
-## Drag-and-Drop (LauncherItemsPage)
+## Owned windows, not ContentDialog
 
-ListViews use `CanDragItems="True"` with custom handlers — **never `CanReorderItems`**, which cannot be overridden for cross-list drops. See [drag-drop.md](drag-drop.md) for full details.
+UI opened from the flyout (`ItemEditorWindow`, `TextPromptWindow`, `LauncherSettingsWindow`) uses standalone `Window`s. A `ContentDialog` renders inside its host window's content area and **cannot overflow the HWND** — hosted in a flyout that is often ~175px wide and ~130 dips tall, even a one-field dialog gets its input and buttons clipped.
 
-## Group Expand/Collapse
+Conventions for these windows:
 
-Groups use a manual `StackPanel` with `Tag="GroupRoot"` / `Tag="GroupChildren"` and a toggle button — **not WinUI Expanders**. This allows the entire group card to be a drag source. The `Loaded` event on `GroupRoot` restores `IsExpanded` state after `RefreshList()` rebuilds the visual tree.
+- `ExtendsContentIntoTitleBar = true` with `WindowChrome.BuildTitleBar(...)`. A default WinUI title bar does **not** follow the app's `RequestedTheme`, so it renders light chrome over dark content.
+- `WindowChrome.ApplyIcon(hwnd)` for the app icon. Both paths are needed: `WM_SETICON` drives taskbar/Alt-Tab, `AppWindow.SetIcon` drives the title bar.
+- Set the owner via `SetWindowLongPtr(GWLP_HWNDPARENT)`, **and** have the flyout drop its `IsAlwaysOnTop` flag while the window is open — ownership alone does not beat a topmost owner.
+- Size to content. Surplus height shows as a large empty gap, because the form is top-aligned above a bottom-anchored button row.
+- Don't leak the window: the flyout tracks the open editor and closes it when edit mode ends, so an orphan can't commit into a launcher the user has navigated away from.
+
+## Drag-and-Drop (FlyoutWindow)
+
+ListViews use `CanDragItems="True"` with custom handlers — **never `CanReorderItems`**, which cannot be overridden for cross-list drops. Dragging is gated behind flyout edit mode. See [drag-drop.md](drag-drop.md) for full details.
+
+## Groups
+
+Groups render a heading plus a nested child `ListView`. In icon mode, consecutive ungrouped items are wrapped into ephemeral **synthetic groups** so loose icons pack into a wrapping grid; these are never persisted and never editable. See [drag-drop.md](drag-drop.md).

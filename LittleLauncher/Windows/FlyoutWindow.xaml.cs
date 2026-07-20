@@ -130,6 +130,7 @@ public partial class FlyoutWindow : Window
 
         InitializeResizeGrips();
         RebuildColumnsPanel();
+        InitializeEditChrome();
 
         // Desktop Acrylic blurs whatever is behind the window (including other windows),
         // unlike Mica which only samples the wallpaper.
@@ -152,7 +153,9 @@ public partial class FlyoutWindow : Window
 
     private void FlyoutWindow_Activated(object sender, WindowActivatedEventArgs args)
     {
-        if (_isShowing || _isResizingIconWidth) return;
+        // Edit mode (and any modal it owns) pins the flyout open — otherwise opening the
+        // item editor or a file picker would dismiss the very window being edited.
+        if (_isShowing || _isResizingIconWidth || SuppressDismiss) return;
         if (args.WindowActivationState == WindowActivationState.Deactivated)
             HideFlyout();
     }
@@ -161,6 +164,13 @@ public partial class FlyoutWindow : Window
     {
         if (msg == 0x0100 && wParam == (IntPtr)0x1B) // WM_KEYDOWN + VK_ESCAPE
         {
+            // Two-stage: the first Escape leaves edit mode, the second dismisses.
+            if (_isEditMode)
+            {
+                ExitEditMode();
+                return IntPtr.Zero;
+            }
+
             HideFlyout();
             _lastDismissed = DateTime.UtcNow;
             return IntPtr.Zero;
@@ -268,6 +278,17 @@ public partial class FlyoutWindow : Window
 
         if ((GetWindowLong(_hwnd, GWL_STYLE) & WS_VISIBLE) == 0)
             return;
+
+        // Closing ends editing, so the flyout never reopens mid-edit and the hidden-window
+        // measure path never has to account for edit chrome.
+        if (_isEditMode)
+        {
+            _isEditMode = false;
+            CloseOpenModal();
+            _editToolbarBar?.HideBar();
+            UpdateResizeGripVisibility();
+            ApplyEditVisuals();
+        }
 
         _lastDismissed = DateTime.UtcNow;
         _animationVersion++;
@@ -599,6 +620,11 @@ public partial class FlyoutWindow : Window
         if (sender is ListViewBase listView)
         {
             DisableListViewTransitions(listView);
+            WireHoverAffordance(listView);
+            // Containers are realised after a rebuild, so edit visuals are applied here
+            // rather than at the point the mode was entered.
+            if (_isEditMode)
+                ApplyEditVisuals();
             if (IsIconMode)
                 ApplyTopLevelIconSpans(listView);
         }
@@ -674,6 +700,7 @@ public partial class FlyoutWindow : Window
     private int GetIconGroupContentWidth(LauncherItem group)
     {
         int maxIconsPerRow = GetIconModeIconsPerRow();
+        // Must match GetTopLevelIconSpan, or the rendered width and the packing span disagree.
         int visibleIcons = Math.Clamp(group.Children.Count, 1, maxIconsPerRow);
         return visibleIcons * GetActiveIconCellWidth();
     }
@@ -691,6 +718,10 @@ public partial class FlyoutWindow : Window
         if (!item.IsGroup)
             return 1;
 
+        // A group spans as many columns as it has children, so several narrow groups can
+        // share a row. A group with more children than fit clamps to the full width, which
+        // makes PackedIconPanel start it on a new row (see its row-flush check) and keeps
+        // the group's outer shape rectangular instead of starting mid-row and wrapping.
         return Math.Clamp(item.Children.Count, 1, GetIconModeIconsPerRow());
     }
 
@@ -762,9 +793,14 @@ public partial class FlyoutWindow : Window
         return Math.Max(cellWidth, columnCount * cellWidth);
     }
 
+    /// <summary>
+    /// Edge resize is an editing affordance, so the grips only exist in icon mode <i>and</i>
+    /// while editing — otherwise a stray drag on the flyout's edge silently changes the
+    /// launcher's layout.
+    /// </summary>
     private void UpdateResizeGripVisibility()
     {
-        var visibility = IsIconMode ? Visibility.Visible : Visibility.Collapsed;
+        var visibility = IsIconMode && _isEditMode ? Visibility.Visible : Visibility.Collapsed;
         _leftResizeGrip.Visibility = visibility;
         _rightResizeGrip.Visibility = visibility;
     }
@@ -933,11 +969,34 @@ public partial class FlyoutWindow : Window
         }
     }
 
+    /// <summary>
+    /// The column list views, whether or not they are wrapped in a per-column header panel.
+    /// Always use this rather than <c>ColumnsPanel.Children.OfType&lt;ListViewBase&gt;()</c>,
+    /// which finds nothing once columns are wrapped.
+    /// </summary>
+    private IEnumerable<ListViewBase> ColumnListViews()
+    {
+        foreach (var child in ColumnsPanel.Children)
+        {
+            if (child is ListViewBase direct)
+            {
+                yield return direct;
+            }
+            else if (child is Panel wrapper)
+            {
+                foreach (var inner in wrapper.Children.OfType<ListViewBase>())
+                    yield return inner;
+            }
+        }
+    }
+
     private void RebuildColumnsPanel()
     {
         _columnLists = BuildColumnLists();
         _loadedIconChildLists.Clear();
         _syntheticGroups.Clear();
+        // Containers are about to be discarded, so their saved edit styling is moot.
+        _editStyledContainers.Clear();
         if (IsIconMode)
             WrapUngroupedItemsIntoSyntheticGroups();
 
@@ -972,12 +1031,25 @@ public partial class FlyoutWindow : Window
             }
         }
 
+        bool multipleColumns = _columnLists.Count > 1;
+
         for (int columnIndex = 0; columnIndex < _columnLists.Count; columnIndex++)
         {
             var lv = CreateColumnListView(columnIndex);
             lv.ItemsSource = _columnLists[columnIndex];
-            ColumnsPanel.Children.Add(lv);
+
+            // With a single column there is nothing to distinguish, so the list view goes in
+            // bare and normal mode keeps its existing geometry exactly.
+            if (!multipleColumns)
+            {
+                ColumnsPanel.Children.Add(lv);
+                continue;
+            }
+
+            ColumnsPanel.Children.Add(BuildColumnContainer(lv, columnIndex));
         }
+
+        ApplyColumnChrome();
     }
 
     private void RebuildItemsIfNeeded()
@@ -998,7 +1070,6 @@ public partial class FlyoutWindow : Window
     {
         if (launcherId != null)
         {
-            LauncherItemsPage.NotifyItemsChanged(launcherId);
 
             if (_instances.TryGetValue(launcherId, out var fw))
             {
@@ -1012,7 +1083,6 @@ public partial class FlyoutWindow : Window
         }
         else
         {
-            LauncherItemsPage.NotifyItemsChanged();
 
             foreach (var fw in _instances.Values)
             {
@@ -1166,7 +1236,12 @@ public partial class FlyoutWindow : Window
         _rightResizeGrip.SetResizeCursorActive(false);
 
         if (_resizeChangedSetting)
+        {
+            // Must also mark the change pending for auto-sync: saving alone lets a periodic
+            // sync download overwrite the new icons-per-row with the older remote value.
             SettingsManager.SaveSettings();
+            AutoSyncService.NotifyItemsChanged();
+        }
     }
 
     private void ApplyIconModeResize(int iconsPerRow, bool keepRightEdge)
@@ -1184,7 +1259,7 @@ public partial class FlyoutWindow : Window
 
     private void UpdateFlyoutLayoutInPlace()
     {
-        foreach (var columnListView in ColumnsPanel.Children.OfType<ListViewBase>())
+        foreach (var columnListView in ColumnListViews())
         {
             DisableListViewTransitions(columnListView);
 
@@ -1194,6 +1269,9 @@ public partial class FlyoutWindow : Window
                 ApplyTopLevelIconSpans(columnListView);
             }
         }
+
+        // A group that just gained or lost its last child changes drop-target state.
+        ApplyEmptyGroupDropTargets();
 
         if (!IsIconMode)
             return;
@@ -1212,7 +1290,13 @@ public partial class FlyoutWindow : Window
             ApplyIconGroupRootLayout(groupRoot);
     }
 
-    private void ResizeWindowToCurrentContent(bool keepRightEdge)
+    /// <summary>
+    /// Resizes to the current content. <paramref name="explicitHeightDips"/> overrides the
+    /// arithmetic height estimate — pass it only when the window is <b>visible</b>, since it
+    /// comes from a real layout pass (see <c>MeasureContentHeight</c> for why measuring a
+    /// hidden window is fatal).
+    /// </summary>
+    private void ResizeWindowToCurrentContent(bool keepRightEdge, double? explicitHeightDips = null)
     {
         if (_hwnd == IntPtr.Zero || !IsWindow(_hwnd))
             return;
@@ -1222,7 +1306,7 @@ public partial class FlyoutWindow : Window
         if (dpiScale <= 0) dpiScale = 1.0;
 
         int newWidth = (int)Math.Ceiling(GetFlyoutWidth() * dpiScale);
-        int newHeight = (int)Math.Ceiling(MeasureContentHeight() * dpiScale);
+        int newHeight = (int)Math.Ceiling((explicitHeightDips ?? MeasureContentHeight()) * dpiScale);
         int left = keepRightEdge ? rect.Right - newWidth : rect.Left;
         int top = _lastEntranceEdge == FlyoutEntranceEdge.Top ? rect.Top : rect.Bottom - newHeight;
 
@@ -1253,6 +1337,7 @@ public partial class FlyoutWindow : Window
         _loadedIconChildLists.Add(listView);
         listView.Unloaded -= IconGroupChildList_Unloaded;
         listView.Unloaded += IconGroupChildList_Unloaded;
+        TrackGroupChildList(listView);
 
         DisableListViewTransitions(listView);
         ScrollViewer.SetVerticalScrollBarVisibility(listView, ScrollBarVisibility.Disabled);
@@ -1322,7 +1407,10 @@ public partial class FlyoutWindow : Window
     private void ListGroupChildList_Loaded(object sender, RoutedEventArgs e)
     {
         if (sender is ListView listView)
+        {
             DisableListViewTransitions(listView);
+            TrackGroupChildList(listView);
+        }
     }
 
     private void ColumnListView_DragItemsStarting(object sender, DragItemsStartingEventArgs e)
@@ -1333,12 +1421,20 @@ public partial class FlyoutWindow : Window
         if (e.Items.FirstOrDefault() is not LauncherItem item)
             return;
 
+        // Reordering is an edit-mode-only affordance.
+        if (!_isEditMode)
+        {
+            e.Cancel = true;
+            return;
+        }
+
         if (_syntheticGroups.Contains(item))
         {
             e.Cancel = true;
             return;
         }
 
+        HideHoverPencil();
         _dragItem = item;
         _dragSourceCollection = _columnLists[columnIndex];
         e.Data.RequestedOperation = global::Windows.ApplicationModel.DataTransfer.DataPackageOperation.Move;
@@ -1411,6 +1507,14 @@ public partial class FlyoutWindow : Window
         if (e.Items.FirstOrDefault() is not LauncherItem item)
             return;
 
+        // Reordering is an edit-mode-only affordance.
+        if (!_isEditMode)
+        {
+            e.Cancel = true;
+            return;
+        }
+
+        HideHoverPencil();
         _dragItem = item;
         _dragSourceCollection = group.Children;
         e.Data.RequestedOperation = global::Windows.ApplicationModel.DataTransfer.DataPackageOperation.Move;
@@ -1497,13 +1601,23 @@ public partial class FlyoutWindow : Window
         SyncColumnsToFlatList();
         SettingsManager.SaveSettings();
         AutoSyncService.NotifyItemsChanged();
-        LauncherItemsPage.NotifyItemsChanged(_launcher.Id);
 
         if (_launcher.TrayIconMode == TrayIconModes.Composite)
             MainWindow.Current?.UpdateTrayIcon(_launcher);
 
-        _lastItemsHash = ComputeItemsHash(_launcher);
-        UpdateFlyoutLayoutInPlace();
+        // Full rebuild rather than an in-place update. Synthetic groups are derived from which
+        // items are loose, so moving an item between a group and the top level invalidates
+        // them: the item that left needs wrapping, and the wrapper it left behind is now empty
+        // but still rendered — which is where the stray tinted box came from.
+        _lastItemsHash = -1;
+        RebuildItemsIfNeeded();
+
+        if (_isEditMode)
+        {
+            ApplyEditVisuals();
+            // Dropping into or out of a group can change the required height.
+            ResizeForEditChrome();
+        }
     }
 
     private void ClearDragState()
@@ -1518,6 +1632,52 @@ public partial class FlyoutWindow : Window
             return "section";
 
         return string.IsNullOrWhiteSpace(item.Name) ? "item" : item.Name;
+    }
+
+    /// <summary>
+    /// True when an icon-grid drop position lands at the start of a row rather than beside
+    /// the item the indicator is drawn on.
+    /// </summary>
+    /// <remarks>
+    /// Two cases: inserting before an item that is first in its row, and appending when the
+    /// final row is already full so the new item wraps below it.
+    /// </remarks>
+    private bool GridDropWrapsToNewRow(ListViewBase listView, int dropIndex, Control container, bool appending)
+    {
+        try
+        {
+            if (appending)
+            {
+                // Does another cell fit to the right of the last item?
+                //
+                // Measured against the widest a row may become, not the list's current width:
+                // a group's child list is only as wide as the children it already has, but it
+                // grows up to the icons-per-row limit. Using ActualWidth reported "wraps" for
+                // any group that still had room to expand.
+                double maxRowWidth = GetIconModeIconsPerRow() * GetActiveIconCellWidth();
+                double available = Math.Max(listView.ActualWidth, maxRowWidth);
+
+                var origin = container.TransformToVisual(listView)
+                    .TransformPoint(new global::Windows.Foundation.Point(0, 0));
+                return origin.X + (container.ActualWidth * 2) > available + 1;
+            }
+
+            if (dropIndex <= 0) return false;
+
+            // Starts a row if the preceding item sits on an earlier row.
+            if (listView.ContainerFromIndex(dropIndex - 1) is not Control previous) return false;
+
+            double targetY = container.TransformToVisual(listView)
+                .TransformPoint(new global::Windows.Foundation.Point(0, 0)).Y;
+            double previousY = previous.TransformToVisual(listView)
+                .TransformPoint(new global::Windows.Foundation.Point(0, 0)).Y;
+
+            return targetY > previousY + 1;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private void ShowInsertionIndicator(ListViewBase listView, int dropIndex)
@@ -1551,7 +1711,21 @@ public partial class FlyoutWindow : Window
 
         if (isGrid)
         {
-            if (dropIndex < listView.Items.Count)
+            bool appending = dropIndex >= listView.Items.Count;
+
+            // A vertical line reads as "goes beside this item", which is wrong when the drop
+            // position actually wraps onto the next row. In that case draw a horizontal line
+            // on the row boundary instead, so the landing spot matches what is shown.
+            if (GridDropWrapsToNewRow(listView, dropIndex, container, appending))
+            {
+                container.BorderThickness = appending
+                    ? new Thickness(0, 0, 0, 3)
+                    : new Thickness(0, 3, 0, 0);
+                container.Padding = appending
+                    ? new Thickness(0, 0, 0, -3)
+                    : new Thickness(0, -3, 0, 0);
+            }
+            else if (!appending)
             {
                 container.BorderThickness = new Thickness(3, 0, 0, 0);
                 container.Padding = new Thickness(-3, 0, 0, 0);
@@ -1644,6 +1818,7 @@ public partial class FlyoutWindow : Window
 
         int bestIndex = count;
         double bestDistance = double.MaxValue;
+        double contentBottom = 0;
 
         for (int index = 0; index < count; index++)
         {
@@ -1657,6 +1832,7 @@ public partial class FlyoutWindow : Window
             double bottom = top + container.ActualHeight;
             double left = point.X;
             double midX = left + (container.ActualWidth / 2);
+            contentBottom = Math.Max(contentBottom, bottom);
 
             if (position.Y >= top && position.Y < bottom)
             {
@@ -1676,6 +1852,13 @@ public partial class FlyoutWindow : Window
                 }
             }
         }
+
+        // Anywhere in the empty space below the last row means "put it at the end". Without
+        // this the nearest-band fallback above could return an index *before* the last item
+        // whenever the pointer happened to sit left of its midpoint, so appending required
+        // landing precisely beside the final item.
+        if (position.Y >= contentBottom)
+            return count;
 
         return Math.Min(bestIndex, count);
     }
@@ -1723,6 +1906,20 @@ public partial class FlyoutWindow : Window
     private void ItemsListControl_ItemClick(object sender, ItemClickEventArgs e)
     {
         if (e.ClickedItem is not LauncherItem item) return;
+
+        // In edit mode a click edits rather than launches.
+        if (_isEditMode)
+        {
+            if (item.IsGroup)
+            {
+                if (!_syntheticGroups.Contains(item))
+                    _ = RenameGroupAsync(item);
+                return;
+            }
+            _ = EditItemAsync(item);
+            return;
+        }
+
         if (item.IsGroup) return;
         LaunchItem(item);
     }
@@ -1802,12 +1999,16 @@ public partial class FlyoutWindow : Window
         }
     }
 
-    private static bool TryGetContextMenuItem(ListViewBase listView, global::Windows.Foundation.Point point, out LauncherItem item)
+    private bool TryGetContextMenuItem(ListViewBase listView, global::Windows.Foundation.Point point, out LauncherItem item)
     {
         for (int i = 0; i < listView.Items.Count; i++)
         {
             if (listView.ContainerFromIndex(i) is not Control container) continue;
-            if (listView.Items[i] is not LauncherItem candidate || candidate.IsGroup || candidate.IsColumnBreak) continue;
+            // Column breaks are invisible sentinels and synthetic groups are ephemeral, so
+            // neither is a valid context-menu target. Real groups are, in edit mode.
+            if (listView.Items[i] is not LauncherItem candidate || candidate.IsColumnBreak) continue;
+            // Groups are only a context-menu target while editing; synthetic ones never are.
+            if (candidate.IsGroup && !(_isEditMode && IsEditableGroup(candidate))) continue;
 
             var origin = container.TransformToVisual(listView).TransformPoint(new global::Windows.Foundation.Point(0, 0));
             var bounds = new global::Windows.Foundation.Rect(origin.X, origin.Y, container.ActualWidth, container.ActualHeight);
@@ -1824,10 +2025,25 @@ public partial class FlyoutWindow : Window
 
     private void ShowItemContextMenu(FrameworkElement anchor, LauncherItem item, global::Windows.Foundation.Point? position = null)
     {
-        if (IsReadOnlyLauncher || item.IsGroup || item.IsColumnBreak)
+        if (item.IsColumnBreak)
+            return;
+        if (item.IsGroup && !IsEditableGroup(item))
             return;
 
         var flyout = new MenuFlyout();
+
+        // Outside edit mode the menu carries only the launcher-level entries — reorder,
+        // move, edit and remove are editing affordances and would be misleading (and, for a
+        // read-only shared launcher, simply unavailable).
+        if (!_isEditMode || IsReadOnlyLauncher)
+        {
+            AppendLegacyContextMenuItems(flyout);
+            if (position is global::Windows.Foundation.Point p)
+                flyout.ShowAt(anchor, p);
+            else
+                flyout.ShowAt(anchor);
+            return;
+        }
 
         string moveBackwardText = IsIconMode ? "Move left" : "Move up";
         string moveForwardText = IsIconMode ? "Move right" : "Move down";
@@ -1888,7 +2104,8 @@ public partial class FlyoutWindow : Window
             moveToSub.Items.Add(topLevel);
         }
 
-        foreach (var group in _launcher.Items.Where(candidate => candidate.IsGroup))
+        // Groups cannot nest, so a group is never offered another group as a destination.
+        foreach (var group in item.IsGroup ? [] : _launcher.Items.Where(candidate => candidate.IsGroup))
         {
             if (group == currentGroup) continue;
 
@@ -1935,17 +2152,22 @@ public partial class FlyoutWindow : Window
 
         flyout.Items.Add(new MenuFlyoutSeparator());
 
-        var edit = new MenuFlyoutItem { Text = "Edit", Icon = new FontIcon { Glyph = "\uE70F" } };
-        edit.Click += (_, _) => EditItem(item);
+        var edit = new MenuFlyoutItem
+        {
+            Text = item.IsGroup ? "Rename\u2026" : "Edit",
+            Icon = new FontIcon { Glyph = "\uE70F" }
+        };
+        edit.Click += (_, _) =>
+        {
+            if (item.IsGroup)
+                _ = RenameGroupAsync(item);
+            else
+                _ = EditItemAsync(item);
+        };
         flyout.Items.Add(edit);
 
         var remove = new MenuFlyoutItem { Text = "Remove", Icon = new FontIcon { Glyph = "\uE74D" } };
-        remove.Click += (_, _) =>
-        {
-            var parent = FindParentCollection(item);
-            parent?.Remove(item);
-            PersistFlyoutItemChanges();
-        };
+        remove.Click += (_, _) => RemoveItem(item);
         flyout.Items.Add(remove);
 
         AppendLegacyContextMenuItems(flyout);
@@ -1981,7 +2203,6 @@ public partial class FlyoutWindow : Window
             if (string.IsNullOrEmpty(launcher.Id) || !seenIds.Add(launcher.Id))
                 continue;
 
-            LauncherItemsPage.NotifyItemsChanged(launcher.Id);
             InvalidateItems(launcher.Id);
 
             if (_instances.TryGetValue(launcher.Id, out var flyout))
@@ -1991,7 +2212,10 @@ public partial class FlyoutWindow : Window
 
     private void AppendLegacyContextMenuItems(MenuFlyout flyout)
     {
-        flyout.Items.Add(new MenuFlyoutSeparator());
+        // Only separate from preceding entries if there are any — outside edit mode these
+        // launcher-level entries are the whole menu.
+        if (flyout.Items.Count > 0)
+            flyout.Items.Add(new MenuFlyoutSeparator());
 
         var editLauncherSettings = new MenuFlyoutItem
         {
@@ -2000,14 +2224,6 @@ public partial class FlyoutWindow : Window
         };
         editLauncherSettings.Click += ContextEditLauncherSettings_Click;
         flyout.Items.Add(editLauncherSettings);
-
-        var editLauncherItems = new MenuFlyoutItem
-        {
-            Text = "Edit Launcher Items",
-            Icon = new FontIcon { Glyph = "\uE70F" }
-        };
-        editLauncherItems.Click += ContextEditLauncherItems_Click;
-        flyout.Items.Add(editLauncherItems);
 
         flyout.Items.Add(new MenuFlyoutSeparator());
 
@@ -2034,30 +2250,13 @@ public partial class FlyoutWindow : Window
         Process.Start(new ProcessStartInfo(item.Path) { UseShellExecute = true });
     }
 
-    private enum BrowserEngine { Chromium, Gecko }
-
-    private static BrowserEngine DetectEngine(string exePath)
-    {
-        string? dir = Path.GetDirectoryName(exePath);
-        if (dir != null && (File.Exists(Path.Combine(dir, "chrome.dll")) ||
-                            File.Exists(Path.Combine(dir, "msedge.dll"))))
-            return BrowserEngine.Chromium;
-
-        string name = Path.GetFileNameWithoutExtension(exePath).ToLowerInvariant();
-        if (name == "firefox" || name == "zen" || name == "waterfox" ||
-            name == "librewolf" || name == "floorp" || name == "mercury" || name == "firedragon")
-            return BrowserEngine.Gecko;
-
-        return BrowserEngine.Chromium;
-    }
-
     private static bool TryLaunchInAppWindow(string url, string browserPath, string browserProfile)
     {
         string profileId = GetAppWindowProfileId(url);
         string browserExe = ResolveBrowserExe(browserPath);
         if (browserExe == "") return false;
 
-        var engine = DetectEngine(browserExe);
+        var engine = BrowserCatalog.DetectEngine(browserExe);
         var existingWindows = GetBrowserWindows(engine);
 
         try
@@ -2124,24 +2323,7 @@ public partial class FlyoutWindow : Window
     {
         if (!string.IsNullOrEmpty(browserPath))
             return File.Exists(browserPath) ? browserPath : "";
-        return GetDefaultBrowserExePath() ?? "";
-    }
-
-    private static string? GetDefaultBrowserExePath()
-    {
-        try
-        {
-            int size = 512;
-            var sb = new StringBuilder(size);
-            int hr = AssocQueryString(ASSOCF_NONE, ASSOCSTR_EXECUTABLE, "https", "open", sb, ref size);
-            if (hr == 0)
-            {
-                string exePath = sb.ToString();
-                if (File.Exists(exePath)) return exePath;
-            }
-        }
-        catch { }
-        return null;
+        return BrowserCatalog.GetDefaultBrowserExePath() ?? "";
     }
 
     private static string GetAppWindowProfileId(string url)
@@ -2302,40 +2484,28 @@ public partial class FlyoutWindow : Window
 
     private sealed record WindowBounds(int Left, int Top, int Width, int Height, bool IsMaximized = false);
 
-    private void EditItem(LauncherItem item)
-    {
-        HideFlyout();
-        _lastDismissed = DateTime.UtcNow;
-        if (_owner != null)
-        {
-            LauncherItemsPage.TargetLauncher = _launcher;
-            SettingsWindow.NavigateToEditItem(item, _owner);
-        }
-    }
-
+    /// <summary>
+    /// Opens this launcher's settings in its own window, owned by the flyout — no detour
+    /// through the settings window.
+    /// </summary>
     private void ContextEditLauncherSettings_Click(object sender, RoutedEventArgs e)
     {
-        HideFlyout();
-        _lastDismissed = DateTime.UtcNow;
-        if (_owner != null)
-        {
-            SettingsWindow.ShowInstance(_owner);
-            var sw = SettingsWindow.GetCurrent();
-            sw?.DispatcherQueue.TryEnqueue(() => sw.NavigateToLauncherSettings(_launcher));
-        }
+        _ = OpenLauncherSettingsAsync();
     }
 
-    private void ContextEditLauncherItems_Click(object sender, RoutedEventArgs e)
+    private async Task OpenLauncherSettingsAsync()
     {
-        HideFlyout();
-        _lastDismissed = DateTime.UtcNow;
-        if (_owner != null)
-        {
-            SettingsWindow.ShowInstance(_owner);
-            var sw = SettingsWindow.GetCurrent();
-            sw?.DispatcherQueue.TryEnqueue(() => sw.NavigateToLauncherItems(_launcher));
-        }
+        await RunModalAsync(track => LauncherSettingsWindow.ShowAsync(_launcher, _hwnd, track));
+
+        // View mode, density and title all affect layout, so rebuild rather than assume.
+        InvalidateItems(_launcher.Id);
+
+        // Resize only after the rebuilt containers have actually been laid out — measuring
+        // immediately would read stale desired sizes.
+        if (_isEditMode)
+            DispatcherQueue.TryEnqueue(ResizeForEditChrome);
     }
+
 
     private void ContextSettingsItem_Click(object sender, RoutedEventArgs e)
     {
@@ -2379,6 +2549,11 @@ public partial class FlyoutWindow : Window
                     currentColumnHeight += groupHeight;
                     foreach (var child in item.Children)
                         currentColumnHeight += itemHeight;
+
+                    // An empty group still occupies one item-sized row, matching the
+                    // MinHeight applied to its child list.
+                    if (item.Children.Count == 0)
+                        currentColumnHeight += EmptyGroupListModeHeight;
                 }
                 else
                 {
@@ -2392,9 +2567,10 @@ public partial class FlyoutWindow : Window
         // Add a small buffer to cover accumulated sub-pixel font-height rounding.
         // Clamp to the available work-area height so the flyout never exceeds the screen.
         double titleHeight = _launcher.ShowTitle ? LauncherTitleHeight : 0;
+        double editHeight = CurrentEditChromeHeight + CurrentColumnHeaderHeight;
         double outerPadding = FlyoutOuterPadding * 2;
         double maxContentHeight = GetWorkAreaHeightDips() - 16; // 16 = gap from taskbar edges
-        _lastMeasuredHeight = Math.Clamp(maxColumnHeight + titleHeight + outerPadding + 2, GetMinimumFlyoutHeight(), maxContentHeight);
+        _lastMeasuredHeight = Math.Clamp(maxColumnHeight + titleHeight + editHeight + outerPadding + 2, GetMinimumFlyoutHeight(), maxContentHeight);
         return _lastMeasuredHeight;
     }
 
@@ -2424,7 +2600,12 @@ public partial class FlyoutWindow : Window
             foreach (var item in column)
             {
                 int span = GetTopLevelIconSpan(item);
-                int iconRows = Math.Max(1, (item.Children.Count + GetIconModeIconsPerRow() - 1) / GetIconModeIconsPerRow());
+                int perRow = GetIconModeIconsPerRow();
+                int iconRows = Math.Max(1, (item.Children.Count + perRow - 1) / perRow);
+
+                // Groups are sized like regular items: even an empty one occupies a full
+                // cell row (plus its heading). ApplyEmptyGroupDropTarget gives the empty
+                // group's child list a matching MinHeight so the rendering agrees.
                 double itemHeight = item.IsGroup && !_syntheticGroups.Contains(item)
                     ? groupHeight + (iconRows * cellHeight)
                     : iconRows * cellHeight;
@@ -2444,9 +2625,10 @@ public partial class FlyoutWindow : Window
         }
 
         double titleHeight = _launcher.ShowTitle ? LauncherTitleHeight : 0;
+        double editHeight = CurrentEditChromeHeight + CurrentColumnHeaderHeight;
         double outerPadding = FlyoutOuterPadding * 2;
         double maxContentHeight = GetWorkAreaHeightDips() - 16;
-        _lastMeasuredHeight = Math.Clamp(maxColumnHeight + titleHeight + outerPadding + 2, GetMinimumFlyoutHeight(), maxContentHeight);
+        _lastMeasuredHeight = Math.Clamp(maxColumnHeight + titleHeight + editHeight + outerPadding + 2, GetMinimumFlyoutHeight(), maxContentHeight);
         return _lastMeasuredHeight;
     }
 
