@@ -174,26 +174,6 @@ public sealed partial class SettingsWindow : Window
         }
     }
 
-    /// <summary>
-    /// Open the settings window, navigate to the Launcher Items page, and
-    /// immediately open the edit dialog for the given item.
-    /// </summary>
-    public static void NavigateToEditItem(LauncherItem item, MainWindow owner)
-    {
-        LauncherItemsPage.PendingEditItem = item;
-        if (instance == null)
-        {
-            var window = new SettingsWindow(owner);
-            window.NavigateTo(typeof(LauncherItemsPage));
-            window.Activate();
-        }
-        else
-        {
-            SetForegroundWindow(WindowNative.GetWindowHandle(instance));
-            instance.NavigateTo(typeof(LauncherItemsPage));
-        }
-    }
-
     internal MainWindow? GetOwner() => _owner;
 
     internal static SettingsWindow? GetCurrent() => instance;
@@ -293,33 +273,12 @@ public sealed partial class SettingsWindow : Window
     {
         "HomePage" => typeof(HomePage),
         "LaunchersPage" => typeof(LaunchersPage),
-        "LauncherItemsPage" => typeof(LauncherItemsPage),
         "SyncPage" => typeof(SyncPage),
         "SystemPage" => typeof(SystemPage),
         "PromotedAppsPage" => typeof(TechnicallyReal.Promo.PromotedAppsPage),
         "AboutPage" => typeof(AboutPage),
         _ => null
     };
-
-    /// <summary>
-    /// Navigate the content frame to the LauncherItemsPage for a specific launcher.
-    /// The Launchers nav item stays selected.
-    /// </summary>
-    public void NavigateToLauncherItems(Launcher launcher)
-    {
-        // Set "Launchers" selected in the nav pane first (triggers SelectionChanged → LaunchersPage)
-        foreach (var item in RootNavigation.MenuItems.OfType<NavigationViewItem>())
-        {
-            if (item.Tag as string == "LaunchersPage")
-            {
-                RootNavigation.SelectedItem = item;
-                break;
-            }
-        }
-        // Then navigate to the items page (overrides the LaunchersPage navigation above)
-        LauncherItemsPage.TargetLauncher = launcher;
-        ContentFrame.Navigate(typeof(LauncherItemsPage));
-    }
 
     /// <summary>
     /// Navigate to the Launchers page and auto-open the settings dialog for the given launcher.
