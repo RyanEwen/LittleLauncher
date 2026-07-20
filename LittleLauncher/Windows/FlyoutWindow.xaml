@@ -590,11 +590,6 @@
                         <FontIcon Glyph="&#xE713;" />
                     </MenuFlyoutItem.Icon>
                 </MenuFlyoutItem>
-                <MenuFlyoutItem x:Name="ContextEditLauncherItems" Text="Edit Launcher Items" Click="ContextEditLauncherItems_Click">
-                    <MenuFlyoutItem.Icon>
-                        <FontIcon Glyph="&#xE70F;" />
-                    </MenuFlyoutItem.Icon>
-                </MenuFlyoutItem>
                 <MenuFlyoutSeparator />
                 <MenuFlyoutItem x:Name="ContextSettingsItem" Text="App Settings" Click="ContextSettingsItem_Click">
                     <MenuFlyoutItem.Icon>
