@@ -9,7 +9,7 @@ namespace LittleLauncher.Classes;
 /// <summary>
 /// Centralized class for all P/Invoke declarations and unmanaged code imports.
 /// </summary>
-public static class NativeMethods
+public static partial class NativeMethods
 {
     #region Constants
 
@@ -20,6 +20,9 @@ public static class NativeMethods
     internal const int WS_VISIBLE = 0x10000000;
     internal const int WS_EX_TOOLWINDOW = 0x00000080;
 
+    /// <summary>Window does not take foreground focus when clicked — used by floating toolbars.</summary>
+    internal const int WS_EX_NOACTIVATE = 0x08000000;
+
     // Window Event Hook Constants
     internal const uint EVENT_OBJECT_DESTROY = 0x8001;
     internal const uint EVENT_OBJECT_LOCATIONCHANGE = 0x800B;
@@ -27,7 +30,11 @@ public static class NativeMethods
     internal const int OBJID_WINDOW = 0;
 
     // SetWindowPos Flags
-    internal const int HWND_TOPMOST = -1;
+    /// <summary>
+    /// HWND_TOPMOST. Must be pointer-sized: passing it through an <c>int</c> parameter cannot
+    /// sign-extend into a 64-bit handle slot, and the call fails with an invalid handle.
+    /// </summary>
+    internal static readonly IntPtr HWND_TOPMOST = new(-1);
     internal const uint SWP_NOSIZE = 0x0001;
     internal const uint SWP_NOMOVE = 0x0002;
     internal const uint SWP_NOZORDER = 0x0004;
@@ -165,6 +172,9 @@ public static class NativeMethods
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
 
+    [DllImport("user32.dll")]
+    internal static extern bool IsWindowVisible(IntPtr hWnd);
+
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
@@ -174,11 +184,17 @@ public static class NativeMethods
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern int GetWindowLong(IntPtr hWnd, int nIndex);
 
+    /// <summary>Index for a window's owner. Setting it makes a window always render above its owner.</summary>
+    internal const int GWLP_HWNDPARENT = -8;
+
+    [LibraryImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
+    internal static partial IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
     [DllImport("user32.dll")]
     internal static extern uint GetDpiForWindow(IntPtr hMonitor);
 
     [DllImport("user32.dll", SetLastError = true)]
-    internal static extern bool SetWindowPos(IntPtr hWnd, int hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
+    internal static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
 
     [DllImport("user32.dll", CharSet = CharSet.Auto)]
     internal static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFOEX lpmi);

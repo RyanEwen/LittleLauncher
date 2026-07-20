@@ -10,11 +10,32 @@
 - Existing legacy declarations use `[DllImport]` — match the surrounding style
 - Group by DLL: user32.dll, shcore.dll, etc.
 
+## Handles and pointer-sized parameters
+
+**Any parameter that is a handle (`HWND`, `HANDLE`, `LPARAM`, `WPARAM`) must be declared
+`IntPtr`, never `int`.** These are 64-bit on x64/ARM64, and an `int` parameter silently works
+for as long as every caller passes `0` — then fails the moment someone passes a real value or
+a negative sentinel, because it cannot sign-extend into the 64-bit slot.
+
+This bit us once: `SetWindowPos`'s `hWndInsertAfter` was declared `int`. Every existing call
+passed `0`, so nothing broke until the first caller passed `HWND_TOPMOST` (`-1`) — Windows
+received a bogus handle, the call returned `false`, and the window silently never moved.
+
+Sentinel handle values must therefore also be pointer-sized:
+
+```csharp
+internal static readonly IntPtr HWND_TOPMOST = new(-1);
+```
+
+If a call inexplicably returns `false` or does nothing, check the signature's parameter widths
+before anything else, and log `Marshal.GetLastWin32Error()`.
+
 ## Constants & Enums
 
 - Win32 constants as `internal const int` or `internal const uint`
 - Related constants grouped in comment-delimited sections
 - Enums for flag sets with `[Flags]` attribute where appropriate
+- Handle-valued sentinels are `static readonly IntPtr`, not `const int` (see above)
 
 ## Structs
 
