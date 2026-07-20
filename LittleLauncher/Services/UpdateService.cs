@@ -144,32 +144,34 @@ public static class UpdateService
     {
         var context = StoreContext.GetDefault();
         var updates = await context.GetAppAndOptionalStorePackageUpdatesAsync();
+
+        var currentPackageVersion = PackageVersionToVersion(Package.Current.Id.Version);
         string currentVersion = FormatPackageVersion(Package.Current.Id.Version);
+        string currentPackageName = Package.Current.Id.FamilyName;
 
-        if (updates.Count == 0)
-        {
-            return new UpdateCheckResult
-            {
-                Source = UpdateSource.MicrosoftStore,
-                UpdateAvailable = false,
-                CurrentVersion = currentVersion,
-                LatestVersion = currentVersion,
-            };
-        }
-
+        // GetAppAndOptionalStorePackageUpdatesAsync lists every package the Store can
+        // update — including framework dependencies — and can list a package at the same
+        // version we already have (e.g. right after a submission is published, before the
+        // update graph settles). Only look at the main app package, and only report an
+        // update when it is strictly newer than what's installed; otherwise the UI would
+        // offer an "update" to the same version the user is already running.
         var latestVersion = updates
-            .Select(update => update.Package == null
-                ? PackageVersionToVersion(Package.Current.Id.Version)
-                : PackageVersionToVersion(update.Package.Id.Version))
-            .DefaultIfEmpty(PackageVersionToVersion(Package.Current.Id.Version))
-            .Max() ?? PackageVersionToVersion(Package.Current.Id.Version);
+            .Where(update => update.Package != null && string.Equals(
+                update.Package.Id.FamilyName, currentPackageName, StringComparison.OrdinalIgnoreCase))
+            .Select(update => PackageVersionToVersion(update.Package!.Id.Version))
+            .DefaultIfEmpty(currentPackageVersion)
+            .Max() ?? currentPackageVersion;
+
+        bool updateAvailable = latestVersion > currentPackageVersion;
 
         return new UpdateCheckResult
         {
             Source = UpdateSource.MicrosoftStore,
-            UpdateAvailable = true,
+            UpdateAvailable = updateAvailable,
             CurrentVersion = currentVersion,
-            LatestVersion = $"v{latestVersion.Major}.{latestVersion.Minor}.{latestVersion.Build}",
+            LatestVersion = updateAvailable
+                ? $"v{latestVersion.Major}.{latestVersion.Minor}.{latestVersion.Build}"
+                : currentVersion,
         };
     }
 

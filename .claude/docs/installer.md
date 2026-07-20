@@ -53,7 +53,7 @@ A `CustomAction` in `Package.wxs` launches `LittleLauncher.exe` after `InstallFi
 
 For packaged installs, `UpdateService` takes a separate path through `Windows.Services.Store.StoreContext` instead of GitHub Releases:
 
-1. `CheckForUpdateAsync()` calls `GetAppAndOptionalStorePackageUpdatesAsync()` to detect Store updates
+1. `CheckForUpdateAsync()` calls `GetAppAndOptionalStorePackageUpdatesAsync()` to detect Store updates. That list also contains framework/dependency packages and can transiently list the app's own package at the *same* version right after a submission is published, so `CheckForStoreUpdateAsync` filters to the main app package (by `FamilyName`) and only reports `UpdateAvailable` when that package is **strictly newer** than what's installed — never treat a non-empty list as an update on its own, or the UI offers an "update" to the version already running.
 2. Home/About pages reuse the same cached result shape as the MSI path and keep the same single-action UI
 3. Clicking `Download & Install` calls `RequestDownloadAndInstallStorePackageUpdatesAsync()` on the UI thread
 4. The `StoreContext` is associated with the Settings window handle via `InitializeWithWindow.Initialize(...)` so Store consent dialogs are correctly owned in the desktop app
