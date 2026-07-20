@@ -7,18 +7,66 @@ App.xaml  →  MainWindow (invisible, owns tray icon)
                 ├── FlyoutWindow (launcher popup)
                 └── SettingsWindow (WinUI 3 + NavigationView)
                       ├── HomePage
-                      ├── LauncherItemsPage
+                      ├── LaunchersPage
                       ├── SyncPage
                       ├── SystemPage
                       └── AboutPage
 ```
 
-## LauncherItemsPage multi-column layout and drag-and-drop
+## Flyout edit mode
 
-The Launcher Items settings page renders items in a multi-column `Grid` (`ColumnsPanel`). The flat `Items` collection is split at `IsColumnBreak` sentinel items into per-column `ObservableCollection<LauncherItem>` lists by `BuildColumnLists()`. List-mode columns render as fixed-width `ListView`s (280px), while icon-mode columns render as `GridView`s whose top-level items are arranged by the custom `PackedIconPanel`. That panel packs groups into shared rows by requested icon span while keeping the row height based on the actual measured group card. Column headers show "Column N" and a remove button (except column 1). Users add columns via "Add Column" and remove them via the column header delete button (which merges items into the previous column). Each item/group card has a `...` context menu button (visible on hover via Opacity toggling) with Move up/down, Move to…, Edit, and Remove actions.
+All launcher item editing happens in the flyout. There is no in-settings items editor; the
+former `LauncherItemsPage` was removed and its logic consolidated into `FlyoutWindow`.
 
-Drag-and-drop supports cross-column and cross-group moves: items can be dragged between columns, between columns and group child lists, and out of groups via a drop zone. All ListViews use `CanDragItems="True"` with custom `DragOver`/`Drop` handlers — WinUI 3's `CanReorderItems` is intentionally avoided because it takes full internal control of drag events and cannot support cross-collection moves. After drag operations, `SyncColumnsToFlatList()` writes the column lists back to the flat collection. See `.github/instructions/drag-drop.instructions.md` for implementation details.
+A hover-revealed pencil in the flyout enters edit mode (`FlyoutWindow.EditMode.cs`), which:
 
+- reveals a toolbar row (add item, add group, add/remove column via overflow, done),
+- tints group containers and gives empty groups a drop target,
+- enables drag-and-drop reordering (disabled outside edit mode),
+- shows a pencil overlay on the hovered item/group,
+- restricts item context menus to launcher-level entries outside edit mode,
+- pins the flyout open so it cannot dismiss itself while editing.
+
+**Geometry contract:** edit mode may grow the flyout''s *height* but must never change its
+width or the size of any item or group. Width is derived arithmetically by `GetFlyoutWidth()`
+from fixed column widths and is never measured, so chrome wider than the content is clipped —
+hence icon-only toolbar buttons sized for the narrowest case (small-icon mode). Per-item
+affordances are `Background`/`CornerRadius` only, which have no layout effect, so
+`PackedIconPanel` cannot repack rows.
+
+Height is normally computed arithmetically, because forcing a layout pass on a *hidden* WinUI
+window is a hard crash (see the comment in `MeasureContentHeight`). Edit-mode toggles are the
+exception: the window is visible then, so `ResizeForEditChrome()` measures `ContentStack`
+directly and sizes to the real value.
+
+**Source of truth:** `_launcher.Items` is authoritative and `_columnLists` is a derived view.
+Structural edits (add/remove/rename) mutate the flat list and let the rebuild regenerate
+columns — they must *not* call `SyncColumnsToFlatList()`, which clears `_launcher.Items` and
+would resurrect anything just removed. Drag-and-drop is the opposite: it mutates `_columnLists`
+and flushes back via `PersistFlyoutReorder()`.
+
+Drag-and-drop supports cross-column and cross-group moves. All ListViews use
+`CanDragItems="True"` with custom `DragOver`/`Drop` handlers — WinUI 3''s `CanReorderItems` is
+intentionally avoided because it takes full internal control of drag events and cannot support
+cross-collection moves. See [.claude/docs/drag-drop.md](.claude/docs/drag-drop.md).
+
+## Owned editor windows
+
+Editing UI opened from the flyout uses standalone windows, not `ContentDialog`: a dialog
+renders inside its host window''s content area and cannot overflow the HWND, and the flyout is
+frequently narrower and shorter than the form.
+
+| Window | Purpose |
+|---|---|
+| `ItemEditorWindow` | Add/edit a launcher item; returns `ItemEditorResult` (Cancelled/Saved/Deleted) |
+| `TextPromptWindow` | Single-field prompt (group name) |
+| `LauncherSettingsWindow` | Per-launcher settings; opened from both the flyout and the Launchers page |
+
+All three share `WindowChrome` for the app icon and a themed custom title bar (a default WinUI
+title bar does not follow `RequestedTheme`). The flyout **drops its always-on-top flag** while
+one is open — owner relationship alone does not beat a topmost owner — and closes any open
+editor when edit mode ends, so an orphaned window cannot commit into a launcher the user has
+navigated away from.
 ## Launch modes
 
 By default, launching the app opens the Settings window. Silent mode (tray icon only, no Settings window) is used for Windows startup and companion exe cold-starts:
@@ -49,11 +97,11 @@ By default, launching the app opens the Settings window. Silent mode (tray icon 
 |---|---|
 | App startup (missing icons on disk) | `MainWindow.FetchMissingIconsOnStartupAsync()` |
 | SFTP sync download | `SftpSyncService.DownloadLaunchersAsync()` |
-| File import (Launcher Items page) | `LauncherItemsPage.ImportItems_Click()` |
+| File import (Launchers page card menu) | `LauncherBulkOps.ImportItemsAsync()` |
 | Manual add/edit | `DoFetch()` in add/edit dialog (calls `FaviconService` directly for the single item) |
 | PWA add | PWA combo selection handler (`FaviconService.GetBestPwaIconAsync()`: prefers a real site/manifest icon, rejects off-origin login redirects, then falls back to the installed shell icon) |
 
-After bulk icon changes, callers invoke `FlyoutWindow.InvalidateItems()` so the flyout rebuilds its containers on the next toggle and the open `LauncherItemsPage` refreshes if it is showing the affected launcher.
+After bulk icon changes, callers invoke `FlyoutWindow.InvalidateItems()` so the flyout rebuilds its containers on the next toggle.
 
 `FaviconService.RefreshStaleItemIconsAsync(items)` complements the missing-icon pipeline by **re-fetching auto-fetched icons** whose cached file is older than 7 days (`FaviconService.IconMaxAge`), so favicons, app icons, and PWA icons track upstream changes. Custom user-chosen icons are never touched (auto-fetched icons are identified by living in the `favicons` cache folder), and a failed fetch keeps the existing file. It runs at startup (inside `FetchMissingIconsOnStartupAsync`) and on a daily timer in `MainWindow` while the app stays resident in the tray. Because refreshed files keep the same path, item-icon `BitmapImage` loads use `BitmapCreateOptions.IgnoreImageCache` to bypass WinUI's per-URI decoded-image cache.
 
@@ -100,7 +148,7 @@ The flyout popup dismisses when focus is lost via the WinUI `Activated` event (`
 
 For pinned taskbar launches, `MainWindow` now tries to resolve the actual taskbar button bounds via UI Automation before showing the flyout. When that succeeds, the flyout anchors to the center of the launcher button instead of the companion exe's fallback cursor coordinates, keeping both mouse and touch launches centered directly over the icon.
 
-**Direct reordering**: FlyoutWindow now mirrors the editor's custom drag-drop approach instead of WinUI `CanReorderItems`. Each column is rendered as a drag-enabled `ListView`, and grouped sections render nested child `ListView`s. In icon mode, consecutive ungrouped items are wrapped into synthetic groups for display so icon tiles can still be reordered in a wrapping `ItemsWrapGrid`. Drops use custom insertion indicators (horizontal for list sections, vertical for icon grids), then sync the per-column view back into the launcher's flat `Items` collection, save settings, notify auto-sync, refresh the Launcher Items editor if it is open, and invalidate tray/flyout surfaces.
+**Direct reordering** (edit mode only): FlyoutWindow uses a custom drag-drop implementation instead of WinUI `CanReorderItems`. Each column is rendered as a drag-enabled `ListView`, and grouped sections render nested child `ListView`s. In icon mode, consecutive ungrouped items are wrapped into synthetic groups for display so icon tiles can still be reordered in a wrapping `ItemsWrapGrid`. Drops use custom insertion indicators (horizontal for list sections, vertical for icon grids), then sync the per-column view back into the launcher's flat `Items` collection, save settings, notify auto-sync, and invalidate tray/flyout surfaces.
 
 **Multi-column & multi-view layout**: The flyout renders items into a horizontal `ColumnsPanel` (a `StackPanel`). Each `LauncherItem` with `IsColumnBreak = true` starts a new column. The display mode is controlled by `Launcher.ViewMode`:
 - **Icon view** (ViewMode = 0, default): Each column is a `GridView` of grouped sections whose top-level layout is handled by the custom `PackedIconPanel`. Real groups render a heading plus a nested icon-grid child `ListView`, while consecutive ungrouped items are wrapped into synthetic groups so they render in the same wrapping grid surface. `Launcher.IconModeIconsPerRow` controls the maximum icons shown across each row (default 3, configurable from 1 to 12). Top-level groups use their visible child count as a width span so narrower groups can share a row beside wider groups, while the packed panel keeps row heights based on the measured group cards instead of fixed slot heights. Dragging near the flyout's left or right edge snaps the layout wider or narrower by whole icon columns without opening settings.
@@ -108,7 +156,7 @@ For pinned taskbar launches, `MainWindow` now tries to resolve the actual taskba
 
 `RebuildColumnsPanel()` rebuilds all columns (icon grid or ListView) from scratch whenever items change. Window width scales per column: 175 px for list view, or a dynamic icon-mode width derived from the configured icons-per-row value.
 
-**Right-click context menu**: Right-clicking empty space in the flyout shows a `ContextFlyout` with launcher/settings shortcuts. Right-clicking an item opens an item menu with Move up/down, Move to…, Edit, and Remove actions, so common item maintenance can happen directly in the live flyout without opening the Launcher Items page.
+**Right-click context menu**: Right-clicking empty space in the flyout shows a `ContextFlyout` with launcher/settings shortcuts. Right-clicking an item opens an item menu with Move up/down, Move to…, Edit, and Remove actions, while in edit mode. Outside edit mode the item menu shows only launcher-level entries.
 
 ## Companion exe (`LauncherShortcut`)
 

@@ -69,7 +69,7 @@ LittleLauncher/              # WinUI 3 application project
 ├── Pages/
 │   ├── HomePage.xaml/.cs
 │   ├── LaunchersPage.xaml/.cs  # Launcher card management + sharing UI
-│   ├── LauncherItemsPage.xaml/.cs # Per-launcher item editing (read-only for subscribers)
+│   ├── LauncherBulkOps.cs       # Item export/import + bookmark import
 │   ├── SyncPage.xaml/.cs
 │   ├── SystemPage.xaml/.cs
 │   └── AboutPage.xaml/.cs

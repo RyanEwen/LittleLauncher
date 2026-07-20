@@ -1,70 +1,144 @@
-> **Scope:** Use when modifying drag-and-drop behavior in the Launcher Items settings page. Covers the custom drag-drop system, cross-list moves, insertion indicators, and known WinUI 3 limitations.
-> **Governs:** `**/LauncherItemsPage.xaml*` (`LittleLauncher/Pages/LauncherItemsPage.xaml` + `.cs`).
+> **Scope:** Use when modifying drag-and-drop or edit mode in the flyout. Covers the custom drag-drop system, cross-list moves, insertion indicators, the edit-mode geometry contract, and known WinUI 3 limitations.
+> **Governs:** `**/FlyoutWindow.xaml*`, `**/FlyoutWindow.EditMode.cs`.
 
-# Drag-and-Drop Conventions (LauncherItemsPage)
+# Drag-and-Drop & Edit Mode Conventions (FlyoutWindow)
+
+All launcher item editing lives in the flyout. The former in-settings `LauncherItemsPage` was
+deleted; do not reintroduce a second editor.
 
 ## Why custom drag-drop (not CanReorderItems)
 
-WinUI 3's `CanReorderItems` takes full internal control of `DragOver` and `Drop` events. Its built-in handlers evaluate the drag source at a low level and **cannot be reliably overridden** — even `AddHandler` with `handledEventsToo` doesn't work consistently. This makes cross-list drag-drop (between top-level and group ListViews) impossible with `CanReorderItems`.
+WinUI 3's `CanReorderItems` takes full internal control of `DragOver` and `Drop` events. Its
+built-in handlers evaluate the drag source at a low level and **cannot be reliably overridden**
+— even `AddHandler` with `handledEventsToo` doesn't work consistently. This makes cross-list
+drag-drop (between column lists and group child lists) impossible with `CanReorderItems`.
 
-**Solution:** All ListViews use `CanDragItems="True"` (not `CanReorderItems`) with fully custom `DragOver`, `DragLeave`, `Drop`, `DragItemsStarting`, and `DragItemsCompleted` handlers.
+**Solution:** All ListViews use `CanDragItems="True"` (not `CanReorderItems`) with fully custom
+`DragOver`, `DragLeave`, `Drop`, `DragItemsStarting`, and `DragItemsCompleted` handlers.
+
+## Edit mode
+
+Dragging is an **edit-mode-only** affordance. Both `DragItemsStarting` handlers cancel when
+`_isEditMode` is false. Entry is the hover-revealed pencil overlay; exit is the toolbar's Done
+button, Escape (first press exits edit mode, second dismisses), or hiding the flyout.
+
+### Geometry contract
+
+Edit mode may grow the flyout's **height**. It must never change its **width**, or the size of
+any item or group.
+
+- `GetFlyoutWidth()` sums fixed column widths arithmetically and is never measured, so chrome
+  wider than the content is **clipped**. The toolbar therefore uses icon-only 28px buttons
+  sized for the narrowest case (small-icon mode, ~136px → ~120px usable). Column operations
+  live in an overflow menu for this reason.
+- Per-item/group affordances must be **non-reflowing**: use `Background` and `CornerRadius`
+  only, which have no layout effect. A border was tried and rejected — compensating for it with
+  negative padding only works when the container already has padding on every side to give
+  back, which the icon-mode container style does not.
+- Empty groups get a `MinHeight` drop target in edit mode. This grows height only. In icon mode
+  it costs nothing extra: `MeasureIconModeHeight` already reserves one row for an empty group
+  via `Math.Max(1, …)`.
+
+### Height measurement
+
+`MeasureContentHeight` / `MeasureIconModeHeight` compute height **arithmetically** because
+forcing a layout pass on a window hidden via `ShowWindow(SW_HIDE)` while another WinUI 3 window
+is active causes a fatal `ExecutionEngineException`. Do not "fix" this by calling
+`UpdateLayout()`.
+
+Edit-mode toggles are the one exception: the window is visible, so `ResizeForEditChrome()`
+measures `ContentStack` directly and sizes to the real value, falling back to the arithmetic
+estimate if the measure fails. Hiding the flyout exits edit mode, so the hidden-window path
+never has to account for edit chrome.
+
+## Source of truth
+
+`_launcher.Items` is authoritative. `_columnLists` is a **derived view**, rebuilt from the flat
+list by `BuildColumnLists()`.
+
+| Operation | Mutates | Persists via |
+|---|---|---|
+| Add / remove / rename | `_launcher.Items` (or `group.Children`) | `PersistStructuralChange()` |
+| Drag reorder | `_columnLists` | `PersistFlyoutReorder()` |
+
+**Critical:** `PersistStructuralChange()` must **not** call `SyncColumnsToFlatList()`. That
+method clears `_launcher.Items` and regenerates it from `_columnLists`, so calling it after a
+structural edit resurrects anything just removed — this is exactly how remove was once broken.
+Drag-drop is the opposite case and must flush the other way.
 
 ## Architecture
 
 ### Multi-column layout
 
-The settings page renders launcher items in a multi-column Grid (`ColumnsPanel`). The flat `CurrentItems` collection is split at `IsColumnBreak` sentinel items into per-column `ObservableCollection<LauncherItem>` lists (`_columnLists`). Each column gets its own `ListView` created in `RebuildColumns()`. When items are added/removed/reordered, `SyncColumnsToFlatList()` writes the column lists back to the flat collection, re-inserting column break sentinels between columns.
+The flat `Items` collection is split at `IsColumnBreak` sentinel items into per-column
+`ObservableCollection<LauncherItem>` lists. Each column gets its own `ListView` (list mode) or
+`GridView` (icon mode) created in `CreateColumnListView()`.
+
+### Synthetic groups
+
+In icon mode, consecutive ungrouped items are wrapped into **ephemeral** groups
+(`WrapUngroupedItemsIntoSyntheticGroups`) so loose icons pack into a wrapping grid. These are
+tracked in `_syntheticGroups`, unwrapped again by `SyncColumnsToFlatList()`, and must **never**
+be renamed, removed, reordered, or persisted. Guard with `IsEditableGroup(item)`.
 
 ### Drag surfaces
 
-| Surface | ListView | Source collection | Notes |
+| Surface | Tag | Source collection | Notes |
 |---|---|---|---|
-| Column items | Per-column ListView (Tag = column index) | `_columnLists[colIdx]` | Supports cross-column drag-drop |
-| Group children | `GroupChildList` (inside DataTemplate) | `group.Children` | Rejects `IsGroup` drops (groups can't nest) |
-| Top-level drop zone | `TopLevelDropZone` (Border) | — | Appears only when dragging FROM a group; drops append to last column |
-| Inter-column drop zones | `_newColumnDropZones` (List\<Border\>) | — | Appear during any drag; one between each pair of columns plus one at each end. Tag = insert position in `_columnLists`. Dropping creates a new column at that position. |
+| Column items | column index (`int`) | `_columnLists[idx]` | Cross-column drag-drop |
+| Group children | the group `LauncherItem` | `group.Children` | Rejects `IsGroup`/`IsColumnBreak` drops (no nesting) |
 
 ### Shared state fields
 
 - `_dragItem` — the `LauncherItem` being dragged
-- `_dragSourceCollection` — the `ObservableCollection<LauncherItem>` the item came from
-- `_lastIndicatorContainer` — the last `ListViewItem` with an insertion indicator border
+- `_dragSourceCollection` — the collection it came from
+- `_lastIndicatorContainer` / `_lastIndicatorListView` — insertion-indicator restore state
 
 ### Drop index calculation
 
-`GetDropIndex(ListView, DragEventArgs)` iterates item containers, comparing the cursor Y position against each container's vertical midpoint. Returns the index where the item should be inserted (Count = append to end).
+`GetDropIndex(ListViewBase, DragEventArgs)` dispatches to `GetDropIndexGrid` when the panel is
+an `ItemsWrapGrid` or `PackedIconPanel` (row-band hit test, then X-midpoint); otherwise it scans
+Y-midpoints.
 
-**Critical:** When reordering within the same collection, removing the dragged item shifts subsequent items up by one. The drop handlers must adjust: if the original index was before the drop index, decrement `dropIndex` by 1 after removal. This applies to both `ColumnListView_Drop` and `GroupChildList_Drop`.
+**Critical:** When reordering within the same collection, removing the dragged item shifts
+subsequent items up by one. The drop handlers must adjust: if the original index was before the
+drop index, decrement `dropIndex` by 1 after removal. This applies to both
+`ColumnListView_Drop` and `GroupChildList_Drop`.
 
 ## Visual feedback
 
-### Insertion indicators
+`ShowInsertionIndicator(ListView, int)` sets an accent-coloured border on the target container.
+In list mode this is a horizontal line; in icon-grid mode it's a vertical line **with a
+compensating negative padding on the same side**, so the container's outer dimensions stay
+constant and the grid doesn't reflow. `ClearInsertionIndicator()` restores border, padding and
+margin from the saved `_lastIndicator*` fields.
 
-`ShowInsertionIndicator(ListView, int)` sets an accent-colored 3px border on the `ListViewItem` at the target position. In list mode this is a horizontal line (top or bottom); in icon-grid mode it's a vertical line (left or right). In grid mode, a compensating negative padding is applied on the same side so the container's outer dimensions stay constant and the `ItemsWrapGrid` doesn't reflow. `ClearInsertionIndicator()` resets the border, padding, and margin via `_lastIndicatorContainer`.
+`DragUIOverride.Caption` shows contextual text ("Move above X", "Move into X", "Move to end").
 
-### Drag captions
+## Container item lookup
 
-`DragUIOverride.Caption` shows contextual text:
-- Top-level/group: "Move above {targetItem.Name}" or "Move to end"
-- Top-level drop zone: "Move to top level"
+These lists are populated via `ItemsSource`, which puts the item in each container's
+**`Content`** and leaves `DataContext` **null**. Use `GetContainerItem(container)` (Content
+first, DataContext as fallback) — checking `DataContext` silently rejects every item. Always
+re-read on each event rather than capturing, since containers are recycled.
 
-### TopLevelDropZone
+## Pointer events
 
-A `Border` with `AllowDrop="True"` that sits below the `ColumnsPanel` Grid. It collapses by default and becomes `Visible` in `GroupChildList_DragItemsStarting` (only when dragging from a group). Hidden again in `DragItemsCompleted` and `Drop` handlers.
-
-## Group collapse state
-
-Groups use a custom expand/collapse StackPanel (Tag `"GroupRoot"` / `"GroupChildren"`), not WinUI Expanders. `LauncherItem.IsExpanded` (`[XmlIgnore]`, defaults `true`) preserves collapse state across `RebuildColumns()` re-renders. The `GroupRoot_Loaded` handler reads `IsExpanded` and restores the collapsed visual + chevron glyph.
-
-## Button order (item action buttons)
-
-Left to right: **Move to…** → **Move up** → **Move down** → **Edit** → **Remove**. This order is consistent across LauncherItemTemplate and HeadingItemTemplate.
+`ListViewItem` marks `PointerMoved` as **handled** for its own hover visuals, so a handler
+attached to `RootGrid` never fires over an actual item — only over empty space. Attach hover
+handlers to the **containers** (via `ContainerContentChanging`, plus an immediate pass over
+`ContainerFromIndex` for already-realised ones). In nested lists the child's handler runs first,
+so set `e.Handled = true` to stop the enclosing group claiming the hover.
 
 ## Common pitfalls
 
-1. **Never use `CanReorderItems`** for ListViews that need cross-list drag-drop. It swallows drag events.
-2. **Always adjust drop index** when removing from the same collection before inserting — classic off-by-one.
-3. **`RebuildColumns()` re-creates all containers** — any visual state (borders, expanded/collapsed) must be model-backed or restored in `Loaded` handlers.
-4. **Groups cannot be dropped into other groups** — `GroupChildList_DragOver` rejects `IsGroup` items.
-5. **Cross-column drag-drop** — when dropping between columns or between a column and a group, always call `SyncColumnsToFlatList()` before `SaveAndUpdateTaskbar()` to keep the flat backing list in sync with the column views.
-6. **Column breaks are invisible in the settings UI** — they exist only as sentinel items in the flat `CurrentItems` list. The "Add Column" button appends one; "Remove Column" merges items into the previous column.
+1. **Never use `CanReorderItems`** for ListViews that need cross-list drag-drop.
+2. **Always adjust drop index** when removing from the same collection before inserting.
+3. **`RebuildColumnsPanel()` re-creates all containers** — any visual state must be model-backed
+   or re-applied in `Loaded` / `ContainerContentChanging`.
+4. **Groups cannot be dropped into other groups** — `GroupChildList_DragOver` rejects `IsGroup`.
+5. **Never persist synthetic groups.**
+6. **Never call `SettingsManager.SaveSettings()` alone** for an item change — always pair it with
+   `AutoSyncService.NotifyItemsChanged()` (use `PersistFlyoutItemChanges` / `PersistFlyoutReorder`),
+   or a periodic sync download will silently revert the edit.
+7. **Column breaks are invisible** — they exist only as sentinel items in the flat list.

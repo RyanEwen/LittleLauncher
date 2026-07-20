@@ -168,7 +168,7 @@ The MSI (`Package.wxs`) creates an initial Start Menu shortcut at `Programs\Litt
 Entry points that call the pipeline:
 - **Startup**: `MainWindow.FetchMissingIconsOnStartupAsync()` — fire-and-forget, covers settings-import-then-restart and machine migration scenarios. Also runs the stale-icon refresh (below).
 - **Sync download**: `SftpSyncService.DownloadLauncherItemsAsync()` — awaited before save.
-- **File import**: `LauncherItemsPage.ImportItems_Click()` — awaited before save.
+- **File import**: `LauncherBulkOps.ImportItemsAsync()` — awaited before save.
 - **Manual add/edit**: calls `FaviconService.FetchAndCacheAsync()` / `GetApplicationIcon()` directly for the single item in the dialog.
 
 ### Stale icon refresh

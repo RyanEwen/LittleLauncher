@@ -13,7 +13,7 @@ Add a new feature to the launcher items in Little Launcher.
 2. Update `LittleLauncher/Windows/FlyoutWindow.xaml` and `.cs`:
    - Display the new feature in the flyout popup
 
-3. Update `LittleLauncher/Pages/LauncherItemsPage.xaml` and `.cs`:
+3. Update `LittleLauncher/Windows/ItemEditorWindow.cs` (add/edit form) and, if the feature affects editing affordances, `LittleLauncher/Windows/FlyoutWindow.EditMode.cs`:
    - Add editing controls for the new feature
 
 4. Add any new string keys to `LittleLauncher/Resources/Localization/Dictionary-en-US.xaml`
