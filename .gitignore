@@ -373,3 +373,7 @@ Website/tailwindcss.exe
 
 # Build output captures
 build_out.txt
+
+# Throwaway PAT files — never commit
+token
+token.txt
