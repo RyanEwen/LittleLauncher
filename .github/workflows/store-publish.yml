@@ -4,10 +4,19 @@ name: Publish to Microsoft Store
 # .msixupload, and submits a package update to the Microsoft Store via the
 # Microsoft Store Developer CLI (msstore). The Store re-signs on ingestion.
 #
-# Runs automatically on every v* tag (alongside the MSI release in build-msix.yml),
-# and can be run manually. The submission step only runs when the Partner Center
-# secrets below are configured; otherwise it just builds and uploads the
-# .msixupload as a workflow artifact.
+# DISABLED for automatic runs: this pipeline is not fully configured (the Partner
+# Center secrets below are not set), so tag pushes were producing failed runs and no
+# submission. Store packages are built locally instead:
+#
+#   .\LittleLauncherMSIX\build-msix.ps1 -Platform x64   -NoSign
+#   .\LittleLauncherMSIX\build-msix.ps1 -Platform ARM64 -NoSign
+#
+# then both .msix files are zipped into a single .msixupload (see the bundling step
+# below) and uploaded to Partner Center by hand.
+#
+# To re-enable: configure the secrets, verify a manual workflow_dispatch run succeeds,
+# then restore the `push: tags: - 'v*'` trigger. The submission step only runs when the
+# secrets are present; otherwise it just uploads the .msixupload as an artifact.
 #
 # Required repository secrets (Settings > Secrets and variables > Actions):
 #   AZURE_AD_TENANT_ID              Microsoft Entra tenant ID
@@ -19,10 +28,8 @@ name: Publish to Microsoft Store
 # update path for FREE products only.
 
 on:
+  # Manual only — see the note above before adding a tag trigger back.
   workflow_dispatch:
-  push:
-    tags:
-      - 'v*'
 
 # A free product allows only one in-flight submission; serialize publishes.
 concurrency:
