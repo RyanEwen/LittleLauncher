@@ -70,6 +70,34 @@
 
 **Do not** add `[ObservableProperty]` to the legacy migration fields (`LauncherItems`, `TrayIconMode`, `NIconHide`, `CustomTrayIconPath` on `UserSettings`) — they are plain migration-only properties marked with `[JsonIgnore]`.
 
+## Upgrade tracking & one-time notices
+
+Two properties support version-aware, one-time UI:
+
+- `LastRunVersion` (plain `string`, serialized) — the app version that last wrote the settings
+  file. Empty on a fresh install and on any file written before this field existed.
+- `ShowEditingMovedNotice` (`[ObservableProperty]`, `bool`) — drives the one-time "item editing
+  has moved" `InfoBar` on `LaunchersPage`. Cleared permanently when dismissed.
+
+`SettingsManager.StampVersion(bool existingInstall)` runs on **all three** load paths (JSON,
+legacy XML migration, and the defaults fallback) and records the running version.
+
+**Only raise an upgrade notice when `existingInstall` is true.** A fresh install has never seen
+the feature being described, so the notice is pure noise. `RestoreSettings` passes `false` only
+on the defaults path, where no settings file was found.
+
+A settings file with **no** recorded version necessarily predates the field, so it is treated as
+older than any threshold — that is what catches everyone upgrading, since no existing file has
+the field yet:
+
+```csharp
+if (existingInstall && (previous == null || previous < EditingMovedToFlyoutVersion))
+    _current.ShowEditingMovedNotice = true;
+```
+
+To add another one-time notice, add a `bool` property, compare against a new threshold
+`Version` constant in `StampVersion`, and clear the flag from the UI when dismissed.
+
 ## Property Categories
 
 Group related properties together with comment headers matching existing style:

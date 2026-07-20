@@ -136,7 +136,25 @@ public partial class FlyoutWindow
             _openModal = null;
             SetFlyoutTopmost(true);
             RepositionEditToolbarBar();
+            RestoreFlyoutActivation();
         }
+    }
+
+    /// <summary>
+    /// Returns foreground to the flyout after an owned window closes.
+    /// </summary>
+    /// <remarks>
+    /// Dismissal is driven by the <c>Deactivated</c> event, which can only fire for a window
+    /// that currently holds activation. Opening a modal takes activation away, and closing it
+    /// does not necessarily give it back — leaving the flyout visible but unable to ever
+    /// deactivate, so it stayed on screen until the user re-triggered it.
+    /// </remarks>
+    private void RestoreFlyoutActivation()
+    {
+        if (_hwnd == IntPtr.Zero || !IsWindow(_hwnd)) return;
+        if ((GetWindowLong(_hwnd, GWL_STYLE) & WS_VISIBLE) == 0) return;
+
+        try { SetForegroundWindow(_hwnd); } catch { /* foreground can be refused */ }
     }
 
     /// <summary>Edit mode pins the flyout open; so does any modal it owns.</summary>

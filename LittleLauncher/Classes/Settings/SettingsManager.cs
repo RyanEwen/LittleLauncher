@@ -63,6 +63,42 @@ public static class SettingsManager
             .SelectMany(l => l.Items.SelectMany(i => i.IsGroup ? new[] { i }.Concat(i.Children) : [i]))
         ?? Enumerable.Empty<LauncherItem>();
 
+    /// <summary>Version in which launcher item editing moved from settings into the flyout.</summary>
+    private static readonly Version EditingMovedToFlyoutVersion = new(1, 23, 0);
+
+    /// <summary>Version of the running assembly, or null if it cannot be determined.</summary>
+    private static Version? AppVersion =>
+        System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
+
+    /// <summary>
+    /// Records the running version in the settings, and raises one-time upgrade notices.
+    /// </summary>
+    /// <param name="existingInstall">
+    /// False for a fresh install (no settings file). Upgrade notices are suppressed in that
+    /// case: a new user never saw the feature being described, so the notice is only noise.
+    /// </param>
+    private static void StampVersion(bool existingInstall)
+    {
+        var current = AppVersion;
+        if (current == null) return;
+
+        Version? previous = null;
+        if (!string.IsNullOrWhiteSpace(_current.LastRunVersion))
+            Version.TryParse(_current.LastRunVersion, out previous);
+
+        // A settings file with no recorded version predates the field, so it is certainly
+        // older than the move.
+        if (existingInstall && (previous == null || previous < EditingMovedToFlyoutVersion))
+            _current.ShowEditingMovedNotice = true;
+
+        string stamped = current.ToString(3);
+        if (_current.LastRunVersion != stamped)
+        {
+            _current.LastRunVersion = stamped;
+            SaveSettings();
+        }
+    }
+
     /// <summary>
     /// Restores the settings <see cref="Current"/> from the settings file.
     /// Migrates from legacy XML format if the JSON file doesn't exist.
@@ -83,6 +119,7 @@ public static class SettingsManager
                     _current = deserialized;
                     _current.CompleteInitialization();
                     NormalizeAllGlyphs();
+                    StampVersion(existingInstall: true);
                     Logger.Info("Settings successfully restored");
                     return _current;
                 }
@@ -100,6 +137,7 @@ public static class SettingsManager
                         _current = xmlSettings;
                         _current.CompleteInitialization();
                         NormalizeAllGlyphs();
+                        StampVersion(existingInstall: true);
 
                         // Save in new JSON format and rename old file
                         SaveSettings();
@@ -124,6 +162,7 @@ public static class SettingsManager
         Logger.Warn("Settings file not found or cannot be read, loading default settings");
         _current = new UserSettings();
         _current.CompleteInitialization();
+        StampVersion(existingInstall: false);
         return _current;
     }
 

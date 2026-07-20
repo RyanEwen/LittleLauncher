@@ -2,6 +2,8 @@
 description: "Use when adding or modifying observable settings properties in UserSettings.cs, Launcher model properties, handling property change side-effects, or extending the serialized settings schema."
 applyTo: "{**/ViewModels/UserSettings*.cs,**/Models/Launcher.cs}"
 ---
+> **Scope:** Use when adding or modifying observable settings properties in UserSettings.cs, Launcher model properties, handling property change side-effects, or extending the serialized settings schema.
+> **Governs:** `**/ViewModels/UserSettings*.cs`, `**/Models/Launcher.cs`.
 
 # UserSettings Conventions
 
@@ -41,7 +43,7 @@ applyTo: "{**/ViewModels/UserSettings*.cs,**/Models/Launcher.cs}"
 
 ## LauncherItem Icon Properties
 
-- `IconGlyph` (`[ObservableProperty]`, `string`) — Unicode glyph character (Segoe Fluent Icons PUA or emoji). Default `"\uE8E5"`.
+- `IconGlyph` (`[ObservableProperty]`, `string`) — Unicode glyph character (Segoe Fluent Icons PUA or emoji). Default `""` (Segoe Fluent "open" glyph, code point U+E8E5).
 - `IconPath` (`[ObservableProperty]`, `string`) — Local file path to a cached favicon or custom image. Takes priority over `IconGlyph` when set.
 - `IconColor` (`[ObservableProperty]`, `string`) — Optional hex color for the glyph (e.g. `"#FF0000"`). Empty string means default theme color. Only affects glyph rendering (no effect when `IconPath` image is used). Serialized to JSON; omitted when empty (`DefaultIgnoreCondition = WhenWritingDefault`).
 
@@ -50,7 +52,7 @@ applyTo: "{**/ViewModels/UserSettings*.cs,**/Models/Launcher.cs}"
 `UserSettings.Launchers` is an `ObservableCollection<Launcher>`. Each `Launcher` holds:
 - `Id` (GUID string, readonly key)
 - `Name` (`[ObservableProperty]`)
-- `TrayIconMode` (`[ObservableProperty]`, `string` — uses `TrayIconModes` constants like `\"Composite\"`, `\"Blue\"`, etc. A `TrayIconModeJsonConverter` handles migration from legacy integer values)
+- `TrayIconMode` (`[ObservableProperty]`, `string` — uses `TrayIconModes` constants like `"Composite"`, `"Blue"`, etc. A `TrayIconModeJsonConverter` handles migration from legacy integer values)
 - `CustomTrayIconPath` (`[ObservableProperty]`)
 - `NIconHide` (`[ObservableProperty]`)
 - `ViewMode` (`[ObservableProperty]`, `int` — `0 = Icons`, `1 = List`, `2 = Small Icons`; non-list values use icon-style column layout in the flyout/editor)
@@ -72,6 +74,34 @@ applyTo: "{**/ViewModels/UserSettings*.cs,**/Models/Launcher.cs}"
 
 **Do not** add `[ObservableProperty]` to the legacy migration fields (`LauncherItems`, `TrayIconMode`, `NIconHide`, `CustomTrayIconPath` on `UserSettings`) — they are plain migration-only properties marked with `[JsonIgnore]`.
 
+## Upgrade tracking & one-time notices
+
+Two properties support version-aware, one-time UI:
+
+- `LastRunVersion` (plain `string`, serialized) — the app version that last wrote the settings
+  file. Empty on a fresh install and on any file written before this field existed.
+- `ShowEditingMovedNotice` (`[ObservableProperty]`, `bool`) — drives the one-time "item editing
+  has moved" `InfoBar` on `LaunchersPage`. Cleared permanently when dismissed.
+
+`SettingsManager.StampVersion(bool existingInstall)` runs on **all three** load paths (JSON,
+legacy XML migration, and the defaults fallback) and records the running version.
+
+**Only raise an upgrade notice when `existingInstall` is true.** A fresh install has never seen
+the feature being described, so the notice is pure noise. `RestoreSettings` passes `false` only
+on the defaults path, where no settings file was found.
+
+A settings file with **no** recorded version necessarily predates the field, so it is treated as
+older than any threshold — that is what catches everyone upgrading, since no existing file has
+the field yet:
+
+```csharp
+if (existingInstall && (previous == null || previous < EditingMovedToFlyoutVersion))
+    _current.ShowEditingMovedNotice = true;
+```
+
+To add another one-time notice, add a `bool` property, compare against a new threshold
+`Version` constant in `StampVersion`, and clear the flag from the UI when dismissed.
+
 ## Property Categories
 
 Group related properties together with comment headers matching existing style:
@@ -81,5 +111,3 @@ Group related properties together with comment headers matching existing style:
 - SFTP Sync
 
 `UserSettings` appearance/behaviour properties currently include `AppTheme`, `Startup`, and `FlyoutAnimationsEnabled` (default `true`, controls whether `FlyoutWindow` uses animated open/close transitions).
-
-

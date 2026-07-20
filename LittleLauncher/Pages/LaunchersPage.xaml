@@ -2,28 +2,50 @@
       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
-    <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <Grid>
-            <StackPanel x:Name="LaunchersPanel" MaxWidth="450" Margin="16">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
 
-                <TextBlock Text="Launchers" FontSize="24" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                <TextBlock Text="Each launcher has its own set of launcher items and its own tray icon."
-                           FontSize="13" Opacity="0.6" Margin="0,0,0,20"/>
+        <!-- Outside LaunchersPanel on purpose: RebuildLauncherCards() clears that panel down
+             to its last child, so anything placed inside it is destroyed on the first rebuild.
+             Shown once to installs upgrading from the build that had the in-settings item
+             editor; never shown on a fresh install. -->
+        <InfoBar x:Name="EditingMovedNotice"
+                 Grid.Row="0"
+                 IsOpen="False"
+                 Severity="Warning"
+                 Title="Item editing has moved"
+                 Message="To add, edit or reorder items, open a launcher from the system tray or taskbar, hover over it, then click the pencil in the top corner."
+                 Closed="EditingMovedNotice_Closed"
+                 MaxWidth="450"
+                 HorizontalAlignment="Center"
+                 Margin="16,16,16,0"/>
 
-                <!-- Launcher cards are added here in code-behind -->
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <Grid>
+                <StackPanel x:Name="LaunchersPanel" MaxWidth="450" Margin="16">
 
-                <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,8,0,60">
-                    <Button x:Name="AddLauncherButton" Content="+ Add Launcher"
-                            Click="AddLauncherButton_Click" HorizontalAlignment="Left"/>
-                    <Button x:Name="AddSharedLauncherButton" Click="AddSharedLauncherButton_Click"
-                            HorizontalAlignment="Left">
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <FontIcon Glyph="&#xE753;" FontSize="14"/>
-                            <TextBlock Text="Add Shared Launcher"/>
-                        </StackPanel>
-                    </Button>
+                    <TextBlock Text="Launchers" FontSize="24" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                    <TextBlock Text="Each launcher has its own set of launcher items and its own tray icon."
+                               FontSize="13" Opacity="0.6" Margin="0,0,0,20"/>
+
+                    <!-- Launcher cards are added here in code-behind -->
+
+                    <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,8,0,60">
+                        <Button x:Name="AddLauncherButton" Content="+ Add Launcher"
+                                Click="AddLauncherButton_Click" HorizontalAlignment="Left"/>
+                        <Button x:Name="AddSharedLauncherButton" Click="AddSharedLauncherButton_Click"
+                                HorizontalAlignment="Left">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <FontIcon Glyph="&#xE753;" FontSize="14"/>
+                                <TextBlock Text="Add Shared Launcher"/>
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
                 </StackPanel>
-            </StackPanel>
-        </Grid>
-    </ScrollViewer>
+            </Grid>
+        </ScrollViewer>
+    </Grid>
 </Page>

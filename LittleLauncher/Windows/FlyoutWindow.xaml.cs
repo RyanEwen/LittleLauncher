@@ -1052,6 +1052,27 @@ public partial class FlyoutWindow : Window
         ApplyColumnChrome();
     }
 
+    /// <summary>
+    /// Resizes the window to its rebuilt content, but only while it is on screen.
+    /// </summary>
+    /// <remarks>
+    /// A hidden flyout resizes on its next <c>Toggle</c>, which is what <c>InvalidateItems</c>
+    /// historically relied on. Edit mode pins the flyout open, so a change made from launcher
+    /// settings — view mode or icon density especially — would otherwise rebuild the content
+    /// without ever resizing the window around it. Measuring a hidden window is fatal, hence
+    /// the visibility check.
+    /// </remarks>
+    private void ResizeIfVisible()
+    {
+        if (_hwnd == IntPtr.Zero || !IsWindow(_hwnd)) return;
+        if ((GetWindowLong(_hwnd, GWL_STYLE) & WS_VISIBLE) == 0) return;
+
+        if (_isEditMode)
+            ResizeForEditChrome();
+        else
+            ResizeWindowToCurrentContent(keepRightEdge: false);
+    }
+
     private void RebuildItemsIfNeeded()
     {
         int currentHash = ComputeItemsHash(_launcher);
@@ -1075,6 +1096,7 @@ public partial class FlyoutWindow : Window
             {
                 fw._lastItemsHash = -1;
                 fw.RebuildItemsIfNeeded();
+                fw.ResizeIfVisible();
             }
             // Refresh composite tray icon (mode 13) since it derives from item icons
             var launcher = SettingsManager.Current.Launchers.FirstOrDefault(l => l.Id == launcherId);

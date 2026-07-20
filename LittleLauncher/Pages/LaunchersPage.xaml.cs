@@ -28,6 +28,7 @@ public sealed partial class LaunchersPage : Page
     {
         InitializeComponent();
         RebuildLauncherCards();
+        EditingMovedNotice.IsOpen = SettingsManager.Current.ShowEditingMovedNotice;
 
         if (PendingSettingsLauncher is not null)
         {
@@ -35,6 +36,15 @@ public sealed partial class LaunchersPage : Page
             // so the ContentDialog can't show until the page is in the visual tree.
             Loaded += LaunchersPage_PendingSettingsLoaded;
         }
+    }
+
+    /// <summary>Dismissing the upgrade notice retires it permanently.</summary>
+    private void EditingMovedNotice_Closed(InfoBar sender, InfoBarClosedEventArgs args)
+    {
+        if (!SettingsManager.Current.ShowEditingMovedNotice) return;
+
+        SettingsManager.Current.ShowEditingMovedNotice = false;
+        SettingsManager.SaveSettings();
     }
 
     private void LaunchersPage_PendingSettingsLoaded(object sender, RoutedEventArgs e)
