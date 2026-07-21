@@ -50,6 +50,15 @@ Drag-and-drop supports cross-column and cross-group moves. All ListViews use
 intentionally avoided because it takes full internal control of drag events and cannot support
 cross-collection moves. See [.claude/docs/drag-drop.md](.claude/docs/drag-drop.md).
 
+The same handlers also accept drags from **outside** the app (`FlyoutWindow.ExternalDrop.cs`):
+a drag arriving with no `_dragItem` set came from File Explorer, the desktop, the Start Menu or
+a browser, and `DroppedItemFactory` maps its payload to launcher items. This is edit-mode-only
+out of necessity rather than symmetry — the flyout dismisses on `Deactivated`, so only a pinned
+flyout survives the user switching to Explorer to pick something up. The Windows 11 Start Menu
+is *not* a usable drag source: its data package exposes only the app name as text, with the
+shell item hidden in a clipboard format WinUI 3''s `DataPackageView` does not surface. Dragging
+the same apps from their `.lnk` files under `Start Menu\Programs` in Explorer works.
+
 ## Owned editor windows
 
 Editing UI opened from the flyout uses standalone windows, not `ContentDialog`: a dialog

@@ -8,7 +8,10 @@
         x:Name="RootGrid"
         MinHeight="0"
         Background="Transparent"
-        Padding="0">
+        Padding="0"
+        AllowDrop="True"
+        DragOver="RootGrid_DragOver"
+        Drop="RootGrid_Drop">
 
         <Grid.Resources>
             <local:IconPathToImageConverter x:Key="IconPathToImage" />

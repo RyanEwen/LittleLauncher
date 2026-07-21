@@ -225,22 +225,30 @@ public static class AppCatalog
     }
 
     /// <summary>Reads a <c>.lnk</c>'s target via WScript.Shell. Null if it can't be resolved.</summary>
-    public static string? ResolveShortcutTarget(string lnkPath)
+    public static string? ResolveShortcutTarget(string lnkPath) => ResolveShortcut(lnkPath).Target;
+
+    /// <summary>
+    /// Reads a <c>.lnk</c>'s target and command-line arguments via WScript.Shell.
+    /// Both are null when the shortcut can't be resolved (Store apps and virtual shell
+    /// targets have no filesystem target at all).
+    /// </summary>
+    public static (string? Target, string? Arguments) ResolveShortcut(string lnkPath)
     {
         try
         {
             var shellType = Type.GetTypeFromProgID("WScript.Shell");
-            if (shellType == null) return null;
+            if (shellType == null) return (null, null);
             dynamic shell = Activator.CreateInstance(shellType)!;
             dynamic shortcut = shell.CreateShortcut(lnkPath);
             string? target = shortcut.TargetPath;
+            string? arguments = shortcut.Arguments;
             System.Runtime.InteropServices.Marshal.FinalReleaseComObject(shortcut);
             System.Runtime.InteropServices.Marshal.FinalReleaseComObject(shell);
-            return string.IsNullOrEmpty(target) ? null : target;
+            return string.IsNullOrEmpty(target) ? (null, null) : (target, arguments);
         }
         catch
         {
-            return null;
+            return (null, null);
         }
     }
 

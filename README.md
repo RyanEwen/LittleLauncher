@@ -65,6 +65,7 @@ Little Launcher lives in the Windows system tray and/or taskbar. Clicking its ic
 - **View modes** — choose between list view, icon grid view, or a compact tray-sized small-icon grid with no labels.
 - **Groups & columns** — organise items into groups and multi-column layouts.
 - **Direct flyout reordering** — drag items in the live flyout to reorder them, with the same insertion-indicator style used in the editor.
+- **Drag in from anywhere** — while editing a launcher, drag files, folders, shortcuts or browser links straight from File Explorer or the desktop into the flyout to add them, complete with names and icons. (Windows' own Start Menu can't act as a drag source, but its shortcuts can be dragged from `Start Menu\Programs` in Explorer.)
 - **Direct flyout item actions** — right-click items in the live flyout to move, edit, or remove them without opening the settings editor.
 - **System-tray icons** — a tray icon that opens a flyout popup for shortcuts.
 - **Taskbar icons** — a companion helper exe (`LauncherShortcut`) can be pinned to the taskbar so one click opens the flyout without needing to find the tray icon.

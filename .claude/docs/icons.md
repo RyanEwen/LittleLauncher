@@ -170,6 +170,7 @@ Entry points that call the pipeline:
 - **Sync download**: `SftpSyncService.DownloadLauncherItemsAsync()` — awaited before save.
 - **File import**: `LauncherBulkOps.ImportItemsAsync()` — awaited before save.
 - **Manual add/edit**: calls `FaviconService.FetchAndCacheAsync()` / `GetApplicationIcon()` directly for the single item in the dialog.
+- **Drag-and-drop into the flyout**: `DroppedItemFactory.EnrichAsync()` — runs *after* the items are inserted and visible, so the drop itself never waits on the network. Dropped items carry a Segoe Fluent placeholder glyph (open / globe / folder / page) until the fetch lands.
 
 ### Stale icon refresh
 

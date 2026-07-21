@@ -125,13 +125,85 @@ subsequent items up by one. The drop handlers must adjust: if the original index
 drop index, decrement `dropIndex` by 1 after removal. This applies to both
 `ColumnListView_Drop` and `GroupChildList_Drop`.
 
+## External drops (Explorer, desktop, Start Menu, browsers)
+
+`FlyoutWindow.ExternalDrop.cs` accepts drags that did **not** start inside the flyout, turning
+files, shortcuts and links into new items. `Services/DroppedItemFactory.cs` does the payload →
+`LauncherItem` mapping.
+
+**Routing:** every per-list `DragOver`/`Drop` handler treats `_dragItem == null` as "this drag
+came from outside" and forwards to `ExternalDragOver` / `ExternalDrop`. There is no separate
+event wiring for the lists — the same `AllowDrop` surfaces serve both.
+
+`RootGrid` has its own `AllowDrop` + `RootGrid_DragOver` / `RootGrid_Drop`. It is not redundant:
+an **empty launcher has no list big enough to hit**, since the empty-column `MinHeight` drop
+target is skipped when the whole launcher is empty. Root handlers bail out when `_dragItem` is
+set, and only ever run for drags that missed every list (the lists mark their events handled).
+
+**Edit-mode-only, for a load-bearing reason.** The flyout dismisses on `Deactivated`, so outside
+edit mode it is already gone by the time the user has switched to Explorer to pick something up.
+`SuppressDismiss` is what makes it a drop target at all.
+
+**Persist direction matters** — the same trap as everywhere else in this file:
+
+| Drop lands on | Target collection | Persist via |
+|---|---|---|
+| A column or group list | `_columnLists[i]` / `group.Children` (derived) | `PersistFlyoutReorder()` |
+| Flyout empty space | `_launcher.Items` (source of truth) | `PersistStructuralChange()` |
+
+Using `PersistFlyoutReorder` for the root case would regenerate the flat list from column lists
+built *before* the drop and silently discard the new items.
+
+**Deferral and ordering.** `Drop` is synchronous but reading the payload is not, so it takes an
+`e.GetDeferral()`. Two rules: resolve `GetDropIndex` **before** going async (`e.GetPosition` is
+only meaningful while the event is on the stack), and complete the deferral as soon as the
+payload is read — Explorer spins its drag loop until then. Website titles and icons are fetched
+*after* the deferral completes and after the items are already visible, then persisted again;
+`LauncherItem` is observable, so they fill in live.
+
+**Payload mapping** (`DroppedItemFactory`):
+
+| Dropped | Becomes |
+|---|---|
+| `.lnk` | The resolved target + its arguments, so it matches the same app picked from the item editor and survives the shortcut being deleted. Unresolvable shortcuts (Store apps, control-panel targets) keep the `.lnk`, which still shell-executes. |
+| `.url` | A website item; the filename wins over the page `<title>`, since the user named it. |
+| `.exe` / `.com` / `.bat` / `.cmd` | An application item, named from the exe's product name. |
+| Folder | An application item launched through `explorer.exe`. |
+| Any other file | An application item launched via `ShellExecute`. |
+| Browser link or tab | A website item named from the page title (host until the fetch lands). |
+
+**The Windows 11 Start Menu cannot be a drag source here — confirmed, not assumed.** Its data
+package carries no `StorageItems` at all (not even for plain Win32 apps): the shell item lives in
+the `Shell IDList Array` clipboard format, which WinUI 3's `DataPackageView` does not surface.
+All that reaches `DataPackageView` is the app's *name* as text.
+
+This is why `CanAccept` refuses text-only payloads. An earlier version accepted them, and the
+result was the worst possible behaviour: Start Menu drags showed a confident "Add to launcher"
+drop cursor and then silently added nothing. **A drop cursor is a promise — do not accept a
+format you cannot turn into an item.** `CreateItemsAsync` still reads text as a *fallback* for a
+source that advertises a web link but fails to produce it; text alone never triggers acceptance.
+
+Dragging from `%AppData%\Microsoft\Windows\Start Menu\Programs` in an Explorer window works
+fine — those are real `.lnk` files. Supporting the Start Menu itself needs the raw OLE
+`IDataObject`, below the XAML layer.
+
+Icon fetching goes through `FaviconService.FetchMissingItemIconsAsync` like every other import
+path — see [icons.md](icons.md). Do not add a parallel fetch here.
+
 ## Visual feedback
 
 `ShowInsertionIndicator(ListView, int)` sets an accent-coloured border on the target container.
-In list mode this is a horizontal line; in icon-grid mode it's a vertical line **with a
-compensating negative padding on the same side**, so the container's outer dimensions stay
-constant and the grid doesn't reflow. `ClearInsertionIndicator()` restores border, padding and
-margin from the saved `_lastIndicator*` fields.
+In list mode this is a horizontal line; in icon-grid mode it's a vertical line **compensated by
+subtracting the border's width from the container's own padding on the same side**, so the
+container's outer dimensions stay constant and the grid doesn't reflow.
+`ClearInsertionIndicator()` restores border, padding and margin from the saved `_lastIndicator*`
+fields.
+
+**Always clamp the compensation at zero** (`Math.Max(0, padding.Left - 3)`), never write a bare
+negative `Thickness`. WinUI **throws** `ArgumentException` on a negative `Control.Padding` rather
+than clamping it, and the icon-mode container style has no padding to give back — so the grid
+branch used to kill the entire drag with an unhandled exception on every `DragOver` tick. Where
+the container has no padding, the indicator costs 3px of reflow; that is the accepted trade.
 
 `DragUIOverride.Caption` shows contextual text ("Move above X", "Move into X", "Move to end").
 
@@ -162,3 +234,5 @@ so set `e.Handled = true` to stop the enclosing group claiming the hover.
    `AutoSyncService.NotifyItemsChanged()` (use `PersistFlyoutItemChanges` / `PersistFlyoutReorder`),
    or a periodic sync download will silently revert the edit.
 7. **Column breaks are invisible** — they exist only as sentinel items in the flat list.
+8. **`_dragItem == null` means an external drag**, not a bug — don't "fix" a drag handler by
+   early-returning on it without routing to the external-drop path.

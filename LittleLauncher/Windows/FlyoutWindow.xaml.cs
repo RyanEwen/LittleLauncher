@@ -1538,8 +1538,16 @@ public partial class FlyoutWindow : Window
 
     private void ColumnListView_DragOver(object sender, DragEventArgs e)
     {
-        if (_dragItem == null || _dragSourceCollection == null || sender is not ListViewBase listView)
+        if (sender is not ListViewBase listView)
             return;
+
+        // No _dragItem means the drag didn't start in this flyout — it came from Explorer,
+        // the desktop, the Start Menu or a browser.
+        if (_dragItem == null || _dragSourceCollection == null)
+        {
+            ExternalDragOver(listView, e, null);
+            return;
+        }
 
         e.AcceptedOperation = global::Windows.ApplicationModel.DataTransfer.DataPackageOperation.Move;
 
@@ -1570,10 +1578,18 @@ public partial class FlyoutWindow : Window
     private void ColumnListView_Drop(object sender, DragEventArgs e)
     {
         ClearInsertionIndicator();
-        if (_dragItem == null || _dragSourceCollection == null || sender is not ListViewBase listView || listView.Tag is not int columnIndex)
+        if (sender is not ListViewBase listView || listView.Tag is not int columnIndex
+            || columnIndex < 0 || columnIndex >= _columnLists.Count)
             return;
 
         var targetColumn = _columnLists[columnIndex];
+
+        if (_dragItem == null || _dragSourceCollection == null)
+        {
+            ExternalDrop(listView, e, targetColumn);
+            return;
+        }
+
         int dropIndex = GetDropIndex(listView, e);
 
         int originalIndex = _dragSourceCollection == targetColumn ? _dragSourceCollection.IndexOf(_dragItem) : -1;
@@ -1622,7 +1638,10 @@ public partial class FlyoutWindow : Window
             return;
 
         if (_dragItem == null || _dragSourceCollection == null)
+        {
+            ExternalDragOver(listView, e, group);
             return;
+        }
 
         if (_dragItem.IsGroup || _dragItem.IsColumnBreak)
         {
@@ -1669,7 +1688,13 @@ public partial class FlyoutWindow : Window
         if (sender is not ListView listView || listView.Tag is not LauncherItem group)
             return;
 
-        if (_dragItem == null || _dragSourceCollection == null || _dragItem.IsGroup || _dragItem.IsColumnBreak)
+        if (_dragItem == null || _dragSourceCollection == null)
+        {
+            ExternalDrop(listView, e, group.Children);
+            return;
+        }
+
+        if (_dragItem.IsGroup || _dragItem.IsColumnBreak)
             return;
 
         int dropIndex = GetDropIndex(listView, e);
@@ -1809,6 +1834,12 @@ public partial class FlyoutWindow : Window
         {
             bool appending = dropIndex >= listView.Items.Count;
 
+            // The border's width is given back out of the container's own padding so the grid
+            // doesn't reflow — but only as much as it actually has. The icon-mode container
+            // style has no padding to give, and WinUI throws on a negative Padding rather than
+            // clamping it, which killed the whole drag. The list branch below already clamps.
+            var padding = _lastIndicatorContainerPadding;
+
             // A vertical line reads as "goes beside this item", which is wrong when the drop
             // position actually wraps onto the next row. In that case draw a horizontal line
             // on the row boundary instead, so the landing spot matches what is shown.
@@ -1818,18 +1849,18 @@ public partial class FlyoutWindow : Window
                     ? new Thickness(0, 0, 0, 3)
                     : new Thickness(0, 3, 0, 0);
                 container.Padding = appending
-                    ? new Thickness(0, 0, 0, -3)
-                    : new Thickness(0, -3, 0, 0);
+                    ? new Thickness(padding.Left, padding.Top, padding.Right, Math.Max(0, padding.Bottom - 3))
+                    : new Thickness(padding.Left, Math.Max(0, padding.Top - 3), padding.Right, padding.Bottom);
             }
             else if (!appending)
             {
                 container.BorderThickness = new Thickness(3, 0, 0, 0);
-                container.Padding = new Thickness(-3, 0, 0, 0);
+                container.Padding = new Thickness(Math.Max(0, padding.Left - 3), padding.Top, padding.Right, padding.Bottom);
             }
             else
             {
                 container.BorderThickness = new Thickness(0, 0, 3, 0);
-                container.Padding = new Thickness(0, 0, -3, 0);
+                container.Padding = new Thickness(padding.Left, padding.Top, Math.Max(0, padding.Right - 3), padding.Bottom);
             }
         }
         else
@@ -2057,6 +2088,15 @@ public partial class FlyoutWindow : Window
                 {
                     psi = new ProcessStartInfo(path) { UseShellExecute = true };
                 }
+                else if (Directory.Exists(path))
+                {
+                    // A folder isn't a process — hand it to Explorer.
+                    psi = new ProcessStartInfo("explorer.exe")
+                    {
+                        Arguments = $"\"{path}\"",
+                        UseShellExecute = false
+                    };
+                }
                 else if (path.EndsWith(".bat", StringComparison.OrdinalIgnoreCase)
                       || path.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase))
                 {
@@ -2065,6 +2105,12 @@ public partial class FlyoutWindow : Window
                         Arguments = $"/c \"{path}\" {args}",
                         UseShellExecute = false
                     };
+                }
+                else if (IsDocumentPath(path))
+                {
+                    // A document has no launch semantics of its own — the shell picks the
+                    // handler. CreateProcess would just fail with "not a valid application".
+                    psi = new ProcessStartInfo(path) { UseShellExecute = true };
                 }
                 else
                 {
@@ -2082,6 +2128,23 @@ public partial class FlyoutWindow : Window
         {
             Logger.Error(ex, $"Failed to launch from flyout: {item.Name} ({item.Path})");
         }
+    }
+
+    /// <summary>
+    /// True for an existing file the OS wouldn't accept as an executable image. A bare name
+    /// like <c>notepad</c> is left alone — it resolves through PATH, not the filesystem.
+    /// </summary>
+    private static bool IsDocumentPath(string path)
+    {
+        var extension = System.IO.Path.GetExtension(path);
+        if (string.IsNullOrEmpty(extension))
+            return false;
+
+        if (extension.Equals(".exe", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".com", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return File.Exists(path);
     }
 
     private void ItemsListControl_ContextRequested(UIElement sender, ContextRequestedEventArgs e)
