@@ -53,6 +53,9 @@ public partial class FlyoutWindow : Window
     private const uint ShowAnimationDurationMs = 200;
     private const uint HideAnimationDurationMs = 160;
 
+    /// <summary>How long a warmed-up flyout stays parked off screen to compose its first frame.</summary>
+    private const int PreRenderDurationMs = 400;
+
     private static readonly NLog.Logger Logger = NLog.LogManager.GetCurrentClassLogger();
     private static readonly object BoundsFileLock = new();
     private static readonly ConcurrentDictionary<string, WindowBounds> CachedBounds = new(StringComparer.OrdinalIgnoreCase);
@@ -62,6 +65,10 @@ public partial class FlyoutWindow : Window
 
     private DateTime _lastDismissed = DateTime.MinValue;
     private bool _toolWindowStyleApplied;
+
+    /// <summary>True while the window is parked off screen composing its first frame.</summary>
+    private bool _isPreRendering;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _preRenderTimer;
     private int _lastItemsHash;
     private MainWindow? _owner;
     private LauncherItem? _dragItem;
@@ -198,6 +205,11 @@ public partial class FlyoutWindow : Window
             _instances[launcherId] = instance;
         }
 
+        // A pre-rendering flyout is visible only in the Win32 sense — it is parked off the
+        // desktop painting its first frame — so it must be taken down before the visibility
+        // check below, or opening it would be read as "already open" and toggle it shut.
+        instance.EndPreRender();
+
         if (instance._hwnd != IntPtr.Zero && IsWindow(instance._hwnd))
         {
             if (GetWindowLong(instance._hwnd, GWL_STYLE) != 0 &&
@@ -256,10 +268,63 @@ public partial class FlyoutWindow : Window
                 int exStyle = GetWindowLong(fw._hwnd, GWL_EXSTYLE);
                 SetWindowLong(fw._hwnd, GWL_EXSTYLE, exStyle | WS_EX_TOOLWINDOW);
                 fw._toolWindowStyleApplied = true;
-                ShowWindow(fw._hwnd, SW_HIDE);
+                fw.PreRenderOffScreen();
                 _instances[launcher.Id] = fw;
             }
         }
+    }
+
+    /// <summary>
+    /// Composes the window's first frame while it is parked outside the desktop, then hides it.
+    /// </summary>
+    /// <remarks>
+    /// Constructing a window is not enough to give it a rendered surface: WinUI only draws a
+    /// window that has actually been visible. Until then the DWM has nothing to present, so the
+    /// first show flashed the window's extended frame — a black rectangle — for the few frames
+    /// XAML took to lay out and paint. That first paint got slower as the flyout gained content
+    /// (per-column containers, hover and edit chrome), which is when the flash became visible.
+    ///
+    /// Parked at the virtual screen's origin minus the window's own size, so no part of it can
+    /// land on a real monitor whatever the display arrangement.
+    /// </remarks>
+    private void PreRenderOffScreen()
+    {
+        if (_hwnd == IntPtr.Zero || !IsWindow(_hwnd)) return;
+
+        double dpiScale = GetDpiForWindow(_hwnd) / 96.0;
+        if (dpiScale <= 0) dpiScale = 1.0;
+        int width = (int)Math.Ceiling(GetFlyoutWidth() * dpiScale);
+        int height = (int)Math.Ceiling(MeasureContentHeight() * dpiScale);
+
+        int left = GetSystemMetrics(SM_XVIRTUALSCREEN) - width - 64;
+        int top = GetSystemMetrics(SM_YVIRTUALSCREEN) - height - 64;
+
+        _isPreRendering = true;
+        SetWindowPos(_hwnd, 0, left, top, width, height,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+
+        _preRenderTimer = DispatcherQueue.CreateTimer();
+        _preRenderTimer.Interval = TimeSpan.FromMilliseconds(PreRenderDurationMs);
+        _preRenderTimer.IsRepeating = false;
+        _preRenderTimer.Tick += (_, _) => EndPreRender();
+        _preRenderTimer.Start();
+    }
+
+    /// <summary>
+    /// Takes the window back off screen after (or during) its warm-up render. Safe to call at
+    /// any time — every path that shows or hides the flyout goes through it first, so the
+    /// off-screen window can never be mistaken for an open one.
+    /// </summary>
+    private void EndPreRender()
+    {
+        if (!_isPreRendering) return;
+        _isPreRendering = false;
+
+        _preRenderTimer?.Stop();
+        _preRenderTimer = null;
+
+        if (_hwnd != IntPtr.Zero && IsWindow(_hwnd))
+            ShowWindow(_hwnd, SW_HIDE);
     }
 
     /// <summary>Destroys the flyout instance for a launcher that has been deleted.</summary>
@@ -279,6 +344,10 @@ public partial class FlyoutWindow : Window
     {
         if (_hwnd == IntPtr.Zero || !IsWindow(_hwnd))
             return;
+
+        // Takes down a warm-up render rather than animating it off screen; the visibility
+        // check below then returns, since there is nothing on screen to dismiss.
+        EndPreRender();
 
         if ((GetWindowLong(_hwnd, GWL_STYLE) & WS_VISIBLE) == 0)
             return;

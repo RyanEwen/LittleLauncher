@@ -148,10 +148,12 @@ public partial class FlyoutWindow
     /// </remarks>
     internal static void ShowInEditMode(MainWindow owner, string launcherId)
     {
+        // A flyout still warming up is visible off screen, not on it — Toggle brings it in.
         bool alreadyVisible =
             _instances.TryGetValue(launcherId, out var existing) &&
             existing._hwnd != IntPtr.Zero &&
             IsWindow(existing._hwnd) &&
+            !existing._isPreRendering &&
             (GetWindowLong(existing._hwnd, GWL_STYLE) & WS_VISIBLE) != 0;
 
         // Toggle would *close* an already-open flyout.

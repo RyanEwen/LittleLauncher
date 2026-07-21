@@ -212,6 +212,13 @@ public static partial class NativeMethods
     [DllImport("user32.dll")]
     internal static extern uint GetDoubleClickTime();
 
+    [LibraryImport("user32.dll")]
+    internal static partial int GetSystemMetrics(int nIndex);
+
+    // Virtual screen origin: the top-left of the bounding box around every monitor.
+    internal const int SM_XVIRTUALSCREEN = 76;
+    internal const int SM_YVIRTUALSCREEN = 77;
+
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool PostMessage(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);

@@ -42,6 +42,14 @@ before anything else, and log `Marshal.GetLastWin32Error()`.
 Prefer these over XAML borders when a window must not change layout: a `BorderThickness` insets
 content, whereas the DWM border costs nothing.
 
+## Off-screen parking
+
+`GetSystemMetrics(SM_XVIRTUALSCREEN / SM_YVIRTUALSCREEN)` gives the top-left of the box around
+every monitor. Park a window at that origin *minus its own size* when it must be visible to
+Windows but not to the user — `FlyoutWindow.PreRenderOffScreen` uses it to compose a window's
+first frame. Never use a hard-coded negative coordinate for this: monitors can be arranged to
+the left of or above the primary, so `-9999` is not reliably off screen.
+
 ## Constants & Enums
 
 - Win32 constants as `internal const int` or `internal const uint`
