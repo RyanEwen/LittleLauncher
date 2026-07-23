@@ -236,3 +236,11 @@ so set `e.Handled = true` to stop the enclosing group claiming the hover.
 7. **Column breaks are invisible** — they exist only as sentinel items in the flat list.
 8. **`_dragItem == null` means an external drag**, not a bug — don't "fix" a drag handler by
    early-returning on it without routing to the external-drop path.
+9. **Anything that tracks realised containers in a field must be cleared on rebuild.** The
+   `FlyoutWindow` instances are **permanent** (one per launcher in the static `_instances`
+   map), so a per-container collection that only ever grows pins every container — and its
+   native composition surface — for the life of the app. `_hoverWiredContainers` did exactly
+   this and leaked gigabytes over a day (the periodic auto-sync rebuilds the flyout every few
+   minutes). `RebuildColumnsPanel` now calls `ClearHoverWiring()` alongside
+   `_editStyledContainers.Clear()` / `_loadedIconChildLists.Clear()`; detach the pointer
+   handlers too, not just clear the set, so the WinRT event registrations release as well.

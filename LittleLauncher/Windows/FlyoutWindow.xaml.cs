@@ -1070,6 +1070,9 @@ public partial class FlyoutWindow : Window
         _syntheticGroups.Clear();
         // Containers are about to be discarded, so their saved edit styling is moot.
         _editStyledContainers.Clear();
+        // ...and their hover wiring, which otherwise pins every container ever realised
+        // (this window is permanent) — the root of a large native-memory leak.
+        ClearHoverWiring();
         if (IsIconMode)
             WrapUngroupedItemsIntoSyntheticGroups();
 
@@ -1161,14 +1164,22 @@ public partial class FlyoutWindow : Window
     /// Resets the cached items hash for a specific launcher so the next Toggle forces a full re-bind.
     /// Call after import, sync download, or any bulk item change.
     /// </summary>
-    internal static void InvalidateItems(string? launcherId = null)
+    /// <param name="force">
+    /// When true (the default, matching every prior caller), the flyout is rebuilt even if its
+    /// item hash is unchanged — required after an in-place icon-cache rewrite, where the file
+    /// content changed but <see cref="LauncherItem.IconPath"/> did not. Pass false from the
+    /// periodic auto-sync: the hash already covers every render-relevant field, so a no-op
+    /// download then skips the rebuild instead of tearing down and re-creating every container
+    /// on a timer (the churn that fed the container leak).
+    /// </param>
+    internal static void InvalidateItems(string? launcherId = null, bool force = true)
     {
         if (launcherId != null)
         {
 
             if (_instances.TryGetValue(launcherId, out var fw))
             {
-                fw._lastItemsHash = -1;
+                if (force) fw._lastItemsHash = -1;
                 fw.RebuildItemsIfNeeded();
                 fw.ResizeIfVisible();
             }
@@ -1182,7 +1193,7 @@ public partial class FlyoutWindow : Window
 
             foreach (var fw in _instances.Values)
             {
-                fw._lastItemsHash = -1;
+                if (force) fw._lastItemsHash = -1;
                 fw.RebuildItemsIfNeeded();
             }
             // Refresh all composite tray icons

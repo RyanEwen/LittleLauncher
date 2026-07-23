@@ -513,6 +513,29 @@ public partial class FlyoutWindow
     }
 
     /// <summary>
+    /// Detaches the hover pointer handlers from every wired container and forgets them.
+    /// Called from <c>RebuildColumnsPanel</c>, which discards all containers anyway.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="_hoverWiredContainers"/> lives on a <b>permanent</b> window instance (one per
+    /// launcher, held in the static <c>_instances</c> map) and every container realised in any
+    /// list is added to it. Nothing ever removed them, so the set — and the pointer handlers it
+    /// tracks, plus each orphaned container's native composition surface — pinned every
+    /// container ever created for the life of the app. Because the periodic auto-sync rebuilds
+    /// the flyout every few minutes, that leak grew without bound: tens of thousands of dead
+    /// <c>ListViewItem</c>/<c>GridViewItem</c> containers and gigabytes of native memory.
+    /// </remarks>
+    private void ClearHoverWiring()
+    {
+        foreach (var container in _hoverWiredContainers)
+        {
+            container.PointerEntered -= Container_PointerEnteredForEdit;
+            container.PointerExited -= Container_PointerExitedForEdit;
+        }
+        _hoverWiredContainers.Clear();
+    }
+
+    /// <summary>
     /// Gets the <see cref="LauncherItem"/> a container is displaying.
     /// </summary>
     /// <remarks>

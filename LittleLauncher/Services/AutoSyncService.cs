@@ -210,7 +210,9 @@ public static class AutoSyncService
                 Logger.Info($"Auto-sync ({trigger}): downloaded launchers");
                 App.MainDispatcherQueue.TryEnqueue(() =>
                 {
-                    Windows.FlyoutWindow.InvalidateItems();
+                    // force:false — a periodic download that changed nothing must not rebuild
+                    // every flyout's visual tree on a timer (that churn fed the container leak).
+                    Windows.FlyoutWindow.InvalidateItems(force: false);
                     MainWindow.Current?.RefreshTrayIcons();
                 });
             }
@@ -232,7 +234,9 @@ public static class AutoSyncService
             await SftpSyncService.SyncAllSharedLaunchersAsync();
             App.MainDispatcherQueue.TryEnqueue(() =>
             {
-                Windows.FlyoutWindow.InvalidateItems();
+                // force:false — this runs on every periodic tick; only rebuild when a shared
+                // launcher's items actually changed, not unconditionally (see InvalidateItems).
+                Windows.FlyoutWindow.InvalidateItems(force: false);
             });
             Logger.Info($"Shared launcher sync ({trigger}): complete");
         }
