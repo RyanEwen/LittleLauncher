@@ -91,23 +91,17 @@ The action uses `Return="check"` so the uninstall does not report completion unt
 - **VS C++ build tools** (incl. `VC.Tools.ARM64`) for the Native AOT companion. The script prepends the **VS Installer dir to `PATH`** when `vswhere.exe` isn't resolvable, because the ILCompiler targets shell out to `vswhere`; without it the native link fails with **exit code 123**.
 - **`-NoSign`** is Store mode: skips signing and leaves the Store `Identity`/`Publisher` intact for the Store to re-sign on ingestion. Without it, the manifest publisher is rewritten to the dev cert subject so `signtool` can sign locally.
 
-## Store releases are built locally
+## CI state: MSI/GitHub Release automated, Store submission manual
 
-**Both CI workflows currently fail at checkout** and have since at least v1.22.0:
+The `external/promo` private-submodule checkout failure is **fixed** — `build-msix.yml`
+(MSI + GitHub Release) runs clean on every `v*` tag again. Confirmed: v1.24.0 and v1.24.1
+both completed successfully and published GitHub Releases with the four artifacts
+(`LittleLauncher-{x64,ARM64}-Setup.msi` + `-portable.zip`). So a tag push automatically ships
+the MSI auto-update path; **nothing manual is needed for MSI users.**
 
-```
-fatal: repository 'https://github.com/RyanEwen/technicallyreal-promo.git/' not found
-fatal: clone of ... into submodule path 'external/promo' failed
-```
-
-The `external/promo` submodule is private and the default `GITHUB_TOKEN` cannot clone it, so
-`build-msix.yml` (MSI + GitHub Release) and `store-publish.yml` both die before building. Fixing
-it needs either a PAT with access to that repo, or `submodules: false` if the promo content is
-not required for a release build.
-
-Because of this, `store-publish.yml` is **manual-only** (`workflow_dispatch`) — its `v*` tag
-trigger was removed so tag pushes stop producing failed runs and a false impression that a
-submission happened. Store packages are built locally:
+**The Store, however, still can't be submitted from CI** — not because of checkout, but because
+the Azure AD credentials that gate `store-publish.yml`'s submission step are not currently
+working. So Store packages are built **locally** and uploaded by hand:
 
 ```powershell
 .\LittleLauncherMSIX\build-msix.ps1 -Platform x64   -NoSign
@@ -118,6 +112,10 @@ submission happened. Store packages are built locally:
 `msstore publish` takes a **single** package, which is why multi-arch must be bundled into one
 `.msixupload` — the same shape the workflow produces.
 
-## Microsoft Store auto-publish (CI — currently disabled)
+## Microsoft Store auto-publish (CI — blocked on Store credentials)
+
+The submission step below is gated on the `AZURE_AD_*` / `SELLER_ID` secrets, and those
+credentials are **not currently working**, so the automated Store submission does not happen —
+build the `.msixupload` locally and upload via Partner Center (see the section above).
 
 `.github/workflows/store-publish.yml` runs on every `v*` tag (and `workflow_dispatch`): it builds both `-NoSign` MSIX packages, zips them into a single `LittleLauncher.msixupload`, and submits a package update with the [Microsoft Store Developer CLI](https://learn.microsoft.com/windows/apps/publish/msstore-dev-cli/overview) (`microsoft/microsoft-store-apppublisher@v1.1` → `msstore reconfigure` → `msstore publish <upload> -id 9P3ZZBDQ6PJF`). `msstore publish` takes a **single** package, so multi-arch must be bundled into one `.msixupload`. The submission step is gated on the `AZURE_AD_TENANT_ID` / `AZURE_AD_APPLICATION_CLIENT_ID` / `AZURE_AD_APPLICATION_SECRET` / `SELLER_ID` secrets (skipped if unset; the `.msixupload` is still uploaded as an artifact). Microsoft supports this GitHub Actions update path for **free products only**. To stage a draft instead of committing, add `-nc`/`--noCommit` to the publish command. This is separate from `build-msix.yml`, which builds the MSI + GitHub Release.
