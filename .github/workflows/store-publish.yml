@@ -1,7 +1,22 @@
-name: Build Store package
+name: Validate Store packaging
 
-# Builds the unsigned MSIX packages (x64 + ARM64) and bundles them into a single
-# .msixupload, ready to be uploaded to Partner Center. The Store re-signs on ingestion.
+# Builds the unsigned MSIX packages (x64 + ARM64) to prove the Store packaging path still
+# works — manifest stamping, makepri, makeappx. It deliberately produces NO downloadable
+# output; the packages you actually submit are built locally.
+#
+# ── Why no artifact ──────────────────────────────────────────────────────────────
+# This repository is PUBLIC, and GitHub Actions artifacts only require *read* access to
+# download — which on a public repo means anyone. Uploading the Store build of a paid app
+# here published it. Do not add an upload-artifact step back.
+#
+# Build the packages you submit locally instead:
+#
+#   .\LittleLauncherMSIX\build-msix.ps1 -Platform x64   -NoSign
+#   .\LittleLauncherMSIX\build-msix.ps1 -Platform ARM64 -NoSign
+#
+# then upload the two individual .msix files in Partner Center. Do NOT bundle them into a
+# .msixupload — that container is what `msstore publish` consumes, and it does not upload
+# reliably through the Partner Center UI.
 #
 # ── Why this does NOT submit to the Store ────────────────────────────────────────
 # Little Launcher is a PAID product on Pricing Version 2, which rules out both
@@ -30,10 +45,6 @@ name: Build Store package
 # AZURE_AD_APPLICATION_SECRET) are currently unused for the reasons above. They and the
 # Entra app registration can stay for a future re-enable, or be deleted as unused
 # credentials — see LittleLauncherMSIX/set-store-secrets.ps1 to reload them.
-#
-# NOTE: the package is kept as a workflow ARTIFACT rather than attached to the public
-# GitHub Release, so the Store build of a paid app is not published for anonymous
-# download.
 
 on:
   push:
@@ -73,29 +84,15 @@ jobs:
             Write-Host "::endgroup::"
           }
 
-      - name: Bundle packages into .msixupload
+      # No upload-artifact step, by design — see this workflow's header. Public-repo
+      # artifacts are downloadable by anyone, and these are the Store build of a paid app.
+      - name: Verify packaging output
         shell: pwsh
         run: |
           $out = "$env:GITHUB_WORKSPACE\LittleLauncherMSIX\bin\msix-output"
-          $msix = @(Get-ChildItem "$out\LittleLauncher-*.msix")
+          $msix = @(Get-ChildItem "$out\LittleLauncher-*.msix" -ErrorAction SilentlyContinue)
           if ($msix.Count -lt 2) { throw "Expected 2 .msix files, found $($msix.Count)" }
-          $upload = "$out\LittleLauncher.msixupload"
-          if (Test-Path $upload) { Remove-Item $upload -Force }
-          # A .msixupload is a zip containing the per-architecture packages.
-          $zip = "$out\LittleLauncher-store.zip"
-          if (Test-Path $zip) { Remove-Item $zip -Force }
-          Compress-Archive -Path $msix.FullName -DestinationPath $zip -Force
-          Move-Item $zip $upload -Force
-          Write-Host "Created $upload"
-
-      - name: Upload .msixupload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Store-msixupload
-          path: LittleLauncherMSIX/bin/msix-output/LittleLauncher.msixupload
-          retention-days: 90
-
-      - name: Next steps
-        shell: pwsh
-        run: |
-          Write-Host "::notice title=Store package ready::Download the 'Store-msixupload' artifact from this run and upload it at https://partner.microsoft.com/dashboard — automated submission is not possible for a paid product on Pricing Version 2 (see this workflow's header)."
+          foreach ($m in $msix) {
+            "{0,-32} {1,8:N1} MB" -f $m.Name, ($m.Length / 1MB) | Write-Host
+          }
+          Write-Host "::notice title=Store packaging OK::Both architectures packaged. Build locally with build-msix.ps1 -NoSign and upload the two .msix files in Partner Center; nothing is published from CI."

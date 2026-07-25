@@ -100,19 +100,24 @@ both completed successfully and published GitHub Releases with the four artifact
 the MSI auto-update path; **nothing manual is needed for MSI users.**
 
 **The Store submission itself cannot be automated at all** — see the next section; it is a
-paid-product / Pricing Version 2 restriction, not a credential problem. CI does build the
-package: a `v*` tag runs `store-publish.yml`, which produces `LittleLauncher.msixupload` as a
-workflow artifact for a manual Partner Center upload. Building locally is only needed
-out-of-band:
+paid-product / Pricing Version 2 restriction, not a credential problem. **Store packages are
+built locally and never published from CI:**
 
 ```powershell
 .\LittleLauncherMSIX\build-msix.ps1 -Platform x64   -NoSign
 .\LittleLauncherMSIX\build-msix.ps1 -Platform ARM64 -NoSign
-# then zip both .msix into LittleLauncher.msixupload and upload via Partner Center
+# then upload the two .msix files individually in Partner Center
 ```
 
-`msstore publish` takes a **single** package, which is why multi-arch must be bundled into one
-`.msixupload` — the same shape the workflow produces.
+**Upload the individual `.msix` files, not a `.msixupload`.** The `.msixupload` container exists
+to give `msstore publish` a single file; it does not upload reliably through the Partner Center
+UI. Since `msstore` cannot be used for this product at all, there is no reason to produce one.
+
+**Never publish the Store build from CI.** This repository is public, and GitHub Actions
+artifacts only require *read* access to download — on a public repo, that is everyone. An earlier
+version of `store-publish.yml` uploaded the `.msixupload` as an artifact, which published the
+Store build of a paid app; those artifacts were deleted on 2026-07-25 and the step removed. The
+workflow now only *validates* that packaging still succeeds and produces no downloadable output.
 
 ## Automated Store submission is not possible for this product
 
@@ -132,10 +137,9 @@ automation is available — it is not, for this product.
 
 The Pricing Version 2 hazard is not theoretical: submission flows clone the previous submission
 and re-commit it, so an unknown pricing tier would be committed against a paid app in 240
-markets. **`store-publish.yml` therefore stops at building the package** — it runs on `v*` tags,
-bundles the `.msixupload`, and uploads it as a workflow **artifact** (not a public Release asset,
-so a paid app's Store build is not exposed for anonymous download). Upload it to Partner Center
-by hand.
+markets. **`store-publish.yml` therefore only validates that packaging still works** — it runs on
+`v*` tags, builds both architectures, and produces no downloadable output (see the public-artifact
+warning above). Build and upload the packages yourself.
 
 Re-evaluate only if Microsoft adds paid-product support to the msstore CLI, or the product moves
 off Pricing Version 2.
@@ -200,14 +204,29 @@ settings). Copy **Seller ID** / **Publisher ID** → `SELLER_ID`.
 .\LittleLauncherMSIX\set-store-secrets.ps1
 ```
 
-**Step 6 — verify with a draft before trusting it.** Run the workflow manually with
-`noCommit=true`; it stages a draft submission in Partner Center rather than shipping one. Only
-after that looks right should the `v*` tag trigger be restored (see the workflow header).
+**Step 6 — if the restriction ever lifts**, verify with a draft before trusting it: run the
+submission with `msstore publish ... -nc`, which stages a draft in Partner Center rather than
+shipping one, and confirm it in Partner Center before allowing an unattended run to commit.
 
-## Microsoft Store auto-publish (CI — blocked on Store credentials)
+## If Microsoft adds paid-product support
 
-The submission step below is gated on the `AZURE_AD_*` / `SELLER_ID` secrets, and those
-credentials are **not currently working**, so the automated Store submission does not happen —
-build the `.msixupload` locally and upload via Partner Center (see the section above).
+Microsoft's docs say paid products "will be supported in a future release" of the msstore CLI
+path. When that lands, re-enabling is small — the credentials and
+`LittleLauncherMSIX/set-store-secrets.ps1` already exist. Restore into
+`.github/workflows/store-publish.yml`:
 
-`.github/workflows/store-publish.yml` runs on every `v*` tag (and `workflow_dispatch`): it builds both `-NoSign` MSIX packages, zips them into a single `LittleLauncher.msixupload`, and submits a package update with the [Microsoft Store Developer CLI](https://learn.microsoft.com/windows/apps/publish/msstore-dev-cli/overview) (`microsoft/microsoft-store-apppublisher@v1.1` → `msstore reconfigure` → `msstore publish <upload> -id 9P3ZZBDQ6PJF`). `msstore publish` takes a **single** package, so multi-arch must be bundled into one `.msixupload`. The submission step is gated on the `AZURE_AD_TENANT_ID` / `AZURE_AD_APPLICATION_CLIENT_ID` / `AZURE_AD_APPLICATION_SECRET` / `SELLER_ID` secrets (skipped if unset; the `.msixupload` is still uploaded as an artifact). Microsoft supports this GitHub Actions update path for **free products only**. To stage a draft instead of committing, add `-nc`/`--noCommit` to the publish command. This is separate from `build-msix.yml`, which builds the MSI + GitHub Release.
+1. `SELLER_ID` (never set — the only missing secret).
+2. A bundling step: `msstore publish` takes a **single** file, so the two `.msix` must be zipped
+   into one `LittleLauncher.msixupload`. (That container is only for `msstore`; do not use it for
+   manual Partner Center uploads.)
+3. The submission steps: [`microsoft/microsoft-store-apppublisher@v1.1`](https://learn.microsoft.com/windows/apps/publish/msstore-dev-cli/overview)
+   → `msstore reconfigure --tenantId … --sellerId … --clientId … --clientSecret …`
+   → `msstore publish <upload> -id 9P3ZZBDQ6PJF`.
+4. Confirm the Entra app registration still holds the **Manager** role in Partner Center and the
+   client secret has not expired.
+
+Verify with `-nc` first (step 6 above). Still do **not** add an `upload-artifact` step — the
+public-repo exposure problem is independent of the submission question.
+
+This is separate from `build-msix.yml`, which builds the MSI + GitHub Release and is fully
+automated today.
