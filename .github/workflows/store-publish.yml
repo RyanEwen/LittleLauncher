@@ -4,32 +4,41 @@ name: Publish to Microsoft Store
 # .msixupload, and submits a package update to the Microsoft Store via the
 # Microsoft Store Developer CLI (msstore). The Store re-signs on ingestion.
 #
-# DISABLED for automatic runs: this pipeline is not fully configured (the Partner
-# Center secrets below are not set), so tag pushes were producing failed runs and no
-# submission. Store packages are built locally instead:
-#
-#   .\LittleLauncherMSIX\build-msix.ps1 -Platform x64   -NoSign
-#   .\LittleLauncherMSIX\build-msix.ps1 -Platform ARM64 -NoSign
-#
-# then both .msix files are zipped into a single .msixupload (see the bundling step
-# below) and uploaded to Partner Center by hand.
-#
-# To re-enable: configure the secrets, verify a manual workflow_dispatch run succeeds,
-# then restore the `push: tags: - 'v*'` trigger. The submission step only runs when the
-# secrets are present; otherwise it just uploads the .msixupload as an artifact.
+# MANUAL-ONLY until the Store credentials are configured. The build and bundling steps
+# work; only the final submission is blocked, because the four secrets below are not set
+# (the submission step is secret-gated — without them the run still succeeds and uploads
+# the .msixupload as an artifact for a manual Partner Center upload).
 #
 # Required repository secrets (Settings > Secrets and variables > Actions):
 #   AZURE_AD_TENANT_ID              Microsoft Entra tenant ID
 #   AZURE_AD_APPLICATION_CLIENT_ID  App registration (client/application) ID
 #   AZURE_AD_APPLICATION_SECRET     Client secret for that app registration
 #   SELLER_ID                       Partner Center seller / publisher ID
-# The Entra app must have the "Manager" role in Partner Center, and the Store app
-# must already be published. NOTE: Microsoft currently supports this GitHub Actions
-# update path for FREE products only.
+#
+# Load them without pasting into a shell:  .\LittleLauncherMSIX\set-store-secrets.ps1
+# Client secrets expire (24 months max) — rerun that script to rotate.
+#
+# Prerequisites: the Entra app registration must hold the "Manager" role in Partner
+# Center (Account settings > User management > Microsoft Entra applications), and the
+# Store app must already be published live.
+# NOTE: Microsoft supports this GitHub Actions update path for FREE products only.
+#
+# To enable automatic publishing on release tags:
+#   1. Set the four secrets (script above).
+#   2. Run this workflow manually with noCommit=true — it stages a DRAFT submission in
+#      Partner Center, so a misconfiguration can't ship anything live.
+#   3. Confirm the draft looks right in Partner Center, then discard or publish it.
+#   4. Add the tag trigger back:   on: { push: { tags: ['v*'] } }
+#      Tag runs commit the submission (noCommit only applies to manual runs).
 
 on:
   # Manual only — see the note above before adding a tag trigger back.
   workflow_dispatch:
+    inputs:
+      noCommit:
+        description: 'Stage the submission as a draft in Partner Center instead of committing it live'
+        type: boolean
+        default: true
 
 # A free product allows only one in-flight submission; serialize publishes.
 concurrency:
@@ -117,9 +126,16 @@ jobs:
       - name: Publish package update to the Microsoft Store
         if: steps.creds.outputs.configured == 'true'
         shell: pwsh
+        env:
+          # Tag pushes commit the submission; manual runs default to a draft so the very
+          # first verification can't accidentally ship a live submission.
+          NO_COMMIT: ${{ github.event_name == 'workflow_dispatch' && inputs.noCommit }}
         run: |
           $upload = "$env:GITHUB_WORKSPACE\LittleLauncherMSIX\bin\msix-output\LittleLauncher.msixupload"
-          # Commits a new submission with the updated packages. Add -nc/--noCommit
-          # to leave it as a draft in Partner Center for manual review instead.
-          msstore publish "$upload" -id $env:STORE_PRODUCT_ID
+          if ($env:NO_COMMIT -eq 'true') {
+            Write-Host "Draft mode (-nc): staging the submission without committing it."
+            msstore publish "$upload" -id $env:STORE_PRODUCT_ID -nc
+          } else {
+            msstore publish "$upload" -id $env:STORE_PRODUCT_ID
+          }
           if ($LASTEXITCODE -ne 0) { throw "msstore publish failed (exit $LASTEXITCODE)" }
