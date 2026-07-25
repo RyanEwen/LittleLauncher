@@ -1,56 +1,53 @@
-name: Publish to Microsoft Store
+name: Build Store package
 
-# Builds the unsigned MSIX packages (x64 + ARM64), bundles them into a single
-# .msixupload, and submits a package update to the Microsoft Store via the
-# Microsoft Store Developer CLI (msstore). The Store re-signs on ingestion.
+# Builds the unsigned MSIX packages (x64 + ARM64) and bundles them into a single
+# .msixupload, ready to be uploaded to Partner Center. The Store re-signs on ingestion.
 #
-# MANUAL-ONLY until the Store credentials are configured. The build and bundling steps
-# work; only the final submission is blocked, because the four secrets below are not set
-# (the submission step is secret-gated — without them the run still succeeds and uploads
-# the .msixupload as an artifact for a manual Partner Center upload).
+# ── Why this does NOT submit to the Store ────────────────────────────────────────
+# Little Launcher is a PAID product on Pricing Version 2, which rules out both
+# automated submission paths Microsoft offers:
 #
-# Required repository secrets (Settings > Secrets and variables > Actions):
-#   AZURE_AD_TENANT_ID              Microsoft Entra tenant ID
-#   AZURE_AD_APPLICATION_CLIENT_ID  App registration (client/application) ID
-#   AZURE_AD_APPLICATION_SECRET     Client secret for that app registration
-#   SELLER_ID                       Partner Center seller / publisher ID
+#   1. msstore CLI / microsoft-store-apppublisher action
+#      Supported for FREE products only. Paid products are explicitly unsupported.
+#      https://learn.microsoft.com/windows/apps/publish/msstore-dev-cli/github-actions
 #
-# Load them without pasting into a shell:  .\LittleLauncherMSIX\set-store-secrets.ps1
-# Client secrets expire (24 months max) — rerun that script to rotate.
+#   2. Microsoft Store submission API (manage.devcenter.microsoft.com, StoreBroker)
+#      Cannot be used with products on "Pricing Version 2" — it returns an unknown
+#      tier for pricing. Little Launcher is on Pricing Version 2 (confirmed: the
+#      "Review price per market" button is present under Pricing and availability).
+#      Submission flows clone the previous submission and re-commit it, so an unknown
+#      pricing tier would be committed against a paid app across 240 markets.
+#      https://learn.microsoft.com/windows/uwp/monetize/create-and-manage-submissions-using-windows-store-services
 #
-# Prerequisites: the Entra app registration must hold the "Manager" role in Partner
-# Center (Account settings > User management > Microsoft Entra applications), and the
-# Store app must already be published live.
-# NOTE: Microsoft supports this GitHub Actions update path for FREE products only.
+# There is a third API (api.store.microsoft.com) that does support PAID pricing, but
+# it covers MSI/EXE installers only — not MSIX — so it does not apply here.
 #
-# To enable automatic publishing on release tags:
-#   1. Set the four secrets (script above).
-#   2. Run this workflow manually with noCommit=true — it stages a DRAFT submission in
-#      Partner Center, so a misconfiguration can't ship anything live.
-#   3. Confirm the draft looks right in Partner Center, then discard or publish it.
-#   4. Add the tag trigger back:   on: { push: { tags: ['v*'] } }
-#      Tag runs commit the submission (noCommit only applies to manual runs).
+# So this workflow stops at producing the package. Download the artifact and upload it
+# in Partner Center by hand. Re-evaluate if Microsoft adds paid-product support to the
+# msstore CLI, or if the product moves off Pricing Version 2.
+#
+# The Store credential secrets (AZURE_AD_TENANT_ID, AZURE_AD_APPLICATION_CLIENT_ID,
+# AZURE_AD_APPLICATION_SECRET) are currently unused for the reasons above. They and the
+# Entra app registration can stay for a future re-enable, or be deleted as unused
+# credentials — see LittleLauncherMSIX/set-store-secrets.ps1 to reload them.
+#
+# NOTE: the package is kept as a workflow ARTIFACT rather than attached to the public
+# GitHub Release, so the Store build of a paid app is not published for anonymous
+# download.
 
 on:
-  # Manual only — see the note above before adding a tag trigger back.
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
-    inputs:
-      noCommit:
-        description: 'Stage the submission as a draft in Partner Center instead of committing it live'
-        type: boolean
-        default: true
 
-# A free product allows only one in-flight submission; serialize publishes.
 concurrency:
-  group: store-publish
+  group: store-package
   cancel-in-progress: false
 
 jobs:
-  store:
+  package:
     runs-on: windows-2025
-    env:
-      # Microsoft Store product ID (from https://apps.microsoft.com/detail/9p3zzbdq6pjf)
-      STORE_PRODUCT_ID: 9P3ZZBDQ6PJF
 
     steps:
       - name: Checkout
@@ -96,46 +93,9 @@ jobs:
         with:
           name: Store-msixupload
           path: LittleLauncherMSIX/bin/msix-output/LittleLauncher.msixupload
+          retention-days: 90
 
-      - name: Check Store credentials
-        id: creds
-        shell: bash
-        env:
-          TENANT: ${{ secrets.AZURE_AD_TENANT_ID }}
-        run: |
-          if [ -n "$TENANT" ]; then
-            echo "configured=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "Store credentials not configured — skipping submission (artifact still uploaded)."
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Setup Microsoft Store Developer CLI
-        if: steps.creds.outputs.configured == 'true'
-        uses: microsoft/microsoft-store-apppublisher@v1.1
-
-      - name: Configure msstore credentials
-        if: steps.creds.outputs.configured == 'true'
-        run: >
-          msstore reconfigure
-          --tenantId ${{ secrets.AZURE_AD_TENANT_ID }}
-          --sellerId ${{ secrets.SELLER_ID }}
-          --clientId ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
-          --clientSecret ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
-
-      - name: Publish package update to the Microsoft Store
-        if: steps.creds.outputs.configured == 'true'
+      - name: Next steps
         shell: pwsh
-        env:
-          # Tag pushes commit the submission; manual runs default to a draft so the very
-          # first verification can't accidentally ship a live submission.
-          NO_COMMIT: ${{ github.event_name == 'workflow_dispatch' && inputs.noCommit }}
         run: |
-          $upload = "$env:GITHUB_WORKSPACE\LittleLauncherMSIX\bin\msix-output\LittleLauncher.msixupload"
-          if ($env:NO_COMMIT -eq 'true') {
-            Write-Host "Draft mode (-nc): staging the submission without committing it."
-            msstore publish "$upload" -id $env:STORE_PRODUCT_ID -nc
-          } else {
-            msstore publish "$upload" -id $env:STORE_PRODUCT_ID
-          }
-          if ($LASTEXITCODE -ne 0) { throw "msstore publish failed (exit $LASTEXITCODE)" }
+          Write-Host "::notice title=Store package ready::Download the 'Store-msixupload' artifact from this run and upload it at https://partner.microsoft.com/dashboard — automated submission is not possible for a paid product on Pricing Version 2 (see this workflow's header)."

@@ -95,9 +95,11 @@ both completed successfully and published GitHub Releases with the four artifact
 (`LittleLauncher-{x64,ARM64}-Setup.msi` + `-portable.zip`). So a tag push automatically ships
 the MSI auto-update path; **nothing manual is needed for MSI users.**
 
-**The Store, however, still can't be submitted from CI** — not because of checkout, but because
-the Azure AD credentials that gate `store-publish.yml`'s submission step are not currently
-working. So Store packages are built **locally** and uploaded by hand:
+**The Store submission itself cannot be automated at all** — see the next section; it is a
+paid-product / Pricing Version 2 restriction, not a credential problem. CI does build the
+package: a `v*` tag runs `store-publish.yml`, which produces `LittleLauncher.msixupload` as a
+workflow artifact for a manual Partner Center upload. Building locally is only needed
+out-of-band:
 
 ```powershell
 .\LittleLauncherMSIX\build-msix.ps1 -Platform x64   -NoSign
@@ -108,11 +110,41 @@ working. So Store packages are built **locally** and uploaded by hand:
 `msstore publish` takes a **single** package, which is why multi-arch must be bundled into one
 `.msixupload` — the same shape the workflow produces.
 
+## Automated Store submission is not possible for this product
+
+**Settled — do not re-litigate without new information from Microsoft.** Little Launcher is a
+**paid** Store product on **Pricing Version 2** (confirmed: the "Review price per market" button
+is present under Pricing and availability; base price $0.99 across 240 markets). That rules out
+both submission automation paths:
+
+| Path | Blocked by |
+|---|---|
+| `msstore` CLI / `microsoft-store-apppublisher` action | [Free products only](https://learn.microsoft.com/windows/apps/publish/msstore-dev-cli/github-actions) — paid explicitly unsupported |
+| Store submission API (`manage.devcenter.microsoft.com`) / StoreBroker | [Unusable on Pricing Version 2](https://learn.microsoft.com/windows/uwp/monetize/create-and-manage-submissions-using-windows-store-services) — returns an *unknown tier* for pricing |
+
+A third API (`api.store.microsoft.com`) *does* support `PAID` pricing, but covers **MSI/EXE
+installers only, not MSIX**, so it does not apply. It is easy to land on that doc and conclude
+automation is available — it is not, for this product.
+
+The Pricing Version 2 hazard is not theoretical: submission flows clone the previous submission
+and re-commit it, so an unknown pricing tier would be committed against a paid app in 240
+markets. **`store-publish.yml` therefore stops at building the package** — it runs on `v*` tags,
+bundles the `.msixupload`, and uploads it as a workflow **artifact** (not a public Release asset,
+so a paid app's Store build is not exposed for anonymous download). Upload it to Partner Center
+by hand.
+
+Re-evaluate only if Microsoft adds paid-product support to the msstore CLI, or the product moves
+off Pricing Version 2.
+
+The Entra credentials described below are consequently **unused**. They are kept because they
+cost nothing and would be needed on a re-enable; delete the app registration's client secret if
+you would rather not leave a dormant credential.
+
 ## Runbook: creating the Store publishing credentials
 
-The four secrets `store-publish.yml` needs come from a Microsoft Entra **app registration** that
-Partner Center has been told to trust. Walk this once to enable automation, and again whenever
-the client secret expires (Entra caps them at 24 months).
+The secrets come from a Microsoft Entra **app registration** that Partner Center has been told to
+trust. Currently unused (see above), but this is the procedure if the restriction ever lifts —
+and the client secret expires after 24 months regardless.
 
 **Step 0 — do you have a tenant?** Partner Center → gear icon → **Account settings** →
 **Tenants**. Store dev accounts opened with a personal Microsoft account often have **none**,
@@ -145,6 +177,15 @@ error and nothing else explains why. → `AZURE_AD_APPLICATION_SECRET`.
 rights, and the one most often missed. Partner Center → **Account settings** →
 **User management** → **Microsoft Entra applications** → add the app registration from step 1 and
 assign it the **Manager** role. Without this, authentication succeeds and submission is refused.
+
+Note there are three distinct "roles" here and they are easy to conflate — the one that matters
+is the middle row:
+
+| Role | Where | Governs |
+|---|---|---|
+| Your user's Partner Center role | Account settings → User management → **Users** | your own dashboard access |
+| **The app registration's role** | Account settings → User management → **Microsoft Entra applications** | **API publishing rights — must be Manager** |
+| Your directory role | entra.microsoft.com | whether you can create app registrations at all |
 
 **Step 4 — seller ID.** Partner Center → **Account settings** → **Identifiers** (or Developer
 settings). Copy **Seller ID** / **Publisher ID** → `SELLER_ID`.
