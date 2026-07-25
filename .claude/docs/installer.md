@@ -108,6 +108,57 @@ working. So Store packages are built **locally** and uploaded by hand:
 `msstore publish` takes a **single** package, which is why multi-arch must be bundled into one
 `.msixupload` — the same shape the workflow produces.
 
+## Runbook: creating the Store publishing credentials
+
+The four secrets `store-publish.yml` needs come from a Microsoft Entra **app registration** that
+Partner Center has been told to trust. Walk this once to enable automation, and again whenever
+the client secret expires (Entra caps them at 24 months).
+
+**Step 0 — do you have a tenant?** Partner Center → gear icon → **Account settings** →
+**Tenants**. Store dev accounts opened with a personal Microsoft account often have **none**,
+and nothing else works without one.
+
+- No tenant → **Create a new Microsoft Entra ID tenant** right there (free, and the button is on
+  that same page). This becomes the tenant that owns the app registration.
+- Tenant already listed → note its domain and continue.
+
+**Step 1 — register the app.** [entra.microsoft.com](https://entra.microsoft.com) →
+**Entra ID** → **App registrations** → **New registration**.
+
+- Name: anything (e.g. `LittleLauncher Store Publisher`).
+- Supported account types: **Single tenant**.
+- **Redirect URI: leave blank.** This is a daemon/service credential — there is no interactive
+  sign-in, so a redirect URI is not used.
+- **Do not add any API permissions.** This is the step people over-do: publishing rights do *not*
+  come from Graph scopes, they come from the Partner Center role in step 3. An app with Graph
+  permissions and no Partner Center role still gets denied.
+
+From the app's **Overview**, copy **Application (client) ID** → `AZURE_AD_APPLICATION_CLIENT_ID`,
+and **Directory (tenant) ID** → `AZURE_AD_TENANT_ID`.
+
+**Step 2 — client secret.** In that app → **Certificates & secrets** → **New client secret**.
+Copy the **Value** column (not "Secret ID") **immediately** — it is never shown again. Set a
+calendar reminder for the expiry date; an expired secret fails the publish step with an auth
+error and nothing else explains why. → `AZURE_AD_APPLICATION_SECRET`.
+
+**Step 3 — authorize it in Partner Center.** This is the step that actually grants publishing
+rights, and the one most often missed. Partner Center → **Account settings** →
+**User management** → **Microsoft Entra applications** → add the app registration from step 1 and
+assign it the **Manager** role. Without this, authentication succeeds and submission is refused.
+
+**Step 4 — seller ID.** Partner Center → **Account settings** → **Identifiers** (or Developer
+settings). Copy **Seller ID** / **Publisher ID** → `SELLER_ID`.
+
+**Step 5 — load the secrets** (values go over stdin, never into shell history):
+
+```powershell
+.\LittleLauncherMSIX\set-store-secrets.ps1
+```
+
+**Step 6 — verify with a draft before trusting it.** Run the workflow manually with
+`noCommit=true`; it stages a draft submission in Partner Center rather than shipping one. Only
+after that looks right should the `v*` tag trigger be restored (see the workflow header).
+
 ## Microsoft Store auto-publish (CI — blocked on Store credentials)
 
 The submission step below is gated on the `AZURE_AD_*` / `SELLER_ID` secrets, and those
