@@ -23,6 +23,15 @@ public static partial class NativeMethods
     /// <summary>Window does not take foreground focus when clicked — used by floating toolbars.</summary>
     internal const int WS_EX_NOACTIVATE = 0x08000000;
 
+    /// <summary>
+    /// Window composites through a per-window alpha value. Required before
+    /// <see cref="SetLayeredWindowAttributes"/> will do anything.
+    /// </summary>
+    internal const int WS_EX_LAYERED = 0x00080000;
+
+    /// <summary>Tells <see cref="SetLayeredWindowAttributes"/> to use the alpha argument.</summary>
+    internal const uint LWA_ALPHA = 0x00000002;
+
     // Window Event Hook Constants
     internal const uint EVENT_OBJECT_DESTROY = 0x8001;
     internal const uint EVENT_OBJECT_LOCATIONCHANGE = 0x800B;
@@ -214,6 +223,15 @@ public static partial class NativeMethods
 
     [LibraryImport("user32.dll")]
     internal static partial int GetSystemMetrics(int nIndex);
+
+    /// <summary>
+    /// Sets a layered window's per-window alpha. The window must already have
+    /// <see cref="WS_EX_LAYERED"/>, and <paramref name="dwFlags"/> must include
+    /// <see cref="LWA_ALPHA"/> for <paramref name="bAlpha"/> to be honoured.
+    /// </summary>
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool SetLayeredWindowAttributes(IntPtr hWnd, uint crKey, byte bAlpha, uint dwFlags);
 
     // Virtual screen origin: the top-left of the bounding box around every monitor.
     internal const int SM_XVIRTUALSCREEN = 76;

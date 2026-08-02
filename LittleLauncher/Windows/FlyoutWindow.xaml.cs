@@ -53,6 +53,19 @@ public partial class FlyoutWindow : Window
     private const uint ShowAnimationDurationMs = 200;
     private const uint HideAnimationDurationMs = 160;
 
+    /// <summary>
+    /// Fraction of the hide animation over which the flyout fades out, so the fade is complete
+    /// before the window is taken off screen.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately less than 1. Fading right up to the final frame leaves the window still
+    /// faintly visible when it parks — with ~8ms ticks the last painted alpha lands wherever the
+    /// cadence happens to fall — so the content would wink out instead of finishing its fade.
+    /// Completing early means the last stretch of the slide is already fully transparent and the
+    /// park is guaranteed to be invisible.
+    /// </remarks>
+    private const double FadeOutCompleteAt = 0.8;
+
     /// <summary>How long a warmed-up flyout stays parked off screen to compose its first frame.</summary>
     private const int PreRenderDurationMs = 400;
 
@@ -75,6 +88,9 @@ public partial class FlyoutWindow : Window
     /// <c>WS_VISIBLE</c>, is the test for "the flyout is open".
     /// </summary>
     private bool _isOpen;
+
+    /// <summary>True while <c>WS_EX_LAYERED</c> is applied for a fade. See <see cref="SetFadeAlpha"/>.</summary>
+    private bool _fadeStyleApplied;
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _preRenderTimer;
     private int _lastItemsHash;
     private MainWindow? _owner;
@@ -349,6 +365,10 @@ public partial class FlyoutWindow : Window
     {
         _isOpen = false;
 
+        // The hide fade leaves the window transparent; clearing it here means every path back on
+        // screen starts opaque, without each having to remember.
+        ClearFade();
+
         if (_hwnd == IntPtr.Zero || !IsWindow(_hwnd)) return;
 
         GetWindowRect(_hwnd, out var rect);
@@ -429,6 +449,10 @@ public partial class FlyoutWindow : Window
         _isShowing = true;
         _isOpen = true;
 
+        // A hide interrupted mid-fade never reached ParkOffScreen, so the window can still be
+        // part-transparent here.
+        ClearFade();
+
         SetWindowPos(_hwnd, 0, placement.Left, placement.Top, placement.Width, placement.Height,
             SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
         SetForegroundWindow(_hwnd);
@@ -449,6 +473,11 @@ public partial class FlyoutWindow : Window
             startTop = rect.Top;
 
         _isOpen = true;
+
+        // Re-opening while a hide is still fading out would otherwise slide a part-transparent
+        // (or fully invisible) window back in — the animation version bump below only stops the
+        // fade, it does not undo it.
+        ClearFade();
 
         int animationVersion = ++_animationVersion;
 
@@ -489,6 +518,9 @@ public partial class FlyoutWindow : Window
             double eased = hideAtEnd ? EaseOutExit(progress) : EaseOutCubic(progress);
             int currentTop = (int)Math.Round(Lerp(startTop, endTop, eased));
 
+            if (hideAtEnd)
+                SetFadeAlpha(1 - Math.Min(1, progress / FadeOutCompleteAt));
+
             SetWindowPos(_hwnd, 0, left, currentTop, width, height,
                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
 
@@ -519,6 +551,51 @@ public partial class FlyoutWindow : Window
         {
             _isShowing = false;
         }
+    }
+
+    /// <summary>
+    /// Sets the window's overall opacity for the hide animation, so it fades as it slides.
+    /// </summary>
+    /// <remarks>
+    /// Without this the flyout was fully opaque at the end of its travel and then simply stopped
+    /// existing — the eye is still tracking a moving object when it is cut, which reads as an
+    /// abrupt snap however smooth the slide itself is.
+    ///
+    /// Per-window alpha (<c>WS_EX_LAYERED</c> + <c>LWA_ALPHA</c>) rather than XAML opacity: the
+    /// flyout's acrylic comes from a <c>SystemBackdrop</c>, which sits behind the XAML tree and
+    /// so is untouched by <c>RootGrid.Opacity</c> — fading the content alone would leave the
+    /// backdrop pane behind as a solid rectangle, which is the same abrupt cut one layer down.
+    ///
+    /// <c>ClearFade</c> must run before the window is shown again: the alpha is a window-level
+    /// property that survives being parked, so a flyout re-opened after a fade would come back
+    /// invisible.
+    /// </remarks>
+    private void SetFadeAlpha(double opacity)
+    {
+        if (_hwnd == IntPtr.Zero || !IsWindow(_hwnd)) return;
+
+        if (!_fadeStyleApplied)
+        {
+            int exStyle = GetWindowLong(_hwnd, GWL_EXSTYLE);
+            SetWindowLong(_hwnd, GWL_EXSTYLE, exStyle | WS_EX_LAYERED);
+            _fadeStyleApplied = true;
+        }
+
+        byte alpha = (byte)Math.Clamp(Math.Round(opacity * 255), 0, 255);
+        SetLayeredWindowAttributes(_hwnd, 0, alpha, LWA_ALPHA);
+    }
+
+    /// <summary>Restores full opacity and drops the layered style. See <see cref="SetFadeAlpha"/>.</summary>
+    private void ClearFade()
+    {
+        if (!_fadeStyleApplied) return;
+        _fadeStyleApplied = false;
+
+        if (_hwnd == IntPtr.Zero || !IsWindow(_hwnd)) return;
+
+        SetLayeredWindowAttributes(_hwnd, 0, 255, LWA_ALPHA);
+        int exStyle = GetWindowLong(_hwnd, GWL_EXSTYLE);
+        SetWindowLong(_hwnd, GWL_EXSTYLE, exStyle & ~WS_EX_LAYERED);
     }
 
     private int GetSlideDistancePx()

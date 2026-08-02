@@ -52,6 +52,21 @@ its composition surfaces instead of re-rasterising on the next open. Never use a
 negative coordinate for this: monitors can be arranged to the left of or above the primary, so
 `-9999` is not reliably off screen.
 
+## Per-window opacity
+
+`SetLayeredWindowAttributes(hwnd, 0, alpha, LWA_ALPHA)` fades a whole window, but only once
+`WS_EX_LAYERED` is on its ex-style. `FlyoutWindow.SetFadeAlpha` / `ClearFade` use it for the
+hide animation.
+
+Use this rather than XAML opacity whenever a window has a `SystemBackdrop`: the backdrop is
+composited *behind* the XAML tree, so `RootGrid.Opacity` fades the content but leaves the
+acrylic pane behind as a solid rectangle. Verified working alongside `DesktopAcrylicBackdrop` —
+the acrylic fades with the rest of the window.
+
+The alpha is window state and **survives being parked off screen**, so any path that puts the
+window back on screen has to clear it first or the flyout returns invisible. `ParkOffScreen`
+and `ShowAnimated`/`ShowWithoutAnimation` all call `ClearFade` for that reason.
+
 ## Constants & Enums
 
 - Win32 constants as `internal const int` or `internal const uint`
