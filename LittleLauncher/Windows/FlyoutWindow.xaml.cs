@@ -486,7 +486,7 @@ public partial class FlyoutWindow : Window
             }
 
             double progress = Math.Clamp(stopwatch.Elapsed.TotalMilliseconds / durationMs, 0, 1);
-            double eased = hideAtEnd ? EaseInCubic(progress) : EaseOutCubic(progress);
+            double eased = hideAtEnd ? EaseOutExit(progress) : EaseOutCubic(progress);
             int currentTop = (int)Math.Round(Lerp(startTop, endTop, eased));
 
             SetWindowPos(_hwnd, 0, left, currentTop, width, height,
@@ -539,9 +539,26 @@ public partial class FlyoutWindow : Window
         return 1 - (inverse * inverse * inverse);
     }
 
-    private static double EaseInCubic(double progress)
+    /// <summary>
+    /// Exit curve for the hide slide: accelerates away, but with a linear floor so that even the
+    /// first frames move.
+    /// </summary>
+    /// <remarks>
+    /// This was a pure cubic ease-in, which stalls at the start — and the flyout only travels
+    /// <see cref="SlideDistanceDip"/> (~54px at 150% scale) in <see cref="HideAnimationDurationMs"/>.
+    /// Over that little distance a cubic quantises to nothing: measured, the first five frames
+    /// (~30ms) all rounded to the same pixel, so the close sat still and then lurched away at
+    /// ~7px per frame before the window cut out. That read as choppy even though the animation
+    /// loop itself was ticking cleanly at ~8ms.
+    ///
+    /// The linear term keeps every frame's step above a pixel; the quadratic term keeps the
+    /// accelerating-away character an exit wants. Any easing used here has to be checked against
+    /// the *pixel* deltas, not just the curve shape — a curve that looks smooth mathematically
+    /// can still round to a stationary window over a short slide.
+    /// </remarks>
+    private static double EaseOutExit(double progress)
     {
-        return progress * progress * progress;
+        return (0.35 * progress) + (0.65 * progress * progress);
     }
 
     private AppWindow GetAppWindow()
