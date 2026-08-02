@@ -68,6 +68,13 @@ public partial class FlyoutWindow : Window
 
     /// <summary>True while the window is parked off screen composing its first frame.</summary>
     private bool _isPreRendering;
+
+    /// <summary>
+    /// True while the flyout is placed on screen for the user. The window itself stays visible
+    /// in the Win32 sense even when dismissed — see <see cref="ParkOffScreen"/> — so this, not
+    /// <c>WS_VISIBLE</c>, is the test for "the flyout is open".
+    /// </summary>
+    private bool _isOpen;
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _preRenderTimer;
     private int _lastItemsHash;
     private MainWindow? _owner;
@@ -205,20 +212,14 @@ public partial class FlyoutWindow : Window
             _instances[launcherId] = instance;
         }
 
-        // A pre-rendering flyout is visible only in the Win32 sense — it is parked off the
-        // desktop painting its first frame — so it must be taken down before the visibility
-        // check below, or opening it would be read as "already open" and toggle it shut.
+        // Ends the warm-up render, if one is still running, so the window is free to be placed.
         instance.EndPreRender();
 
-        if (instance._hwnd != IntPtr.Zero && IsWindow(instance._hwnd))
+        if (instance._isOpen && instance._hwnd != IntPtr.Zero && IsWindow(instance._hwnd))
         {
-            if (GetWindowLong(instance._hwnd, GWL_STYLE) != 0 &&
-                (GetWindowLong(instance._hwnd, GWL_STYLE) & WS_VISIBLE) != 0)
-            {
-                if (!instance._isHiding)
-                    instance.HideFlyout();
-                return;
-            }
+            if (!instance._isHiding)
+                instance.HideFlyout();
+            return;
         }
 
         if (!instance._isHiding && (DateTime.UtcNow - instance._lastDismissed).TotalMilliseconds < 300)
@@ -275,7 +276,7 @@ public partial class FlyoutWindow : Window
     }
 
     /// <summary>
-    /// Composes the window's first frame while it is parked outside the desktop, then hides it.
+    /// Composes the window's first frame while it is parked outside the desktop.
     /// </summary>
     /// <remarks>
     /// Constructing a window is not enough to give it a rendered surface: WinUI only draws a
@@ -285,7 +286,10 @@ public partial class FlyoutWindow : Window
     /// (per-column containers, hover and edit chrome), which is when the flash became visible.
     ///
     /// Parked at the virtual screen's origin minus the window's own size, so no part of it can
-    /// land on a real monitor whatever the display arrangement.
+    /// land on a real monitor whatever the display arrangement. The window then *stays* parked
+    /// there for the life of the app whenever the flyout is dismissed — see
+    /// <see cref="ParkOffScreen"/> — so this warm-up is the only time it has to compose from
+    /// nothing.
     /// </remarks>
     private void PreRenderOffScreen()
     {
@@ -311,9 +315,8 @@ public partial class FlyoutWindow : Window
     }
 
     /// <summary>
-    /// Takes the window back off screen after (or during) its warm-up render. Safe to call at
-    /// any time — every path that shows or hides the flyout goes through it first, so the
-    /// off-screen window can never be mistaken for an open one.
+    /// Ends the warm-up render. The window stays parked off screen rather than being hidden —
+    /// see <see cref="ParkOffScreen"/>.
     /// </summary>
     private void EndPreRender()
     {
@@ -322,9 +325,41 @@ public partial class FlyoutWindow : Window
 
         _preRenderTimer?.Stop();
         _preRenderTimer = null;
+    }
 
-        if (_hwnd != IntPtr.Zero && IsWindow(_hwnd))
-            ShowWindow(_hwnd, SW_HIDE);
+    /// <summary>
+    /// Moves the window outside the virtual screen instead of hiding it, and marks it closed.
+    /// </summary>
+    /// <remarks>
+    /// The flyout used to be dismissed with <c>ShowWindow(SW_HIDE)</c>. Hiding a WinUI window
+    /// lets its composition surfaces be released, so the next show had to re-rasterise the whole
+    /// visual tree — every text run and every item icon — before anything could be presented.
+    /// Measured on a cold open, that took ~100ms, during which the window was already on screen
+    /// and sliding: the flyout slid in as an empty rectangle and the items all popped in at the
+    /// end. Re-opening within a second or so was fine, because the surfaces were still resident;
+    /// that is why this only ever looked broken in normal use, where opens are seconds apart.
+    ///
+    /// Keeping the window visible but off the virtual screen keeps those surfaces alive, so a
+    /// show is a pure move and the first on-screen frame is already fully painted.
+    ///
+    /// <c>_isOpen</c> — not <c>WS_VISIBLE</c> — is now what "the flyout is open" means, since the
+    /// window is visible in the Win32 sense for the whole life of the app.
+    /// </remarks>
+    private void ParkOffScreen()
+    {
+        _isOpen = false;
+
+        if (_hwnd == IntPtr.Zero || !IsWindow(_hwnd)) return;
+
+        GetWindowRect(_hwnd, out var rect);
+        int width = Math.Max(1, rect.Right - rect.Left);
+        int height = Math.Max(1, rect.Bottom - rect.Top);
+
+        int left = GetSystemMetrics(SM_XVIRTUALSCREEN) - width - 64;
+        int top = GetSystemMetrics(SM_YVIRTUALSCREEN) - height - 64;
+
+        SetWindowPos(_hwnd, 0, left, top, width, height,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
     }
 
     /// <summary>Destroys the flyout instance for a launcher that has been deleted.</summary>
@@ -345,14 +380,14 @@ public partial class FlyoutWindow : Window
         if (_hwnd == IntPtr.Zero || !IsWindow(_hwnd))
             return;
 
-        // Takes down a warm-up render rather than animating it off screen; the visibility
-        // check below then returns, since there is nothing on screen to dismiss.
+        // Ends a warm-up render rather than animating it off screen; the check below then
+        // returns, since a warming window was never on screen to dismiss.
         EndPreRender();
 
-        if ((GetWindowLong(_hwnd, GWL_STYLE) & WS_VISIBLE) == 0)
+        if (!_isOpen)
             return;
 
-        // Closing ends editing, so the flyout never reopens mid-edit and the hidden-window
+        // Closing ends editing, so the flyout never reopens mid-edit and the off-screen
         // measure path never has to account for edit chrome.
         if (_isEditMode)
         {
@@ -370,7 +405,7 @@ public partial class FlyoutWindow : Window
         {
             _isShowing = false;
             _isHiding = false;
-            ShowWindow(_hwnd, SW_HIDE);
+            ParkOffScreen();
             return;
         }
 
@@ -392,6 +427,7 @@ public partial class FlyoutWindow : Window
         _animationVersion++;
         _isHiding = false;
         _isShowing = true;
+        _isOpen = true;
 
         SetWindowPos(_hwnd, 0, placement.Left, placement.Top, placement.Width, placement.Height,
             SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
@@ -406,9 +442,13 @@ public partial class FlyoutWindow : Window
         _isHiding = false;
         _isShowing = true;
 
+        // Only an already-open flyout continues from where it is; a parked one starts from the
+        // placement's off-edge position, since its parked rect is nowhere near the screen.
         int startTop = placement.StartTop;
-        if ((GetWindowLong(_hwnd, GWL_STYLE) & WS_VISIBLE) != 0 && GetWindowRect(_hwnd, out var rect))
+        if (_isOpen && GetWindowRect(_hwnd, out var rect))
             startTop = rect.Top;
+
+        _isOpen = true;
 
         int animationVersion = ++_animationVersion;
 
@@ -472,7 +512,7 @@ public partial class FlyoutWindow : Window
 
         if (hideAtEnd)
         {
-            ShowWindow(_hwnd, SW_HIDE);
+            ParkOffScreen();
             _isHiding = false;
         }
         else
@@ -1133,16 +1173,16 @@ public partial class FlyoutWindow : Window
     /// Resizes the window to its rebuilt content, but only while it is on screen.
     /// </summary>
     /// <remarks>
-    /// A hidden flyout resizes on its next <c>Toggle</c>, which is what <c>InvalidateItems</c>
+    /// A dismissed flyout resizes on its next <c>Toggle</c>, which is what <c>InvalidateItems</c>
     /// historically relied on. Edit mode pins the flyout open, so a change made from launcher
     /// settings — view mode or icon density especially — would otherwise rebuild the content
-    /// without ever resizing the window around it. Measuring a hidden window is fatal, hence
-    /// the visibility check.
+    /// without ever resizing the window around it. Resizing a parked window would fight the
+    /// placement the next <c>Toggle</c> computes, hence the open check.
     /// </remarks>
     private void ResizeIfVisible()
     {
         if (_hwnd == IntPtr.Zero || !IsWindow(_hwnd)) return;
-        if ((GetWindowLong(_hwnd, GWL_STYLE) & WS_VISIBLE) == 0) return;
+        if (!_isOpen) return;
 
         if (_isEditMode)
             ResizeForEditChrome();

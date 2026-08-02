@@ -148,13 +148,13 @@ public partial class FlyoutWindow
     /// </remarks>
     internal static void ShowInEditMode(MainWindow owner, string launcherId)
     {
-        // A flyout still warming up is visible off screen, not on it — Toggle brings it in.
+        // A dismissed or still-warming flyout is visible off screen, not on it — Toggle brings
+        // it in. `_isOpen` is what distinguishes the two; see FlyoutWindow.ParkOffScreen.
         bool alreadyVisible =
             _instances.TryGetValue(launcherId, out var existing) &&
             existing._hwnd != IntPtr.Zero &&
             IsWindow(existing._hwnd) &&
-            !existing._isPreRendering &&
-            (GetWindowLong(existing._hwnd, GWL_STYLE) & WS_VISIBLE) != 0;
+            existing._isOpen;
 
         // Toggle would *close* an already-open flyout.
         if (!alreadyVisible)
@@ -364,7 +364,7 @@ public partial class FlyoutWindow
     private void RestoreFlyoutActivation()
     {
         if (_hwnd == IntPtr.Zero || !IsWindow(_hwnd)) return;
-        if ((GetWindowLong(_hwnd, GWL_STYLE) & WS_VISIBLE) == 0) return;
+        if (!_isOpen) return;
 
         try { SetForegroundWindow(_hwnd); } catch { /* foreground can be refused */ }
     }

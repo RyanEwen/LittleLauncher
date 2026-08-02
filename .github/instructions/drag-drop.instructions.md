@@ -61,6 +61,11 @@ forcing a layout pass on a window hidden via `ShowWindow(SW_HIDE)` while another
 is active causes a fatal `ExecutionEngineException`. Do not "fix" this by calling
 `UpdateLayout()`.
 
+> The flyout is no longer hidden at all — dismissing it now parks it off the virtual screen
+> (`ParkOffScreen`, see `ARCHITECTURE.md`) so its composition surfaces survive. That removes the
+> crash *hazard*, but the arithmetic stays: the reasons below are about correctness, not the
+> crash, and a dismissed window is still the wrong thing to measure.
+
 **Compute, don't measure.** Three separate height bugs came from measuring: a "learned" chrome
 constant that fed its own output back into the arithmetic and grew without bound; a
 `ContentStack` measure taken straight after a rebuild, before the new containers were laid out;

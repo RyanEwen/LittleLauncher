@@ -51,8 +51,10 @@ content, whereas the DWM border costs nothing.
 `GetSystemMetrics(SM_XVIRTUALSCREEN / SM_YVIRTUALSCREEN)` gives the top-left of the box around
 every monitor. Park a window at that origin *minus its own size* when it must be visible to
 Windows but not to the user — `FlyoutWindow.PreRenderOffScreen` uses it to compose a window's
-first frame. Never use a hard-coded negative coordinate for this: monitors can be arranged to
-the left of or above the primary, so `-9999` is not reliably off screen.
+first frame, and `FlyoutWindow.ParkOffScreen` uses it for every dismissal, so the flyout keeps
+its composition surfaces instead of re-rasterising on the next open. Never use a hard-coded
+negative coordinate for this: monitors can be arranged to the left of or above the primary, so
+`-9999` is not reliably off screen.
 
 ## Constants & Enums
 
