@@ -57,7 +57,11 @@ This is the whole point of the feature, so it is the thing not to regress.
 - **Focus loss must be verified, not trusted.** The browser's HWNDs are children of the window, so
   clicking into the page raises `Deactivated` without the user having gone anywhere. The handler
   re-checks `GetForegroundWindow()` against the window and `IsChild` on the next dispatcher turn,
-  and only then dismisses.
+  and only then dismisses. **Every dismissal condition is re-checked in that callback**, not just
+  the ones read when the event fired — pin, modal and resize state can all change in the turn
+  between deciding and acting, and a condition evaluated at one moment and acted on at another is
+  how a pinned flyout gets dismissed anyway. There is a standing report of exactly that which
+  neither of us could reproduce afterwards; this closes the only gap the code actually had.
 - **The first show of a window's life is not animated.** WinUI has never drawn it, so it would
   present its extended frame — a black rectangle — for the frames XAML takes to paint. The flyout
   hides this by pre-rendering off screen at startup; a web launcher must not, so it takes the plain

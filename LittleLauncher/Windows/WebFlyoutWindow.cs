@@ -1754,7 +1754,14 @@ public sealed class WebFlyoutWindow : Window
         // foreground window once the switch has settled rather than trusting the event alone.
         DispatcherQueue.TryEnqueue(() =>
         {
-            if (!_isOpen || _isShowing) return;
+            // Re-checked, not just checked above. The decision to dismiss is made here, one
+            // dispatcher turn after the event that prompted it, and the state can have moved on
+            // in between — a pin toggled, a modal opened, a resize begun. Evaluating a condition
+            // at one moment and acting on it at another is exactly how a pinned flyout ends up
+            // dismissed anyway.
+            if (!_isOpen || _isShowing || _isHiding) return;
+            if (_launcher.WebPinFlyout || _isModalOpen || _isResizing) return;
+
             var foreground = GetForegroundWindow();
             if (foreground == _hwnd || IsChild(_hwnd, foreground)) return;
             HideFlyout();
