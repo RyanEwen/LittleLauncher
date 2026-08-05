@@ -42,6 +42,19 @@ before anything else, and log `Marshal.GetLastWin32Error()`.
 Prefer these over XAML borders when a window must not change layout: a `BorderThickness` insets
 content, whereas the DWM border costs nothing.
 
+**A window that fills the screen must turn its corners off** — `DWMWCP_DONOTROUND` while it does,
+`DWMWCP_ROUND` again afterwards. Rounded corners are a flyout affordance; on a screen-filling
+window they cut the corners off the content, which on a fullscreen video is very visible.
+`WebFlyoutWindow.ApplyFullScreen` does this alongside clearing its content inset, because both
+otherwise read as a border around the page.
+
+## Sizing to a monitor
+
+`MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)` + `GetMonitorInfo` is how a window grows to
+the screen it is already on rather than the primary one. Take the bounds from the right field:
+`rcWork` excludes the taskbar and is what a flyout should be clamped into, while `rcMonitor` is
+the whole screen and is what fullscreen means — a fullscreen video covers the taskbar.
+
 ## Off-screen parking
 
 `GetSystemMetrics(SM_XVIRTUALSCREEN / SM_YVIRTUALSCREEN)` gives the top-left of the box around
