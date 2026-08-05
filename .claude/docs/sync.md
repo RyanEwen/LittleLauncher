@@ -444,10 +444,33 @@ PKCE and the loopback redirect.
 7. Publish the consent screen. While it is in *Testing*, only accounts added as test users can
    sign in and refresh tokens expire after 7 days
 
-### Testing without editing source
+### Where the credentials live
 
-Both providers read env-var overrides first, so a second registration can be pointed at without
-touching the file:
+Client **IDs** are in `CloudSyncCredentials.cs` and committed. They appear in every auth request
+URL and are not secrets.
+
+The Google **client secret is not in the repository**, because this repo is public and git history
+cannot be unpublished. It comes from an untracked `local.secrets.props` at the repo root:
+
+```xml
+<Project>
+  <PropertyGroup>
+    <GoogleClientSecret>GOCSPX-...</GoogleClientSecret>
+  </PropertyGroup>
+</Project>
+```
+
+`Directory.Build.props` imports it when present, `LittleLauncher.csproj` turns each property into
+an `AssemblyMetadata` attribute, and `CloudSyncCredentials.BuildValue` reads it back at runtime.
+
+**An environment variable cannot do this job for a shipped build** — it is a runtime lookup, and
+an end user has no such variable set. Anything that must reach real users has to be compiled in.
+The env-var overrides below still exist, but only for pointing a developer machine at a second
+registration.
+
+**A fresh clone and CI have no such file, and that is the intended state:** Google Drive reports
+itself unconfigured rather than failing at sign-in with something unexplainable. Keep a copy of
+the file somewhere safe, because it cannot be recovered from the repository.
 
 ```
 LITTLELAUNCHER_ONEDRIVE_CLIENT_ID

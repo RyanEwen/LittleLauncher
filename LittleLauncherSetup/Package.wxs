@@ -1,10 +1,10 @@
-<?xml version="1.0" encoding="UTF-8"?>
+﻿<?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
   xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
 
   <!-- Version is injected by the build: -d ProductVersion=1.0.0.0 -->
   <?ifndef ProductVersion ?>
-    <?define ProductVersion = "1.25.0.0" ?>
+    <?define ProductVersion = "1.26.0.0" ?>
   <?endif ?>
 
   <Package Name="Little Launcher"
