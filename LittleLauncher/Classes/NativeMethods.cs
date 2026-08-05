@@ -271,22 +271,6 @@ public static partial class NativeMethods
     internal static partial IntPtr GetForegroundWindow();
 
     /// <summary>
-    /// Releases the mouse capture so a window can be handed to the system's own move loop.
-    /// </summary>
-    /// <remarks>
-    /// Paired with <c>SendMessage(WM_NCLBUTTONDOWN, HTCAPTION)</c>: that makes Windows drag a
-    /// borderless window as though the pointer were on a title bar it does not have. The message
-    /// is synchronous — it returns when the user lets go — so the resulting position can be read
-    /// straight after the call.
-    /// </remarks>
-    [LibraryImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    internal static partial bool ReleaseCapture();
-
-    internal const uint WM_NCLBUTTONDOWN = 0x00A1;
-    internal static readonly IntPtr HTCAPTION = new(2);
-
-    /// <summary>
     /// True when <paramref name="hWnd"/> is a descendant of <paramref name="hWndParent"/>.
     /// </summary>
     /// <remarks>

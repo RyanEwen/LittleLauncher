@@ -1111,6 +1111,23 @@ public sealed class LauncherSettingsWindow : Window
         };
         var pinRow = BuildRow("Pin Open", "Stay on screen when you click elsewhere, instead of dismissing like a flyout", pinToggle);
 
+        // ── Remember position ───────────────────────────────────
+        var rememberToggle = new ToggleSwitch { IsOn = launcher.WebRememberPosition, OnContent = "", OffContent = "", MinWidth = 0 };
+        rememberToggle.Toggled += (_, _) =>
+        {
+            launcher.WebRememberPosition = rememberToggle.IsOn;
+
+            // Dropping the remembered position on the way out, so turning this off actually
+            // returns the flyout to the tray rather than leaving it parked where it last was.
+            if (!rememberToggle.IsOn) launcher.WebFlyoutPosition = "";
+
+            SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
+        };
+        var rememberRow = BuildRow("Remember Position",
+            "Keep this flyout where you drag it; otherwise a move lasts until you close it",
+            rememberToggle);
+
         // ── Sign-out / clear data ───────────────────────────────
         var clearButton = new Button { Content = "Clear" };
         clearButton.Click += async (_, _) =>
@@ -1136,7 +1153,7 @@ public sealed class LauncherSettingsWindow : Window
 
         // ── Advanced ────────────────────────────────────────────
         var advancedPanel = new StackPanel { Spacing = 12 };
-        foreach (var row in new[] { zoomRow, policyRow, idleRow, reloadRow, pinRow, clearRow })
+        foreach (var row in new[] { zoomRow, policyRow, idleRow, reloadRow, pinRow, rememberRow, clearRow })
             advancedPanel.Children.Add(row);
 
         var advanced = new Expander

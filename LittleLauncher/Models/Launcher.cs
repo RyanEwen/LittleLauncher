@@ -328,7 +328,18 @@ public partial class Launcher : ObservableObject
     public partial string WebDefaultBookmarkUrl { get; set; } = "";
 
     /// <summary>
-    /// Screen position a pinned web flyout was last moved to, as "x,y" in physical pixels.
+    /// Keep a moved flyout where it was put, across dismissals and restarts.
+    /// </summary>
+    /// <remarks>
+    /// Off by default, which makes a move temporary: it holds while the flyout stays open, and
+    /// the next one anchors to the tray again. Some moves are "shove it aside for a minute" and
+    /// some are "this lives here now", and only the user knows which.
+    /// </remarks>
+    [ObservableProperty]
+    public partial bool WebRememberPosition { get; set; }
+
+    /// <summary>
+    /// Screen position a web flyout was last moved to, as "x,y" in physical pixels.
     /// Empty means it has never been moved and should anchor to the tray as usual.
     /// </summary>
     /// <remarks>

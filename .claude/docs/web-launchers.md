@@ -255,8 +255,6 @@ way the user remembers them.
 Each web launcher gets `%AppData%\LittleLauncher\WebProfiles\{launcherId}` as its WebView2 user-data
 folder (via `MainWindow.GetPhysicalAppDataDir()`, so it survives MSIX VFS redirection). That is what
 keeps a dashboard signed in across restarts, and keeps two launchers signed in as different users.
-"Clear browsing data" in launcher settings calls `CoreWebView2.Profile.ClearBrowsingDataAsync()`
-when the flyout is loaded, and deletes the folder when it is not.
 
 ## Settings that must default to zero / false
 
