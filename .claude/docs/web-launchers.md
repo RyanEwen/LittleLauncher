@@ -6,7 +6,7 @@
 # Web Launchers
 
 A launcher whose `Kind` is `LauncherKinds.Web` opens `WebFlyoutWindow` instead of `FlyoutWindow`:
-a tray-anchored WebView2 on `Launcher.WebUrl`. The motivating case is a Home Assistant dashboard —
+a tray-anchored WebView2 on `Launcher.WebUrl`, or on a bar of bookmarks (see below). The motivating case is a Home Assistant dashboard —
 camera cards and an agenda, one tray click away, and costing nothing while it is not being looked at.
 
 ## Routing — never branch on kind at the call site
@@ -122,6 +122,97 @@ Two mechanisms, doing different jobs:
   `SettingsManager.RaiseUpgradeNotices`). Store updates install silently, so this is the only
   channel that reaches those users; a Windows toast would not, because `AppNotificationManager`
   is registered for unpackaged builds only.
+
+## Bookmark bars
+
+A web launcher shows either **one address** or **a bar of bookmarks**, chosen explicitly with
+`Launcher.WebUseBookmarks`. It is a stored choice, not one inferred from how many bookmarks exist:
+inferring it meant adding a second bookmark silently changed what the tray icon did, and deleting
+one changed it back.
+
+In bar mode the flyout opens as just the bar — a strip along the bottom, browser-style: 16px icon,
+label beside it, centred, scrolling horizontally when there are more than fit. Clicking a bookmark
+expands the flyout onto that page; clicking the one already showing collapses it again.
+
+| State | Window | Browser |
+|---|---|---|
+| Collapsed | Bar height only | None — nothing loads until a bookmark is picked |
+| Expanded | Full configured height | Loaded, showing the active bookmark |
+
+**What opens on show**, in priority order: the bookmark that was open when it was last dismissed,
+then `WebDefaultBookmarkUrl`, then nothing (just the bar). Collapsing clears the remembered
+bookmark — that is an explicit "close this page", and reopening onto something just closed is the
+wrong kind of memory. The default is stored as a URL rather than an index, so reordering the bar
+cannot silently change which page opens, and empty naturally means "none".
+
+Collapsing is treated as hidden for the browser: it gets the same `ApplyHiddenPolicy` as a
+dismissal rather than being left running behind a bar.
+
+### `CurrentTargetUrl` is the only answer to "which URL"
+
+Bar mode added a second possible answer — the active bookmark — beside `Launcher.WebUrl`, and
+**three** separate places navigate. Two of them were missed when the bar was added, and both
+produced the same confusing pair of symptoms: the wrong page opened, *and* the bookmark that was
+clicked took the wrong page's icon, because the arriving page's favicon is adopted onto whatever
+bookmark is active.
+
+- `CreateWebViewAsync` — the first click after the browser has been torn down
+- `PrepareContentAsync` — every subsequent click
+- `ApplyLauncherChanges` — anything that touches the launcher, **including a bookmark's own
+  favicon fetch completing**, which is how it recurred with no user action at all
+
+All three now call `CurrentTargetUrl()`. An empty result means the bar is collapsed with nothing
+open, which is not an instruction to navigate anywhere. If a fourth navigation path is ever added,
+it must use the same helper.
+
+Icon adoption independently checks that the loaded page's host matches the bookmark's before
+writing (`SameHost`). A wrong page is obvious; a wrong icon persists and looks like data
+corruption.
+
+### Geometry: reveal, do not animate
+
+Expansion **snaps**. Two attempts at animating it were removed, for a reason worth not
+rediscovering: a window hosting a browser cannot be smoothly resized frame by frame, because the
+window frame, the XAML island's surface and WebView2's composition surface are resized by
+different parts of the system and do not land on the same frame. The content lags the frame and
+appears to drift downwards while the window grows upwards, however the geometry is eased.
+
+Two things make the snap look deliberate:
+
+- `ApplyRootAnchor` pins the root grid to the anchored edge (`Bottom`, or `Top` for a flyout under
+  a top taskbar) and gives it a **fixed height equal to the expanded size**. The layout is then
+  computed once and never reflows; the window simply uncovers more of it. Re-applied after a
+  manual resize, which changes that height.
+- The anchored edge never moves, so the bar stays exactly under the pointer that clicked it.
+
+The open/close slide is untouched — that moves a fixed-size window, which has none of this
+problem.
+
+### Warm-up
+
+Bar-mode launchers **are** warmed up (`WebFlyoutWindow.WarmUp`), parked off screen at bar height
+so WinUI composes their first frame before they are ever shown — otherwise the first open showed
+buttons measuring and favicons decoding on screen. This does not weaken the resource promise: what
+is built is a strip of XAML, and no browser is created until a bookmark is clicked.
+
+Single-address web launchers are still excluded — their first frame *is* the page, so there would
+be nothing to pre-render but an empty window.
+
+The bar is also only rebuilt when the bookmarks actually change, keyed on a signature of their
+names, URLs and icon paths. Rebuilding per open threw away laid-out buttons and decoded icons
+every time.
+
+### Resuming shows a stale frame
+
+Suspending does not discard the rendered page: resuming puts the last painted frame straight back
+on screen. With **Reload On Open** set, that meant watching the old page appear and then be
+replaced. When a reload or navigation is queued the browser is therefore kept hidden and the
+loading state shown until `NavigationCompleted` — hiding stops rendering, not loading, so the
+navigation still runs. Failed navigations, `ProcessFailed` and unloading all clear that pending
+reveal, or the flyout would sit on a spinner over a hidden page.
+
+With nothing queued the page is shown immediately. A dashboard repainting a moment later is the
+page updating itself, not a stale frame.
 
 ## Settings layout
 

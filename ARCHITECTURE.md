@@ -90,6 +90,12 @@ Measured end to end: opening the flyout started six `msedgewebview2` processes, 
 suspended, and the idle timer returned the process count to exactly its pre-open baseline. Reopening
 after that rebuilds from nothing and lands at the same anchored position.
 
+A web launcher can also hold a set of bookmarks instead of a single address, in which case the
+flyout opens as a browser-style bar along the bottom and expands onto whichever bookmark is
+clicked — several web launchers in one tray icon. Expansion snaps rather than animating; see
+[.claude/docs/web-launchers.md](.claude/docs/web-launchers.md) for why, and for the single-source
+rule that keeps "which URL is showing" answerable in one place.
+
 The flyout is resized by dragging its edges — invisible XAML grips, since a window with no
 non-client area has no system sizing border to grab — and the dragged size is persisted onto the
 launcher. Its header gear opens `LauncherSettingsWindow` under the same modal contract the item

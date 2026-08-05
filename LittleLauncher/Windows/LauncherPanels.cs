@@ -55,6 +55,11 @@ internal static class LauncherPanels
     public static void WarmUp(MainWindow owner, IEnumerable<Launcher> launchers)
     {
         FlyoutWindow.WarmUp(owner, launchers.Where(l => !l.IsWebLauncher));
+
+        // Bar-mode web launchers warm up too — the bar is XAML, not a browser. A single-address
+        // web launcher still builds nothing: its first frame is the page, so there would be
+        // nothing to pre-render but an empty window.
+        WebFlyoutWindow.WarmUp(owner, launchers.Where(l => l.HasWebBookmarkBar));
     }
 
     private static bool IsWebLauncher(string launcherId) =>
