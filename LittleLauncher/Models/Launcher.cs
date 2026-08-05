@@ -4,6 +4,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using System;
 using System.Collections.ObjectModel;
+using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -302,9 +303,56 @@ public partial class Launcher : ObservableObject
     [ObservableProperty]
     public partial bool WebPinFlyout { get; set; }
 
+    /// <summary>
+    /// When true this web launcher shows a bookmark bar; when false it opens
+    /// <see cref="WebUrl"/> directly.
+    /// </summary>
+    /// <remarks>
+    /// An explicit choice rather than one inferred from how many bookmarks exist. Inferring it
+    /// meant adding a second bookmark silently changed what the tray icon did, and removing one
+    /// changed it back.
+    /// </remarks>
+    [ObservableProperty]
+    public partial bool WebUseBookmarks { get; set; }
+
+    /// <summary>
+    /// The bookmark opened as soon as the flyout is shown. Empty means none — the flyout opens
+    /// as just the bar, and nothing loads until a bookmark is picked.
+    /// </summary>
+    /// <remarks>
+    /// Held as a URL rather than an index so reordering the bar cannot silently change which
+    /// page opens, and so the CLR default (empty) means "none" under
+    /// <c>WhenWritingDefault</c> rather than accidentally meaning "the first one".
+    /// </remarks>
+    [ObservableProperty]
+    public partial string WebDefaultBookmarkUrl { get; set; } = "";
+
+    /// <summary>Bookmarks shown as a bar along the bottom of the web flyout.</summary>
+    public ObservableCollection<WebBookmark> WebBookmarks { get; set; } = [];
+
     /// <summary>True when this launcher opens a web flyout rather than an item flyout.</summary>
     [JsonIgnore]
     public bool IsWebLauncher => LauncherKinds.IsWeb(Kind);
+
+    /// <summary>
+    /// True when the flyout should open as a bookmark bar rather than straight into a page.
+    /// </summary>
+    [JsonIgnore]
+    public bool HasWebBookmarkBar => IsWebLauncher && WebUseBookmarks && WebBookmarks.Count > 0;
+
+    /// <summary>The bookmark to open on show, or null when the flyout should open as just the bar.</summary>
+    [JsonIgnore]
+    public WebBookmark? DefaultWebBookmark =>
+        string.IsNullOrWhiteSpace(WebDefaultBookmarkUrl)
+            ? null
+            : WebBookmarks.FirstOrDefault(b => string.Equals(b.Url, WebDefaultBookmarkUrl, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// The address a web launcher opens when it is not showing a bar: its single bookmark if it
+    /// has exactly one, otherwise <see cref="WebUrl"/>.
+    /// </summary>
+    [JsonIgnore]
+    public string ResolvedSingleWebUrl => WebUrl;
 
     /// <summary>
     /// The launcher items (shortcuts, groups, headings, column breaks) in this launcher.

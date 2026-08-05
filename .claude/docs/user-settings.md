@@ -114,7 +114,14 @@ model default, which would have flipped it on for every existing launcher.
 - `WebIdleUnloadMinutes` (`int`) — 0 means the default; read `ResolvedWebIdleUnloadMinutes`
 - `WebReloadOnShow` (`bool`) — re-fetch on every open
 - `WebPinFlyout` (`bool`) — stay open when focus is lost
-- `IsWebLauncher` — `[JsonIgnore]` convenience over `Kind`
+- `WebUseBookmarks` (`bool`) — bar of bookmarks instead of a single address. Defaults `false`, so
+  the safe direction under `WhenWritingDefault`
+- `WebDefaultBookmarkUrl` (`string`) — which bookmark opens with the flyout; empty means none, and
+  it is a URL rather than an index so reordering cannot change what opens
+- `WebBookmarks` (`ObservableCollection<WebBookmark>`) — the bar's entries. `WebBookmark`
+  (`Models/WebBookmark.cs`) is `Name` + `Url` + `IconPath`, observable because the icon arrives
+  after the bookmark does
+- `IsWebLauncher` / `HasWebBookmarkBar` / `DefaultWebBookmark` — `[JsonIgnore]` conveniences
 
 **Why every one of those defaults to 0 / false:** `WhenWritingDefault` omits a property holding the
 CLR default, so a non-zero field initialiser is silently restored on the next load. Numeric settings
