@@ -1,4 +1,5 @@
 using LittleLauncher.Classes.Settings;
+using static LittleLauncher.Classes.NativeMethods;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -268,7 +269,43 @@ public static class UpdateService
 
             var updates = await context.GetAppAndOptionalStorePackageUpdatesAsync();
             if (updates.Count == 0)
-                return (false, "No updates are currently available in the Microsoft Store.");
+            {
+                // Nothing to download can mean genuinely up to date, or that Windows already
+                // staged the update in the background and is waiting for this app to exit.
+                // GetAppAndOptionalStorePackageUpdatesAsync stops listing a package once it is
+                // staged, so the two are indistinguishable from here. Offering the restart is
+                // the useful move either way: it costs a relaunch if wrong, and completes a
+                // stuck update if right.
+                return (false,
+                    "No download is pending. If an update was already downloaded in the "
+                    + "background, restart Little Launcher to finish installing it.");
+            }
+
+            // ── Download first, install second ───────────────────────────
+            // These two have opposite requirements and must not be a single call.
+            // RequestDownloadStorePackageUpdatesAsync runs while the app is in use and does not
+            // block, which is the only place real progress can come from. Installing needs every
+            // process in the package to exit. Calling the combined API from a tray app that
+            // never closes hides the download behind a wait that cannot resolve, which is why
+            // this used to sit on "waiting to close app" showing nothing at all.
+            var download = context.RequestDownloadStorePackageUpdatesAsync(updates);
+            download.Progress = (_, status) =>
+                progress?.Report(Math.Clamp(status.PackageDownloadProgress, 0.0, 1.0));
+
+            var downloadResult = await download;
+            if (downloadResult.OverallState is not (StorePackageUpdateState.Completed
+                or StorePackageUpdateState.Deploying))
+            {
+                return (false, DescribeStoreUpdateState(downloadResult.OverallState, downloadResult));
+            }
+
+            progress?.Report(1.0);
+
+            // The install cannot finish while we are running, so ask Windows to bring us back
+            // afterwards and then get out of the way. RegisterApplicationRestart has to be in
+            // place before shutdown begins; MainWindow sets it at startup, and reasserting it
+            // here means a relaunch still happens if that call was missed or overwritten.
+            RegisterApplicationRestart("--silent", 0);
 
             var operation = context.RequestDownloadAndInstallStorePackageUpdatesAsync(updates);
             operation.Progress = (_, status) =>
@@ -285,6 +322,11 @@ public static class UpdateService
             return result.OverallState switch
             {
                 StorePackageUpdateState.Completed => (true, SchedulePackagedRelaunchAfterExit()),
+
+                // Bytes are down and the install is queued behind our exit. That is success from
+                // here: reporting it as a failure would leave the user pressing a button that
+                // has already done its job.
+                StorePackageUpdateState.Deploying => (true, SchedulePackagedRelaunchAfterExit()),
                 StorePackageUpdateState.Canceled => (false, "Update was cancelled in the Microsoft Store dialog."),
                 StorePackageUpdateState.ErrorLowBattery => (false, "Update paused because the device battery is too low."),
                 StorePackageUpdateState.ErrorWiFiRecommended => (false, "Update was paused because a non-metered connection is recommended."),
@@ -332,6 +374,21 @@ public static class UpdateService
     {
         return new Version(version.Major, version.Minor, version.Build, version.Revision);
     }
+
+    /// <summary>
+    /// One place mapping a Store update state to something worth showing the user, so the
+    /// download and install halves cannot describe the same condition differently.
+    /// </summary>
+    private static string DescribeStoreUpdateState(
+        StorePackageUpdateState state, StorePackageUpdateResult result) => state switch
+    {
+        StorePackageUpdateState.Canceled => "Update was cancelled in the Microsoft Store dialog.",
+        StorePackageUpdateState.ErrorLowBattery => "Update paused because the device battery is too low.",
+        StorePackageUpdateState.ErrorWiFiRecommended => "Update was paused because a non-metered connection is recommended.",
+        StorePackageUpdateState.ErrorWiFiRequired => "Update requires Wi-Fi before the Microsoft Store can continue.",
+        StorePackageUpdateState.OtherError => BuildStoreUpdateErrorMessage(result),
+        _ => "The Microsoft Store could not download the update.",
+    };
 
     private static string BuildStoreUpdateErrorMessage(StorePackageUpdateResult result)
     {
