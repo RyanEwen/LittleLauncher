@@ -68,6 +68,39 @@ public static class AutoSyncService
     }
 
     /// <summary>
+    /// <summary>
+    /// True while the user is in the middle of editing launchers, and a download would pull the
+    /// rug out from under them.
+    /// </summary>
+    /// <remarks>
+    /// The pending-changes flag alone is not enough. It is only raised once something has been
+    /// saved, so the window between "started creating a launcher" and "finished" was unguarded —
+    /// and a download in that window deletes anything the server has never seen, which is exactly
+    /// what a half-made launcher is. Creating one repeatedly failed for that reason: it vanished
+    /// mid-edit.
+    /// </remarks>
+    private static bool IsUserEditingLaunchers()
+    {
+        try
+        {
+            if (SettingsWindow.GetCurrent() != null) return true;
+            if (Windows.LauncherSettingsWindow.OpenCount > 0) return true;
+            if (Windows.FlyoutWindow.IsAnyInEditMode()) return true;
+        }
+        catch (Exception ex)
+        {
+            // Never let a UI probe stop the sync service; assume not editing.
+            Logger.Debug(ex, "Could not determine editing state");
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Notify that launchers changed — items, or the launchers themselves (added, removed,
+    /// renamed, reconfigured). Triggers a debounced upload and blocks downloads until it lands.
+    /// </summary>
+    public static void NotifyLaunchersChanged() => NotifyItemsChanged();
+
     /// Notify that launcher items changed. Triggers a debounced upload (3 seconds).
     /// </summary>
     public static void NotifyItemsChanged()
@@ -76,6 +109,11 @@ public static class AutoSyncService
             && !string.IsNullOrWhiteSpace(SettingsManager.Current.SftpHost))
         {
             _hasPendingLocalItemChanges = true;
+
+            // Persisted alongside the in-memory flag, so a restart before the debounced upload
+            // does not forget that local is ahead of the server.
+            SettingsManager.Current.LaunchersModifiedUtc = DateTime.UtcNow;
+            SettingsManager.SaveSettings();
         }
 
         if (SuppressNextChange)
@@ -117,6 +155,11 @@ public static class AutoSyncService
     internal static void ClearPendingLocalItemChanges()
     {
         _hasPendingLocalItemChanges = false;
+        if (SettingsManager.Current.LaunchersModifiedUtc != default)
+        {
+            SettingsManager.Current.LaunchersModifiedUtc = default;
+            SettingsManager.SaveSettings();
+        }
     }
 
     /// <summary>
@@ -130,7 +173,7 @@ public static class AutoSyncService
 
         try
         {
-            var (success, message) = await SftpSyncService.DownloadLaunchersAsync(isStartupSync: true);
+            var (success, message) = await SftpSyncService.DownloadLaunchersAsync();
             if (success)
             {
                 ClearPendingLocalItemChanges();
@@ -194,9 +237,16 @@ public static class AutoSyncService
             || string.IsNullOrWhiteSpace(SettingsManager.Current.SftpHost))
             return;
 
-        if (_hasPendingLocalItemChanges)
+        if (_hasPendingLocalItemChanges || SettingsManager.Current.LaunchersModifiedUtc != default)
         {
             Logger.Info($"Auto-sync ({trigger}) download skipped: pending local item changes have not been uploaded yet");
+            await SyncSharedLaunchersSilentAsync(trigger);
+            return;
+        }
+
+        if (IsUserEditingLaunchers())
+        {
+            Logger.Info($"Auto-sync ({trigger}) download skipped: launchers are being edited");
             await SyncSharedLaunchersSilentAsync(trigger);
             return;
         }

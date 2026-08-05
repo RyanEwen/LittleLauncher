@@ -373,6 +373,12 @@ public partial class FlyoutWindow
     private bool SuppressDismiss => _isEditMode || _isModalOpen;
 
     /// <summary>
+    /// True when any launcher is being edited in its flyout. Used by the sync service, which must
+    /// not download over a user mid-edit.
+    /// </summary>
+    internal static bool IsAnyInEditMode() => _instances.Values.Any(f => f._isEditMode || f._isModalOpen);
+
+    /// <summary>
     /// True for groups the user can act on. Synthetic groups are ephemeral wrappers created
     /// per-rebuild for icon-mode packing and unwrapped again by <c>SyncColumnsToFlatList</c>,
     /// so they must never be renamed, removed, reordered, or persisted.

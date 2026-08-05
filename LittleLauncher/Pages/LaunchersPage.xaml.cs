@@ -452,6 +452,7 @@ public sealed partial class LaunchersPage : Page
         };
         SettingsManager.Current.Launchers.Add(newLauncher);
         SettingsManager.SaveSettings();
+        AutoSyncService.NotifyLaunchersChanged();
 
         // Tell MainWindow to create a tray icon for the new launcher
         MainWindow.Current?.RefreshTrayIcons();
@@ -491,6 +492,7 @@ public sealed partial class LaunchersPage : Page
         };
         SettingsManager.Current.Launchers.Add(newLauncher);
         SettingsManager.SaveSettings();
+        AutoSyncService.NotifyLaunchersChanged();
 
         MainWindow.Current?.RefreshTrayIcons();
         RebuildLauncherCards();
@@ -555,6 +557,7 @@ public sealed partial class LaunchersPage : Page
         if (idx <= 0) return;
         launchers.Move(idx, idx - 1);
         SettingsManager.SaveSettings();
+        AutoSyncService.NotifyLaunchersChanged();
         MainWindow.Current?.RefreshTrayIcons();
         RebuildLauncherCards();
     }
@@ -567,6 +570,7 @@ public sealed partial class LaunchersPage : Page
         if (idx < 0 || idx >= launchers.Count - 1) return;
         launchers.Move(idx, idx + 1);
         SettingsManager.SaveSettings();
+        AutoSyncService.NotifyLaunchersChanged();
         MainWindow.Current?.RefreshTrayIcons();
         RebuildLauncherCards();
     }

@@ -173,7 +173,7 @@ public partial class SyncPage : Page
     private async Task RunDownloadAsync(string? password)
     {
         ShowStatus("Downloading launchers...", InfoBarSeverity.Informational);
-        var (success, message) = await SftpSyncService.DownloadLaunchersAsync(password);
+        var (success, message) = await SftpSyncService.DownloadLaunchersAsync(password, force: true);
         ShowStatus(message, success ? InfoBarSeverity.Success : InfoBarSeverity.Error);
 
         if (success)

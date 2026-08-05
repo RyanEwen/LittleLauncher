@@ -153,6 +153,17 @@ public partial class UserSettings : ObservableObject
     /// fresh install and on files written before this was introduced.
     /// </summary>
     public string LastRunVersion { get; set; } = "";
+
+    /// <summary>
+    /// When local launcher changes were last made without having been uploaded. Default means
+    /// nothing is pending.
+    /// </summary>
+    /// <remarks>
+    /// Persisted, unlike the in-memory flag it backs. That flag was lost on restart, so quitting
+    /// between a change and its debounced upload left the next startup download free to erase
+    /// work that had been saved minutes earlier. Cleared once an upload succeeds.
+    /// </remarks>
+    public DateTime LaunchersModifiedUtc { get; set; }
     // ── SFTP Sync ───────────────────────────────────────────────────
 
     /// <summary>SSH/SFTP hostname or IP address.</summary>

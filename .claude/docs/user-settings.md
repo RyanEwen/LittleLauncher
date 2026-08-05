@@ -143,6 +143,22 @@ that defaults to `true` **cannot be turned off** in this settings file.
 
 **Do not** add `[ObservableProperty]` to the legacy migration fields (`LauncherItems`, `TrayIconMode`, `NIconHide`, `CustomTrayIconPath` on `UserSettings`) — they are plain migration-only properties marked with `[JsonIgnore]`.
 
+## Sync safety: `LaunchersModifiedUtc`
+
+Records when launchers were last changed locally without having been uploaded; `default` means
+nothing is pending. Set by `AutoSyncService.NotifyLaunchersChanged`, cleared once an upload
+succeeds.
+
+It exists because the in-memory `_hasPendingLocalItemChanges` flag **did not survive a restart**.
+Quitting between a change and its debounced upload meant the next startup download saw no pending
+work and applied the server's older copy over it — losing changes that had been saved minutes
+before.
+
+**Every automatic download is guarded by it.** The periodic sync previously skipped the
+newer-local check entirely (only startup passed `isStartupSync: true`), so the server overwrote
+local launchers every few minutes regardless of how recently they had been edited. Only an
+explicit user-initiated download passes `force: true`.
+
 ## Upgrade tracking
 
 `LastRunVersion` (plain `string`, serialized) records the app version that last wrote the

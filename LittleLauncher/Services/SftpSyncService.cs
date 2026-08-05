@@ -92,9 +92,12 @@ public static class SftpSyncService
     /// settings file to avoid overwriting newer local data.
     /// </summary>
     /// <param name="password">Optional SSH key passphrase.</param>
-    /// <param name="isStartupSync">When true, skip download if local settings are newer than the remote timestamp.</param>
+    /// <param name="force">
+    /// Applies the remote copy even when local changes are newer. Only for a download the user
+    /// explicitly asked for — automatic syncs must never overrule newer local work.
+    /// </param>
     public static async Task<(bool Success, string Message)> DownloadLaunchersAsync(
-        string? password = null, bool isStartupSync = false)
+        string? password = null, bool force = false)
     {
         try
         {
@@ -122,19 +125,33 @@ public static class SftpSyncService
 
             // If this is a startup sync and we have a remote timestamp,
             // compare with local settings file to avoid overwriting newer local changes.
-            if (isStartupSync && remoteTimestamp.HasValue)
+            // Applies to every automatic download, not just the one at startup. Periodic syncs
+            // used to skip this check entirely, so the server overwrote local launchers every few
+            // minutes however recently they had been edited — changes vanished well after being
+            // saved, which is precisely the failure this guard exists to prevent.
+            if (!force)
             {
-                var localSettingsPath = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                    "LittleLauncher", "settings.json");
-                if (File.Exists(localSettingsPath))
+                var localModified = SettingsManager.Current.LaunchersModifiedUtc;
+                if (localModified != default)
                 {
-                    var localModified = File.GetLastWriteTimeUtc(localSettingsPath);
-                    if (localModified > remoteTimestamp.Value.UtcDateTime)
+                    Logger.Info($"Download skipped: local launcher changes at {localModified:u} have not been uploaded yet");
+                    return (false, "Local launcher changes are newer than the server; skipped download.");
+                }
+
+                if (remoteTimestamp.HasValue)
+                {
+                    var localSettingsPath = Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                        "LittleLauncher", "settings.json");
+                    if (File.Exists(localSettingsPath))
                     {
-                        Logger.Info($"Startup sync skipped: local settings ({localModified:u}) " +
-                                    $"are newer than remote ({remoteTimestamp.Value.UtcDateTime:u})");
-                        return (false, "Local settings are newer than server; skipped download.");
+                        var localFileModified = File.GetLastWriteTimeUtc(localSettingsPath);
+                        if (localFileModified > remoteTimestamp.Value.UtcDateTime)
+                        {
+                            Logger.Info($"Download skipped: local settings ({localFileModified:u}) " +
+                                        $"are newer than remote ({remoteTimestamp.Value.UtcDateTime:u})");
+                            return (false, "Local settings are newer than server; skipped download.");
+                        }
                     }
                 }
             }

@@ -38,6 +38,13 @@ public sealed class LauncherSettingsWindow : Window
     /// <summary>Chrome around the form: title bar, body padding and the button row.</summary>
     private const int ChromeHeightDips = 130;
 
+    /// <summary>
+    /// How many of these windows are open. The sync service reads it: a download while a launcher
+    /// is being configured erases whatever the server has not seen yet, which for a launcher
+    /// being created is all of it.
+    /// </summary>
+    internal static int OpenCount { get; private set; }
+
     private readonly TaskCompletionSource<bool> _completion = new();
     private readonly IntPtr _hwnd;
     private readonly Launcher _launcher;
@@ -70,6 +77,7 @@ public sealed class LauncherSettingsWindow : Window
     private LauncherSettingsWindow(Launcher launcher, IntPtr ownerHwnd, bool isNewLauncher)
     {
         _launcher = launcher;
+        OpenCount++;
         _hwnd = WindowNative.GetWindowHandle(this);
         Title = "Launcher Settings";
         SystemBackdrop = new MicaBackdrop();
@@ -144,8 +152,13 @@ public sealed class LauncherSettingsWindow : Window
 
         Closed += (_, _) =>
         {
+            OpenCount = Math.Max(0, OpenCount - 1);
             CommitName();
             CommitWebUrl();
+
+            // Whatever changed in here is a launcher change, so the next periodic sync must
+            // upload rather than download over it.
+            Services.AutoSyncService.NotifyLaunchersChanged();
             _completion.TrySetResult(true);
         };
     }
@@ -175,6 +188,7 @@ public sealed class LauncherSettingsWindow : Window
 
         _launcher.Name = name;
         SettingsManager.SaveSettings();
+        Services.AutoSyncService.NotifyLaunchersChanged();
         MainWindow.Current?.RefreshTrayIcons();
         FlyoutWindow.InvalidateItems(_launcher.Id);
         WebFlyoutWindow.ApplyLauncherChanges(_launcher.Id);
@@ -223,6 +237,7 @@ public sealed class LauncherSettingsWindow : Window
             launcher.CustomTrayIconPath = destPath;
             launcher.TrayIconMode = TrayIconModes.Custom;
             SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
             MainWindow.Current?.UpdateTrayIcon(launcher);
         }
         catch (Exception ex)
@@ -389,6 +404,7 @@ public sealed class LauncherSettingsWindow : Window
             {
                 launcher.IconModeIconsPerRow = Launcher.ClampIconModeIconsPerRow(iconsPerRow);
                 SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
                 FlyoutWindow.InvalidateItems(launcher.Id);
             }
         };
@@ -420,6 +436,7 @@ public sealed class LauncherSettingsWindow : Window
 
             launcher.ViewMode = viewMode;
             SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
             FlyoutWindow.InvalidateItems(launcher.Id);
             UpdateIconModeControls();
         };
@@ -438,6 +455,7 @@ public sealed class LauncherSettingsWindow : Window
         {
             launcher.ShowTitle = showTitleToggle.IsOn;
             SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
             FlyoutWindow.InvalidateItems(launcher.Id);
         };
 
@@ -465,6 +483,7 @@ public sealed class LauncherSettingsWindow : Window
         {
             launcher.NIconHide = !showToggle.IsOn;
             SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
         };
 
         var hideRow = new Grid();
@@ -540,6 +559,7 @@ public sealed class LauncherSettingsWindow : Window
 
             launcher.Kind = kind;
             SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
             // Releases the panel the launcher no longer uses and warms up the one it now does.
             MainWindow.Current?.RefreshTrayIcons();
             UpdateKindVisibility();
@@ -653,6 +673,7 @@ public sealed class LauncherSettingsWindow : Window
         void Persist()
         {
             SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
             WebFlyoutWindow.ApplyLauncherChanges(launcher.Id);
         }
 
@@ -860,6 +881,7 @@ public sealed class LauncherSettingsWindow : Window
 
             bookmark.IconPath = dest;
             SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
             WebFlyoutWindow.ApplyLauncherChanges(launcher.Id);
         }
         catch (Exception ex)
@@ -950,6 +972,7 @@ public sealed class LauncherSettingsWindow : Window
 
             launcher.WebUseBookmarks = useBookmarks;
             SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
             WebFlyoutWindow.ApplyLauncherChanges(launcher.Id);
             UpdateContentMode();
         };
@@ -982,6 +1005,7 @@ public sealed class LauncherSettingsWindow : Window
             if (double.IsNaN(widthBox.Value)) return;
             launcher.WebFlyoutWidth = (int)widthBox.Value;
             SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
             WebFlyoutWindow.ApplyLauncherChanges(launcher.Id);
         };
         heightBox.ValueChanged += (_, _) =>
@@ -989,6 +1013,7 @@ public sealed class LauncherSettingsWindow : Window
             if (double.IsNaN(heightBox.Value)) return;
             launcher.WebFlyoutHeight = (int)heightBox.Value;
             SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
             WebFlyoutWindow.ApplyLauncherChanges(launcher.Id);
         };
 
@@ -1006,6 +1031,7 @@ public sealed class LauncherSettingsWindow : Window
             if (zoomCombo.SelectedItem is not ComboBoxItem selected || selected.Tag is not int zoom) return;
             launcher.WebZoomPercent = zoom;
             SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
             WebFlyoutWindow.ApplyLauncherChanges(launcher.Id);
         };
         var zoomRow = BuildRow("Zoom", "Page zoom inside the flyout", zoomCombo);
@@ -1041,6 +1067,7 @@ public sealed class LauncherSettingsWindow : Window
             if (double.IsNaN(idleBox.Value)) return;
             launcher.WebIdleUnloadMinutes = (int)idleBox.Value;
             SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
         };
         var idleRow = BuildRow("Unload After", "Minutes the flyout may sit closed before the page is dropped", idleBox);
 
@@ -1059,6 +1086,7 @@ public sealed class LauncherSettingsWindow : Window
             if (policyCombo.SelectedItem is not ComboBoxItem selected || selected.Tag is not int policy) return;
             launcher.WebHiddenPolicy = policy;
             SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
             UpdateIdleVisibility();
         };
         UpdateIdleVisibility();
@@ -1069,6 +1097,7 @@ public sealed class LauncherSettingsWindow : Window
         {
             launcher.WebReloadOnShow = reloadToggle.IsOn;
             SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
         };
         var reloadRow = BuildRow("Reload On Open", "Fetch the page again each time, instead of showing it as you left it", reloadToggle);
 
@@ -1078,6 +1107,7 @@ public sealed class LauncherSettingsWindow : Window
         {
             launcher.WebPinFlyout = pinToggle.IsOn;
             SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
         };
         var pinRow = BuildRow("Pin Open", "Stay on screen when you click elsewhere, instead of dismissing like a flyout", pinToggle);
 
@@ -1286,6 +1316,7 @@ public sealed class LauncherSettingsWindow : Window
                     launcher.CustomTrayIconPath = "";
                 }
                 SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
                 UpdatePreview();
             },
             onBrowseRequested: async () =>
@@ -1308,6 +1339,7 @@ public sealed class LauncherSettingsWindow : Window
                     launcher.TrayIconMode = TrayIconModes.Custom;
                     launcher.CustomTrayIconPath = destPath;
                     SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
                     UpdatePreview();
                 }
             }
@@ -1348,6 +1380,7 @@ public sealed class LauncherSettingsWindow : Window
                 launcher.CustomTrayIconPath = destPath;
                 pathText.Text = Path.GetFileName(destPath);
                 SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
             }
         };
 
