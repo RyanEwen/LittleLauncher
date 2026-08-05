@@ -327,6 +327,18 @@ public partial class Launcher : ObservableObject
     [ObservableProperty]
     public partial string WebDefaultBookmarkUrl { get; set; } = "";
 
+    /// <summary>
+    /// Screen position a pinned web flyout was last moved to, as "x,y" in physical pixels.
+    /// Empty means it has never been moved and should anchor to the tray as usual.
+    /// </summary>
+    /// <remarks>
+    /// A string rather than two ints because empty is the only honest "unset" under
+    /// <c>WhenWritingDefault</c> — 0,0 is a real screen position, so a numeric pair could not
+    /// tell "top-left corner" from "never moved".
+    /// </remarks>
+    [ObservableProperty]
+    public partial string WebFlyoutPosition { get; set; } = "";
+
     /// <summary>Bookmarks shown as a bar along the bottom of the web flyout.</summary>
     public ObservableCollection<WebBookmark> WebBookmarks { get; set; } = [];
 
@@ -339,6 +351,15 @@ public partial class Launcher : ObservableObject
     /// </summary>
     [JsonIgnore]
     public bool HasWebBookmarkBar => IsWebLauncher && WebUseBookmarks && WebBookmarks.Count > 0;
+
+    /// <summary>Parses <see cref="WebFlyoutPosition"/>, or null when it has never been moved.</summary>
+    public (int X, int Y)? GetWebFlyoutPosition()
+    {
+        string[] parts = (WebFlyoutPosition ?? "").Split(',');
+        if (parts.Length != 2) return null;
+        if (!int.TryParse(parts[0], out int x) || !int.TryParse(parts[1], out int y)) return null;
+        return (x, y);
+    }
 
     /// <summary>The bookmark to open on show, or null when the flyout should open as just the bar.</summary>
     [JsonIgnore]

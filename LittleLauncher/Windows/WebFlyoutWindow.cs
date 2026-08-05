@@ -242,6 +242,7 @@ public sealed class WebFlyoutWindow : Window
         Grid.SetColumn(navButtons, 0);
         Grid.SetColumn(_headerTitle, 1);
         Grid.SetColumn(headerButtons, 2);
+        header.PointerPressed += BeginPinnedDrag;
         header.Children.Add(navButtons);
         header.Children.Add(_headerTitle);
         header.Children.Add(headerButtons);
@@ -335,6 +336,7 @@ public sealed class WebFlyoutWindow : Window
         _bookmarkBar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         Grid.SetColumn(stripScroller, 0);
         Grid.SetColumn(_barActions, 1);
+        _bookmarkBar.PointerPressed += BeginPinnedDrag;
         _bookmarkBar.Children.Add(stripScroller);
         _bookmarkBar.Children.Add(_barActions);
 
@@ -1569,6 +1571,42 @@ public sealed class WebFlyoutWindow : Window
         }
     }
 
+    /// <summary>
+    /// Drags a pinned flyout to a new position, and remembers where it was put.
+    /// </summary>
+    /// <remarks>
+    /// <para>Only when pinned. An unpinned flyout is transient — it re-anchors to the tray on
+    /// every open — so moving one would be undone by the next click, which is worse than not
+    /// offering it. A pinned flyout is the one the user means to leave somewhere.</para>
+    /// <para>Handing the window to the system's own move loop rather than tracking the pointer
+    /// ourselves gets snapping, multi-monitor handling and the escape key for free. The message
+    /// is synchronous, so the position is read once the user has let go. Clicks on the header's
+    /// buttons never reach here: they mark the event handled first.</para>
+    /// </remarks>
+    private void BeginPinnedDrag(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_launcher.WebPinFlyout || _hwnd == IntPtr.Zero || !IsWindow(_hwnd)) return;
+        if (!e.GetCurrentPoint(null).Properties.IsLeftButtonPressed) return;
+
+        e.Handled = true;
+        ReleaseCapture();
+        SendMessage(_hwnd, WM_NCLBUTTONDOWN, HTCAPTION, IntPtr.Zero);
+        RememberFlyoutPosition();
+    }
+
+    /// <summary>Stores where a pinned flyout was dragged to, so it reopens there.</summary>
+    private void RememberFlyoutPosition()
+    {
+        if (!GetWindowRect(_hwnd, out var rect)) return;
+
+        string position = $"{rect.Left},{rect.Top}";
+        if (position == _launcher.WebFlyoutPosition) return;
+
+        _launcher.WebFlyoutPosition = position;
+        SettingsManager.SaveSettings();
+        Services.AutoSyncService.NotifyLaunchersChanged();
+    }
+
     /// <summary>Steps back through the page's own history, not the flyout's.</summary>
     private void GoBack()
     {
@@ -1827,6 +1865,20 @@ public sealed class WebFlyoutWindow : Window
         if (left + width > workArea.Right) left = workArea.Right - width;
         if (top + height > workArea.Bottom) top = workArea.Bottom - height;
         if (top < workArea.Top) top = workArea.Top;
+
+        // A pinned flyout that has been moved opens where it was left, not back at the tray —
+        // clamped into the work area so a screen that has since gone away cannot strand it.
+        if (_launcher.WebPinFlyout && _launcher.GetWebFlyoutPosition() is { } saved)
+        {
+            var savedPoint = new POINT { X = saved.X, Y = saved.Y };
+            var savedMonitor = new MONITORINFOEX { cbSize = Marshal.SizeOf<MONITORINFOEX>() };
+            GetMonitorInfo(MonitorFromPoint(savedPoint, MONITOR_DEFAULTTONEAREST), ref savedMonitor);
+            var area = savedMonitor.rcWork;
+
+            int savedLeft = Math.Clamp(saved.X, area.Left, Math.Max(area.Left, area.Right - width));
+            int savedTop = Math.Clamp(saved.Y, area.Top, Math.Max(area.Top, area.Bottom - height));
+            return new FlyoutPlacement(savedLeft, savedTop, savedTop, width, height, SlideEdge.Bottom);
+        }
 
         var edge = nearTop ? SlideEdge.Top : SlideEdge.Bottom;
         int startTop = edge == SlideEdge.Top ? top - slideDistance : top + slideDistance;

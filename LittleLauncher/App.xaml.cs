@@ -24,6 +24,14 @@ public partial class App : Application
     protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
     {
         MainDispatcherQueue = DispatcherQueue.GetForCurrentThread();
+
+        // Must happen on the UI thread, before any WebView2 exists. WinUI 3 only calls
+        // CoInitializeEx, and OLE drag and drop needs OleInitialize on top of it — without it a
+        // hosted browser silently supports no dragging: not within the page, not from outside.
+        int oleResult = NativeMethods.OleInitialize(IntPtr.Zero);
+        if (oleResult < 0)
+            NLog.LogManager.GetCurrentClassLogger().Warn("OleInitialize failed (0x{0:X}); drag and drop inside web flyouts will not work", oleResult);
+
         // Log unhandled exceptions before the process dies
         AppDomain.CurrentDomain.UnhandledException += (sender, a) =>
         {

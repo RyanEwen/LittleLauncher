@@ -271,6 +271,22 @@ public static partial class NativeMethods
     internal static partial IntPtr GetForegroundWindow();
 
     /// <summary>
+    /// Releases the mouse capture so a window can be handed to the system's own move loop.
+    /// </summary>
+    /// <remarks>
+    /// Paired with <c>SendMessage(WM_NCLBUTTONDOWN, HTCAPTION)</c>: that makes Windows drag a
+    /// borderless window as though the pointer were on a title bar it does not have. The message
+    /// is synchronous — it returns when the user lets go — so the resulting position can be read
+    /// straight after the call.
+    /// </remarks>
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool ReleaseCapture();
+
+    internal const uint WM_NCLBUTTONDOWN = 0x00A1;
+    internal static readonly IntPtr HTCAPTION = new(2);
+
+    /// <summary>
     /// True when <paramref name="hWnd"/> is a descendant of <paramref name="hWndParent"/>.
     /// </summary>
     /// <remarks>
@@ -510,6 +526,19 @@ public static partial class NativeMethods
         [PreserveSig] int SetValue(ref PROPERTYKEY key, IntPtr pv);
         [PreserveSig] int Commit();
     }
+
+    /// <summary>
+    /// Adds OLE support to the calling thread's apartment. Required for drag and drop.
+    /// </summary>
+    /// <remarks>
+    /// WinUI 3 initialises its UI thread with <c>CoInitializeEx</c> only. OLE drag and drop needs
+    /// the extra initialisation <c>OleInitialize</c> performs — without it a hosted WebView2
+    /// silently supports no dragging at all: not HTML5 drags inside the page, and not files
+    /// dragged in from outside. The call is safe to repeat; on an already-initialised STA thread
+    /// it returns <c>S_FALSE</c>.
+    /// </remarks>
+    [LibraryImport("ole32.dll")]
+    internal static partial int OleInitialize(IntPtr pvReserved);
 
     [DllImport("ole32.dll")]
     internal static extern int PropVariantClear(IntPtr pvar);
