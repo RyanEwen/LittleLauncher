@@ -87,6 +87,26 @@ The action uses `Return="check"` so the uninstall does not report completion unt
 - **VS C++ build tools** (incl. `VC.Tools.ARM64`) for the Native AOT companion. The script prepends the **VS Installer dir to `PATH`** when `vswhere.exe` isn't resolvable, because the ILCompiler targets shell out to `vswhere`; without it the native link fails with **exit code 123**.
 - **`-NoSign`** is Store mode: skips signing and leaves the Store `Identity`/`Publisher` intact for the Store to re-sign on ingestion. Without it, the manifest publisher is rewritten to the dev cert subject so `signtool` can sign locally.
 
+## Toast notifications in MSIX
+
+Packaged builds register for notifications like unpackaged ones. This needs two manifest
+extensions on the `<Application>`, which are easy to miss because their absence fails at
+*runtime*, not at packaging time:
+
+- `<com:Extension Category="windows.comServer">` with an `ExeServer` whose `Arguments` are
+  `----AppNotificationActivated:` and a `<com:Class Id="…">`
+- `<uap:Extension Category="windows.toastNotificationActivation">` with the same
+  `ToastActivatorCLSID`
+
+Plus `xmlns:com` and `com` in `IgnorableNamespaces`.
+
+Without them a clicked toast has no activator and `AppNotificationManager.Register()` can throw,
+which is why registration used to be skipped for packaged builds entirely — a workaround that
+read like a platform limitation and was not one.
+
+**The CLSID must stay stable.** Changing it orphans the activator for any toast already sitting
+in the Action Center.
+
 ## CI state: MSI/GitHub Release automated, Store submission manual
 
 The `external/promo` private-submodule checkout failure is **fixed** — `build-msix.yml`

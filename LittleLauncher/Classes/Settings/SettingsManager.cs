@@ -81,8 +81,10 @@ public static class SettingsManager
     /// </remarks>
     private static void RaiseUpgradeNotices(string? previousVersion)
     {
-        if (IsOlderThan(previousVersion, WebLauncherVersion))
-            _current.ShowWebLauncherNotice = true;
+        if (!IsOlderThan(previousVersion, WebLauncherVersion)) return;
+
+        _current.ShowWebLauncherNotice = true;
+        _current.UpgradeNoticesJustRaised = true;
     }
 
     /// <summary>

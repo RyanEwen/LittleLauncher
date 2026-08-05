@@ -5,7 +5,8 @@
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
   xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
-  IgnorableNamespaces="uap rescap">
+  xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
+  IgnorableNamespaces="uap rescap com">
 
   <Identity
     Name="27766TechnicallyReal.LittleLauncher"
@@ -53,6 +54,26 @@
             Enabled="false"
             DisplayName="Little Launcher" />
         </desktop:Extension>
+
+        <!-- Toast activation. A packaged app needs somewhere for a clicked notification to go,
+             which is this COM server; without it AppNotificationManager.Register() can throw,
+             which is why registration used to be skipped for packaged builds entirely.
+             The CLSID is this app's identity to the notification platform — it must stay
+             stable, or previously delivered toasts lose their activator. -->
+        <com:Extension Category="windows.comServer">
+          <com:ComServer>
+            <com:ExeServer Executable="LittleLauncher.exe"
+                           DisplayName="Little Launcher"
+                           Arguments="----AppNotificationActivated:">
+              <com:Class Id="9C7A1E42-6B58-4F3D-9D21-3A5C0E7B4F16"
+                         DisplayName="Little Launcher Notification Activator" />
+            </com:ExeServer>
+          </com:ComServer>
+        </com:Extension>
+
+        <uap:Extension Category="windows.toastNotificationActivation">
+          <uap:ToastNotificationActivation ToastActivatorCLSID="9C7A1E42-6B58-4F3D-9D21-3A5C0E7B4F16" />
+        </uap:Extension>
       </Extensions>
     </Application>
   </Applications>

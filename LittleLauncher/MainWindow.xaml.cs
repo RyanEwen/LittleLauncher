@@ -213,15 +213,8 @@ public sealed partial class MainWindow : Window
             TimeSpan.FromHours(24),
             TimeSpan.FromHours(24));
 
-        // Register for Windows toast notifications (may fail in packaged/MSIX builds
-        // that lack a COM activator declaration — non-critical, only used for update toasts).
-        // Packaged builds still prefetch update availability for the Home/About UI,
-        // but only unpackaged builds show the custom toast notification.
-        if (!IsPackaged)
-        {
-            try { Microsoft.Windows.AppNotifications.AppNotificationManager.Default.Register(); }
-            catch (Exception ex) { Logger.Warn(ex, "Toast notification registration failed"); }
-        }
+        RegisterForNotifications();
+        ShowUpgradeNoticeToast();
         _ = CheckForUpdateOnStartupAsync();
 
         // Tell Windows to include --silent when auto-restarting the app
@@ -241,6 +234,72 @@ public sealed partial class MainWindow : Window
     {
         var wndId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(_hwnd);
         return AppWindow.GetFromWindowId(wndId);
+    }
+
+    /// <summary>
+    /// Registers for Windows notifications and routes a click back into the app.
+    /// </summary>
+    /// <remarks>
+    /// Packaged builds used to skip this entirely. That was never a platform limitation: a
+    /// packaged app needs a COM activator declared in its manifest so a clicked toast has
+    /// somewhere to go, and without one <c>Register()</c> can throw. The MSIX manifest now
+    /// declares one (<c>windows.toastNotificationActivation</c> plus its <c>com:ExeServer</c>),
+    /// so both install types register identically. The CLSID there must stay stable — change it
+    /// and toasts already sitting in the Action Center lose their activator.
+    /// </remarks>
+    private void RegisterForNotifications()
+    {
+        try
+        {
+            var manager = Microsoft.Windows.AppNotifications.AppNotificationManager.Default;
+            manager.NotificationInvoked += OnNotificationInvoked;
+            manager.Register();
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn(ex, "Toast notification registration failed");
+        }
+    }
+
+    /// <summary>
+    /// Opens the app when a notification is clicked.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately not routed per-notification. The upgrade notice is also showing as a banner
+    /// on the Home page — which is where this lands — so the click arrives at the same
+    /// "Set one up" action the toast was offering, with no extra plumbing to keep in sync.
+    /// </remarks>
+    private void OnNotificationInvoked(
+        Microsoft.Windows.AppNotifications.AppNotificationManager sender,
+        Microsoft.Windows.AppNotifications.AppNotificationActivatedEventArgs args)
+    {
+        DispatcherQueue.TryEnqueue(() => SettingsWindow.ShowInstance(this));
+    }
+
+    /// <summary>
+    /// Announces a just-detected upgrade as a toast, once.
+    /// </summary>
+    /// <remarks>
+    /// The Home page banner only reaches someone who opens the app, and Store updates install
+    /// silently — so for Store users this is the only notice that arrives on its own. Gated on
+    /// the transient <c>UpgradeNoticesJustRaised</c>, not the persisted flag, which stays set
+    /// until the banner is dismissed and would otherwise re-toast on every launch.
+    /// </remarks>
+    private void ShowUpgradeNoticeToast()
+    {
+        if (!SettingsManager.Current.UpgradeNoticesJustRaised) return;
+
+        try
+        {
+            var builder = new Microsoft.Windows.AppNotifications.Builder.AppNotificationBuilder()
+                .AddText("New: web launchers")
+                .AddText("A launcher can now open a web page — a dashboard, webmail, or any site — straight from its tray icon.");
+            Microsoft.Windows.AppNotifications.AppNotificationManager.Default.Show(builder.BuildNotification());
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn(ex, "Upgrade notice toast failed");
+        }
     }
 
     /// <summary>

@@ -74,6 +74,17 @@ public partial class UserSettings : ObservableObject
     [ObservableProperty]
     public partial bool ShowWebLauncherNotice { get; set; }
 
+    /// <summary>
+    /// True only in the session where an upgrade was actually detected. Not persisted.
+    /// </summary>
+    /// <remarks>
+    /// The toast is keyed off this rather than <see cref="ShowWebLauncherNotice"/>, which stays
+    /// true until the banner is dismissed in-app — toasting on that would re-notify on every
+    /// launch until the user happened to open the app and close a banner they never saw.
+    /// </remarks>
+    [JsonIgnore]
+    public bool UpgradeNoticesJustRaised { get; set; }
+
     // ── Taskbar Widget ──────────────────────────────────────────────
 
     /// <summary>Whether the little launcher widget is enabled.</summary>
