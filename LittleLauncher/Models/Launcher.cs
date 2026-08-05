@@ -1,4 +1,4 @@
-// Copyright © 2024-2026 The Little Launcher Authors
+﻿// Copyright © 2024-2026 The Little Launcher Authors
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -512,13 +512,51 @@ public partial class Launcher : ObservableObject
         }
     }
 
+    /// <summary>WebDAV collection URL holding the shared file (WebDAV mode only).</summary>
+    /// <remarks>
+    /// Separate from the global <c>UserSettings.WebDavUrl</c> on purpose: the server you sync your
+    /// own launchers to and the server a colleague shares one from are routinely different, and
+    /// each subscriber points at their own account on the sharing server anyway.
+    /// </remarks>
+    public string SharedWebDavUrl { get; set; } = "";
+
+    /// <summary>WebDAV username for the shared file. The password lives in <c>ProtectedStore</c>.</summary>
+    public string SharedWebDavUsername { get; set; } = "";
+
+    /// <summary>
+    /// The share link for a launcher shared through a cloud account.
+    /// </summary>
+    /// <remarks>
+    /// This is what a subscriber is given and all they need — the file's location in the owner's
+    /// drive is the owner's business, and may not even be readable to them. The owner keeps a copy
+    /// here too so the link can be shown again without re-minting it.
+    /// </remarks>
+    public string SharedLinkUrl { get; set; } = "";
+
+    /// <summary>
+    /// The resolved drive and item ids behind <see cref="SharedLinkUrl"/>, cached after the first
+    /// lookup so every sync does not re-resolve the link.
+    /// </summary>
+    public string SharedItemId { get; set; } = "";
+
+    /// <inheritdoc cref="SharedItemId"/>
+    public string SharedDriveId { get; set; } = "";
+
+    /// <summary>Convenience: true when SharedSyncMode is OneDrive (3).</summary>
+    [JsonIgnore]
+    public bool IsOneDriveSync => SharedSyncMode == SharedSyncModes.OneDrive;
+
     /// <summary>Convenience: true when SharedSyncMode is File (0).</summary>
     [JsonIgnore]
-    public bool IsFileSync => SharedSyncMode == 0;
+    public bool IsFileSync => SharedSyncMode == SharedSyncModes.File;
 
     /// <summary>Convenience: true when SharedSyncMode is SFTP (1).</summary>
     [JsonIgnore]
-    public bool IsSftpSync => SharedSyncMode == 1;
+    public bool IsSftpSync => SharedSyncMode == SharedSyncModes.Sftp;
+
+    /// <summary>Convenience: true when SharedSyncMode is WebDAV (2).</summary>
+    [JsonIgnore]
+    public bool IsWebDavSync => SharedSyncMode == SharedSyncModes.WebDav;
 
     // ── Constructor (defaults for JsonSerializer) ────────────────────
 

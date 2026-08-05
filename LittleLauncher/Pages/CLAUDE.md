@@ -8,6 +8,8 @@ Settings pages are WinUI 3 `Page` objects navigated via `NavigationView`. Follow
 
 `LaunchersPage` drives per-launcher tray/pin icons. When editing it, follow the icon system conventions: [.claude/docs/icons.md](../../.claude/docs/icons.md).
 
+`SyncPage` is the UI for global sync and swaps panels per sync provider. When editing it, follow the sync conventions: [.claude/docs/sync.md](../../.claude/docs/sync.md).
+
 ## Bookmark UI
 
 Two surfaces read browser bookmarks, sharing `BookmarkImport.ReadBookmarks` / `.Flatten` and

@@ -163,16 +163,70 @@ After bulk icon changes, callers invoke `FlyoutWindow.InvalidateItems()` so the 
 
 `FaviconService.RefreshStaleItemIconsAsync(items)` complements the missing-icon pipeline by **re-fetching auto-fetched icons** whose cached file is older than 7 days (`FaviconService.IconMaxAge`), so favicons, app icons, and PWA icons track upstream changes. Custom user-chosen icons are never touched (auto-fetched icons are identified by living in the `favicons` cache folder), and a failed fetch keeps the existing file. It runs at startup (inside `FetchMissingIconsOnStartupAsync`) and on a daily timer in `MainWindow` while the app stays resident in the tray. Because refreshed files keep the same path, item-icon `BitmapImage` loads use `BitmapCreateOptions.IgnoreImageCache` to bypass WinUI's per-URI decoded-image cache.
 
-## SFTP sync
+## Global launcher sync
 
-`SftpSyncService` provides static async methods:
-- `UploadLaunchersAsync()` — serializes all launchers to JSON and uploads `launchers.json` via SFTP.
-- `DownloadLaunchersAsync()` — downloads `launchers.json`, deserializes, replaces the local launchers collection, fetches missing icons via the unified pipeline, and saves. Falls back to legacy `launcher-items.xml` if `launchers.json` doesn't exist.
-- `TestConnectionAsync()` — verifies SSH connectivity and SFTP access.
+All launchers sync between machines as one `launchers.json`. The transport is selected by
+`UserSettings.SyncProvider` (`Models/SyncProviders.cs`):
+
+| Value | Provider | Implementation | Auth |
+|---|---|---|---|
+| 0 | SSH / SFTP server (default) | `SftpSyncService` (SSH.NET) | key or password |
+| 1 | OneDrive | `CloudSyncService` -> `OneDriveFileStore` (Microsoft Graph) | OAuth, system browser |
+| 2 | Google Drive | `CloudSyncService` -> `GoogleDriveFileStore` (Drive v3) | OAuth, system browser |
+| 3 | Network file share (UNC) | `FolderSyncService` | Windows |
+| 4 | Any other folder | `FolderSyncService` | none |
+| 5 | WebDAV (Nextcloud, ownCloud, NAS) | `CloudSyncService` -> `WebDavFileStore` | Basic auth, typed in |
+
+`LauncherSyncService` is the single entry point and dispatches on the provider; nothing outside
+`Services/` names a transport. It exposes `TestAsync()`, `UploadLaunchersAsync()`,
+`DownloadLaunchersAsync(force:)`, `IsConfigured`, and `UsesCredentials`.
+
+**OneDrive and Google Drive use their vendor APIs, not synced folders.** They implement the
+narrow `ICloudFileStore` (download / upload / remote-modified-time) over the app-private folder
+each vendor offers: Graph's app folder under `Files.ReadWrite.AppFolder`, and Drive's hidden
+app-data folder under `drive.appdata`. Neither can see anything else in the user's storage. That
+buys what a folder cannot — the service confirms the upload, no sync client need be installed,
+there is no placeholder to hydrate, and the remote's modified time is readable. OneDrive is
+**personal accounts only**; Microsoft has never extended app-folder permission to OneDrive for
+Business.
+
+**WebDAV** rides the same `ICloudFileStore` path, but its credentials are typed into the app
+rather than obtained in a browser, so `SignInAsync` verifies a URL/username/password instead of
+opening one. One implementation reaches every WebDAV server, and it costs no app registration,
+consent screen, verification review or client secret — nothing a vendor can revoke. It uses
+`PROPFIND` Depth 0 to verify, `HEAD` for the modified time, and pre-emptive Basic auth (some
+servers answer an unauthenticated `PROPFIND` with 404 rather than 401, which would otherwise look
+like a wrong path).
+
+`OAuthPkceClient` implements Authorization Code + PKCE with a loopback redirect, shared by the two
+OAuth providers — hand-rolled rather than pulling in MSAL and the Google SDK for one small file each.
+Sign-in happens in the system browser, so the app never sees credentials. `ProtectedStore`
+persists every sync credential — OAuth tokens and the WebDAV password — DPAPI-encrypted per
+Windows user in `%AppData%\LittleLauncher\cloud-*.dat`, never in settings.json, which this very
+feature uploads. `CloudSyncCredentials` holds the client
+IDs; until they are filled in the two providers report themselves unconfigured.
+
+Folder providers (3 and 4) cover everything else — Dropbox, Seafile, Syncthing, a USB stick, and
+OneDrive for Business. There the sync client, not this app, moves the bytes, so a successful
+upload means the file reached disk. `FolderSyncService` writes via `LauncherPayload.WriteAtomic`
+(a temp file and a move — clients upload the instant a file changes, so a plain write can be
+uploaded half-written), reads whole files on a background thread (they may be online-only
+placeholders that block while hydrating), and probes write access with a throwaway file rather
+than trusting `Directory.CreateDirectory`.
+
+`CloudFolderService` locates OneDrive and Google Drive *folders* on the machine — now used only
+by the shared-launcher dialog, since global sync reaches those two through their APIs.
+
+`LauncherPayload` holds what the transports must not duplicate: the timestamped envelope format
+(with a legacy plain-array fallback), the guard that stops an automatic download overwriting
+newer local work, and the in-place merge into the live launcher collection. Only an explicit
+user-initiated download passes `force: true`.
+
+Full conventions, including how to add a transport: [.claude/docs/sync.md](.claude/docs/sync.md).
 
 ### Shared launcher sync
 
-Individual launchers can be shared via local/network files or per-launcher SFTP connections (separate from the global sync). `Launcher.SharedSyncMode` controls the transport: 0 = File (local or UNC path), 1 = SFTP.
+Individual launchers can be shared via files or per-launcher SFTP connections, **independently of `SyncProvider`** — `Launcher.SharedSyncMode` controls the transport: 0 = File, 1 = SFTP. File mode accepts any path, so a OneDrive, Google Drive or UNC folder works: both participants point at their own local copy of the same shared folder. The share dialog offers detected cloud roots as quick-fill buttons (buttons rather than a picker — a `FileSavePicker` raised from inside a `ContentDialog` is a modal-on-modal). File writes go through `LauncherPayload.WriteAtomic` for the same reason global folder sync does.
 - **Owner** (`IsSharedOwner = true`): `ShareLauncherAsync()` pushes the launcher's items as `List<LauncherItem>` JSON.
 - **Subscriber** (`IsSharedOwner = false`): `SyncSharedLauncherAsync()` pulls items (read-only).
 - `VerifySharedLauncherAsync()` — validates the file/remote exists and is parseable (used before subscribing).
@@ -180,13 +234,17 @@ Individual launchers can be shared via local/network files or per-launcher SFTP 
 
 The sharing UI lives in `LaunchersPage.xaml.cs`: "Share" button on unshared launcher cards, "Sync" and "Settings" buttons on shared cards, "Shared"/"Subscribed" badges, "Add Shared Launcher" subscribe dialog (with File/SFTP mode picker), and "Stop Sharing" via the share dialog's secondary button.
 
-`AutoSyncService` manages automatic sync triggers:
+`AutoSyncService` manages automatic sync triggers, and is transport-agnostic — everything goes
+through `LauncherSyncService`:
 - Downloads launchers on startup, then syncs shared launchers.
 - Debounced upload (3 s) when items change.
 - Periodic download on a configurable interval, followed by shared launcher sync.
 - Automatic downloads are skipped while local launcher item edits are pending upload, so a periodic pull cannot overwrite newer flyout/editor changes before the debounced upload completes.
+- Every trigger is gated on the auto-sync toggle **and** `LauncherSyncService.IsConfigured`, never on `SftpHost` — which is meaningless under a folder provider.
 
-Supports both private-key (`PrivateKeyFile`) and password-based authentication.
+The SFTP transport supports both private-key (`PrivateKeyFile`) and password-based
+authentication. Folder providers need no credentials from the app: OneDrive, Google Drive and
+Windows have already authenticated the folder before it is visible.
 
 ## Theme system
 

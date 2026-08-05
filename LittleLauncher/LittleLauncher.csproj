@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows10.0.22000.0</TargetFramework>
@@ -95,4 +95,16 @@
   <!-- Shared "Our other apps" cross-promo page (git submodule; data baked at
        dev time by external/promo/refresh.ps1 — no runtime networking) ────── -->
   <Import Project="..\external\promo\PromotedApps.projitems" Label="Shared" />
+  <!--
+    Bake build-time credentials into the assembly. Read back by CloudSyncCredentials.BuildValue;
+    an environment variable cannot serve here because it is a runtime lookup and an end user has
+    no such variable set.
+  -->
+  <ItemGroup Condition="'$(GoogleClientSecret)' != ''">
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>GoogleClientSecret</_Parameter1>
+      <_Parameter2>$(GoogleClientSecret)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+
 </Project>

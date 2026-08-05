@@ -164,6 +164,98 @@ public partial class UserSettings : ObservableObject
     /// work that had been saved minutes earlier. Cleared once an upload succeeds.
     /// </remarks>
     public DateTime LaunchersModifiedUtc { get; set; }
+
+    // ── Sync destination ────────────────────────────────────────────
+
+    /// <summary>
+    /// Where launchers sync to — see <see cref="SyncProviders"/>. Selects which of the
+    /// transports below is used; the other one's settings are kept, not cleared, so switching
+    /// back does not mean re-entering them.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="SyncProviders.Sftp"/> is 0 on purpose: <c>WhenWritingDefault</c> drops the key
+    /// when the value is the CLR default, so 0 has to mean the behaviour every settings file
+    /// written before this setting existed was configured for. See
+    /// <see href="../../.claude/docs/user-settings.md">user-settings.md</see>.
+    /// </remarks>
+    /// <summary>
+    /// Which destination the Cloud Sync page is currently *editing*. UI state only — it does
+    /// not decide what syncs; <see cref="EnabledSyncProviders"/> does.
+    /// </summary>
+    /// <remarks>
+    /// It used to be the exclusive choice of transport, and is kept under the same name so
+    /// existing settings files migrate cleanly: on load it seeds
+    /// <see cref="EnabledSyncProviders"/> when that list is absent.
+    /// </remarks>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsFolderSync))]
+    public partial int SyncProvider { get; set; }
+
+    /// <summary>
+    /// Every destination launchers are synced to. Uploads go to all of them; a download takes
+    /// whichever reports the newest copy.
+    /// </summary>
+    /// <remarks>
+    /// <para>A list rather than one value because a single destination is a single point of
+    /// failure for the thing that holds a user's whole configuration — and because "stop syncing
+    /// to X" should not mean "reconfigure Y from scratch".</para>
+    /// <para>Absent in files written before this existed, which is exactly what
+    /// <see cref="CompleteInitialization"/> keys the migration off: null means "seed me from the
+    /// old exclusive <see cref="SyncProvider"/>", empty means "the user turned everything off".
+    /// The two must stay distinguishable, so this is deliberately <c>null</c> by default rather
+    /// than an empty list.</para>
+    /// </remarks>
+    public List<int>? EnabledSyncProviders { get; set; }
+
+    /// <summary>True when the given destination is switched on.</summary>
+    public bool IsSyncProviderEnabled(int provider) =>
+        EnabledSyncProviders?.Contains(SyncProviders.Normalize(provider)) == true;
+
+    /// <summary>Switch a destination on or off, keeping its settings either way.</summary>
+    public void SetSyncProviderEnabled(int provider, bool enabled)
+    {
+        provider = SyncProviders.Normalize(provider);
+        var list = EnabledSyncProviders ??= [];
+
+        if (enabled)
+        {
+            if (!list.Contains(provider)) list.Add(provider);
+        }
+        else
+        {
+            list.Remove(provider);
+        }
+
+        OnPropertyChanged(nameof(EnabledSyncProviders));
+    }
+
+    /// <summary>
+    /// The folder launchers sync through when <see cref="SyncProvider"/> is folder-based —
+    /// a OneDrive or Google Drive path, a UNC share, or any other directory.
+    /// </summary>
+    [ObservableProperty]
+    public partial string SyncFolderPath { get; set; }
+
+    /// <summary>True when the selected provider syncs through a folder rather than SFTP.</summary>
+    [JsonIgnore]
+    public bool IsFolderSync => SyncProviders.IsFolderBased(SyncProvider);
+
+    /// <summary>
+    /// The WebDAV collection URL holding <c>launchers.json</c>, e.g.
+    /// <c>https://cloud.example.com/remote.php/dav/files/me/LittleLauncher/</c>.
+    /// </summary>
+    [ObservableProperty]
+    public partial string WebDavUrl { get; set; }
+
+    /// <summary>The WebDAV username.</summary>
+    /// <remarks>
+    /// The password deliberately is <b>not</b> here — it lives in <see cref="Services.ProtectedStore"/>,
+    /// DPAPI-encrypted. This file is exported, backed up and uploaded by the sync feature itself,
+    /// so a password in it would be copied to every machine and to the sync destination.
+    /// </remarks>
+    [ObservableProperty]
+    public partial string WebDavUsername { get; set; }
+
     // ── SFTP Sync ───────────────────────────────────────────────────
 
     /// <summary>SSH/SFTP hostname or IP address.</summary>
@@ -232,6 +324,11 @@ public partial class UserSettings : ObservableObject
         // then overwrites with deserialized values.
         Launchers = [];
 
+        SyncProvider = SyncProviders.Sftp;
+        SyncFolderPath = "";
+        WebDavUrl = "";
+        WebDavUsername = "";
+
         SftpHost = "";
         SftpPort = 22;
         SftpUsername = "";
@@ -278,6 +375,12 @@ public partial class UserSettings : ObservableObject
             LauncherItems.Clear();
         }
 
+        // ── Sync destination migration ───────────────────────────────
+        // Null means the file predates multiple destinations, so carry the single exclusive
+        // choice forward. Empty is a real state — everything deliberately switched off — and must
+        // not be treated as "migrate me again" on the next load.
+        EnabledSyncProviders ??= [SyncProviders.Normalize(SyncProvider)];
+
         _initializing = false;
     }
 
@@ -287,5 +390,26 @@ public partial class UserSettings : ObservableObject
     {
         if (oldValue == newValue || _initializing) return;
         LittleLauncher.Classes.ThemeManager.ApplyAndSaveTheme(newValue);
+    }
+
+    /// <summary>
+    /// Rebuild the periodic sync timer when auto-sync is switched on or off.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Services.AutoSyncService.RestartPeriodicTimer"/> was previously reached only
+    /// from <c>Start()</c> at app startup, so this toggle did nothing until the next launch:
+    /// turning auto-sync on left no timer running, and turning it off left the old one ticking.
+    /// </remarks>
+    partial void OnSftpAutoSyncChanged(bool value)
+    {
+        if (_initializing) return;
+        Services.AutoSyncService.RestartPeriodicTimer();
+    }
+
+    /// <summary>Rebuild the periodic sync timer so a new interval takes effect immediately.</summary>
+    partial void OnSftpAutoSyncIntervalChanged(int value)
+    {
+        if (_initializing) return;
+        Services.AutoSyncService.RestartPeriodicTimer();
     }
 }

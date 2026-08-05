@@ -17,7 +17,7 @@
 
     <!-- Cloud Sync -->
     <x:String x:Key="CloudSyncTitle">Cloud Sync</x:String>
-    <x:String x:Key="CloudSyncDescription">Synchronise your settings to a remote server using SSH/SFTP.</x:String>
+    <x:String x:Key="CloudSyncDescription">Synchronise your settings through OneDrive, Google Drive, a network file share, another folder, or SSH/SFTP.</x:String>
 
     <!-- System Settings -->
     <x:String x:Key="SystemSettingsTitle">Settings</x:String>

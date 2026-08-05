@@ -4,4 +4,8 @@
 
 @../../.claude/docs/installer.md
 
-Other services in this folder (`SftpSyncService`, `AutoSyncService`, `FaviconService`) are described in the root [CLAUDE.md](../../CLAUDE.md) architecture section.
+Global launcher sync (`LauncherSyncService`, `SftpSyncService`, `FolderSyncService`, `CloudFolderService`, `LauncherPayload`, `AutoSyncService`) is transport-pluggable. Before changing any of it — including adding a trigger — follow the sync conventions:
+
+@../../.claude/docs/sync.md
+
+Other services in this folder (`FaviconService`, `AppCatalog`, `BookmarkImport`, …) are described in the root [CLAUDE.md](../../CLAUDE.md) architecture section.

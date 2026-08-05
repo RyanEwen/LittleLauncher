@@ -377,3 +377,6 @@ build_out.txt
 # Throwaway PAT files — never commit
 token
 token.txt
+
+# Local build secrets — OAuth client secrets injected at compile time, never committed
+local.secrets.props

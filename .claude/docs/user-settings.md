@@ -62,6 +62,7 @@ or a configuration that would work:
 |---|---|---|
 | `SftpPort`, `Launcher.SharedSftpPort` | 22 | Port `0` is not a valid port |
 | `SftpAutoSyncInterval` | 5 | A `0`-minute interval is not offered |
+| `SyncProvider` | `SyncProviders.Sftp` (0) | The default *is* the CLR default, by design — see below |
 | `SftpRemotePath` | `~/.config/LittleLauncher/` | Clearing the box reverts to the default — which is the desirable outcome, since an empty remote path is not a usable configuration |
 | `Launcher.Name` | `"Launcher"` | `LauncherSettingsWindow.CommitName` refuses an empty name |
 | `Launcher.TrayIconMode` | `Composite` | The gallery cannot produce an empty mode |
@@ -151,6 +152,44 @@ that defaults to `true` **cannot be turned off** in this settings file.
 
 **Do not** add `[ObservableProperty]` to the legacy migration fields (`LauncherItems`, `TrayIconMode`, `NIconHide`, `CustomTrayIconPath` on `UserSettings`) — they are plain migration-only properties marked with `[JsonIgnore]`.
 
+## Sync destination: `SyncProvider` / `SyncFolderPath`
+
+`SyncProvider` (`[ObservableProperty]`, int) selects where global sync reads and writes — see
+`Models/SyncProviders.cs`: `Sftp` (0, default), `OneDrive` (1), `GoogleDrive` (2),
+`NetworkShare` (3), `Folder` (4), `WebDav` (5). `WebDavUrl` / `WebDavUsername` configure the
+WebDAV server — **its password is not here**, see below. `SyncFolderPath` (`[ObservableProperty]`, string) is the
+directory used by the two **folder** providers only — OneDrive and Google Drive sign in and use
+their vendor APIs, so they store nothing here. `IsFolderSync` is a `[JsonIgnore]` convenience;
+`SyncProviders.IsCloudAccount` is its counterpart.
+
+**Cloud credentials are not in this file and must never be** — OAuth tokens *and* the WebDAV
+password. settings.json is exported,
+imported, backed up, and *uploaded by the sync feature itself* — a refresh token in it would be
+copied to every machine and into whatever server or folder is configured. They live in
+`ProtectedStore` (`%AppData%\LittleLauncher\cloud-{name}.dat`, DPAPI-encrypted to the current
+Windows user). A URL and a username are ordinary settings and do belong here; only the secret
+does not.
+
+**`Sftp` is 0 because of the `WhenWritingDefault` policy above.** Every settings file written
+before this property existed omits it, so the CLR default is what those files resolve to — it has
+to be the transport they were already configured for. Never renumber these constants: they are
+serialized.
+
+The SFTP fields and `SyncFolderPath` **coexist rather than replace each other**, so switching
+provider and back does not mean re-entering a connection.
+
+`SftpAutoSync` / `SftpAutoSyncInterval` keep their names but apply to whichever provider is
+selected — renaming the keys would orphan every existing settings file for no user-visible gain,
+the same trade `FlyoutAnimationsEnabled` makes. Nothing may gate a sync trigger on `SftpHost`;
+use `LauncherSyncService.IsConfigured`. See [sync.md](sync.md).
+
+Both have `On…Changed` handlers that call `AutoSyncService.RestartPeriodicTimer()`. This is the
+side-effect case the section above describes, and it was missing: the timer was only ever built
+at startup, so switching auto-sync on started no timer, switching it off left the old one
+running, and a changed interval took effect on the next launch. **A setting that configures a
+timer, a window, or anything else built once at startup needs a change handler, or it silently
+does nothing until restart.**
+
 ## Sync safety: `LaunchersModifiedUtc`
 
 Records when launchers were last changed locally without having been uploaded; `default` means
@@ -210,6 +249,7 @@ Group related properties together with comment headers matching existing style:
 - Appearance & Behaviour
 - Taskbar Widget
 - Launchers
+- Sync destination
 - SFTP Sync
 
 `UserSettings` appearance/behaviour properties currently include `AppTheme`, `Startup`, `ShowWebLauncherNotice`, and `FlyoutAnimationsEnabled` (default `true`, controls whether `FlyoutWindow` uses animated open/close transitions).

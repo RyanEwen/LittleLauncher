@@ -1,4 +1,4 @@
-// Copyright © 2024-2026 The Little Launcher Authors
+﻿// Copyright © 2024-2026 The Little Launcher Authors
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 using LittleLauncher.Classes;
@@ -663,7 +663,8 @@ public sealed partial class LaunchersPage : Page
 
     private async Task ShowShareLauncherDialog(Launcher launcher)
     {
-        var (formPanel, modeCombo, pathBox, hostBox, portBox, userBox, keyBox, directionCombo) = BuildShareForm(launcher);
+        var (formPanel, modeCombo, pathBox, hostBox, portBox, userBox, keyBox, directionCombo,
+             davUrlBox, davUserBox, davPasswordBox, oneDriveLinkBox) = BuildShareForm(launcher, isSubscribing: false);
 
         var dialog = new ContentDialog
         {
@@ -693,6 +694,19 @@ public sealed partial class LaunchersPage : Page
             launcher.SharedSftpPort = 22;
             launcher.SharedSftpUsername = "";
             launcher.SharedSftpPrivateKeyPath = "";
+
+            // The password is outside settings.json, so clearing the launcher's fields would
+            // otherwise leave a live credential on disk for a launcher that is no longer shared.
+            WebDavSharedStore.ClearPassword(launcher);
+            launcher.SharedWebDavUrl = "";
+            launcher.SharedWebDavUsername = "";
+
+            // Leaving these behind would have a re-shared launcher silently publish to the old
+            // file — and keep the old link live for whoever already had it.
+            launcher.SharedLinkUrl = "";
+            launcher.SharedItemId = "";
+            launcher.SharedDriveId = "";
+
             SettingsManager.SaveSettings();
             RebuildLauncherCards();
             return;
@@ -700,19 +714,68 @@ public sealed partial class LaunchersPage : Page
 
         if (result != ContentDialogResult.Primary) return;
 
-        int mode = modeCombo.SelectedIndex; // 0 = File, 1 = SFTP
+        int mode = modeCombo.SelectedIndex;
         string path = pathBox.Text.Trim();
 
-        if (string.IsNullOrWhiteSpace(path))
+        if (mode == SharedSyncModes.OneDrive)
         {
-            await ShowErrorDialog("Path is required.");
-            return;
-        }
+            var store = CloudSyncService.StoreFor(SyncProviders.OneDrive);
+            if (store is not { IsSignedIn: true })
+            {
+                await ShowErrorDialog("Sign in to OneDrive on the Cloud Sync page first.");
+                return;
+            }
 
-        if (mode == 1 && string.IsNullOrWhiteSpace(hostBox.Text))
+            // Incremental consent, asked for at the moment it is justified rather than at
+            // sign-in: publishing needs write access outside the private app folder.
+            if (!OneDriveSharedStore.HasConsent)
+            {
+                var (granted, consentMessage) = await OneDriveSharedStore.RequestConsentAsync();
+                if (!granted)
+                {
+                    await ShowErrorDialog(consentMessage);
+                    return;
+                }
+            }
+
+            // Empty is the normal case for an owner — the link is minted on the first push.
+            launcher.SharedLinkUrl = oneDriveLinkBox.Text.Trim();
+        }
+        else if (mode == SharedSyncModes.WebDav)
         {
-            await ShowErrorDialog("SFTP host is required.");
-            return;
+            if (string.IsNullOrWhiteSpace(davUrlBox.Text) || string.IsNullOrWhiteSpace(davUserBox.Text))
+            {
+                await ShowErrorDialog("WebDAV needs a file URL and a username.");
+                return;
+            }
+
+            launcher.SharedWebDavUrl = davUrlBox.Text.Trim();
+            launcher.SharedWebDavUsername = davUserBox.Text.Trim();
+
+            // An empty box means "keep what is stored", so re-opening the dialog to change the
+            // direction does not silently wipe a working password.
+            if (davPasswordBox.Password.Length > 0)
+                WebDavSharedStore.SetPassword(launcher, davPasswordBox.Password);
+
+            if (!WebDavSharedStore.HasCredentials(launcher))
+            {
+                await ShowErrorDialog("Enter the WebDAV password.");
+                return;
+            }
+        }
+        else
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                await ShowErrorDialog("Path is required.");
+                return;
+            }
+
+            if (mode == SharedSyncModes.Sftp && string.IsNullOrWhiteSpace(hostBox.Text))
+            {
+                await ShowErrorDialog("SFTP host is required.");
+                return;
+            }
         }
 
         launcher.SharedSyncMode = mode;
@@ -740,8 +803,63 @@ public sealed partial class LaunchersPage : Page
         var (ok, msg) = await SftpSyncService.ShareLauncherAsync(launcher, password);
         if (!ok)
             await ShowErrorDialog(msg);
+        else if (launcher.IsOneDriveSync && launcher.SharedLinkUrl.Length > 0)
+            await ShowShareLinkDialog(launcher);
 
+        SettingsManager.SaveSettings();
         RebuildLauncherCards();
+    }
+
+    /// <summary>
+    /// Show the link a cloud share just produced, ready to send.
+    /// </summary>
+    /// <remarks>
+    /// The point of sharing this way is the link, so it has to appear the moment it exists rather
+    /// than being buried in a settings dialog the owner would have to go looking for. Selectable
+    /// and copyable, because the alternative is retyping a hundred-character URL by hand.
+    /// </remarks>
+    private async Task ShowShareLinkDialog(Launcher launcher)
+    {
+        var linkBox = new TextBox
+        {
+            Text = launcher.SharedLinkUrl,
+            IsReadOnly = true,
+            TextWrapping = TextWrapping.Wrap,
+            AcceptsReturn = true,
+            MaxHeight = 90,
+        };
+
+        var copyButton = new Button { Content = "Copy link", Margin = new Thickness(0, 8, 0, 0) };
+        copyButton.Click += (_, _) =>
+        {
+            var package = new global::Windows.ApplicationModel.DataTransfer.DataPackage();
+            package.SetText(launcher.SharedLinkUrl);
+            global::Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(package);
+            copyButton.Content = "Copied";
+        };
+
+        var panel = new StackPanel { Spacing = 4, MinWidth = 420 };
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Send this to whoever should get the launcher. Anyone with the link can open "
+                 + "and edit it, so treat it like a password.",
+            TextWrapping = TextWrapping.Wrap,
+            Opacity = 0.75,
+            Margin = new Thickness(0, 0, 0, 8),
+        });
+        panel.Children.Add(linkBox);
+        panel.Children.Add(copyButton);
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = this.XamlRoot,
+            Title = $"'{launcher.Name}' is shared",
+            Content = panel,
+            CloseButtonText = "Done",
+            DefaultButton = ContentDialogButton.Close,
+        };
+
+        await dialog.ShowAsync();
     }
 
     private async Task ShowAddSharedLauncherDialog()
@@ -754,7 +872,8 @@ public sealed partial class LaunchersPage : Page
         };
 
         var tempLauncher = new Launcher();
-        var (formPanel, modeCombo, pathBox, hostBox, portBox, userBox, keyBox, directionCombo) = BuildShareForm(tempLauncher);
+        var (formPanel, modeCombo, pathBox, hostBox, portBox, userBox, keyBox, directionCombo,
+             davUrlBox, davUserBox, davPasswordBox, oneDriveLinkBox) = BuildShareForm(tempLauncher, isSubscribing: true);
 
         var fullPanel = new StackPanel { Spacing = 4 };
         fullPanel.Children.Add(new TextBlock { Text = "Name", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
@@ -774,36 +893,72 @@ public sealed partial class LaunchersPage : Page
         var result = await dialog.ShowAsync();
         if (result != ContentDialogResult.Primary) return;
 
-        int mode = modeCombo.SelectedIndex; // 0 = File, 1 = SFTP
+        int mode = modeCombo.SelectedIndex;
         string path = pathBox.Text.Trim();
 
-        if (string.IsNullOrWhiteSpace(path))
+        if (mode == SharedSyncModes.OneDrive)
         {
-            await ShowErrorDialog("Path is required.");
-            return;
+            if (string.IsNullOrWhiteSpace(oneDriveLinkBox.Text))
+            {
+                await ShowErrorDialog("Paste the OneDrive share link you were sent.");
+                return;
+            }
+
+            var store = CloudSyncService.StoreFor(SyncProviders.OneDrive);
+            if (store is not { IsSignedIn: true })
+            {
+                await ShowErrorDialog("Sign in to OneDrive on the Cloud Sync page first.");
+                return;
+            }
+        }
+        else if (mode == SharedSyncModes.WebDav)
+        {
+            if (string.IsNullOrWhiteSpace(davUrlBox.Text)
+                || string.IsNullOrWhiteSpace(davUserBox.Text)
+                || davPasswordBox.Password.Length == 0)
+            {
+                await ShowErrorDialog("WebDAV needs a file URL, a username and a password.");
+                return;
+            }
+        }
+        else
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                await ShowErrorDialog("Path is required.");
+                return;
+            }
+
+            if (mode == SharedSyncModes.Sftp && string.IsNullOrWhiteSpace(hostBox.Text))
+            {
+                await ShowErrorDialog("SFTP host is required.");
+                return;
+            }
         }
 
-        if (mode == 1 && string.IsNullOrWhiteSpace(hostBox.Text))
-        {
-            await ShowErrorDialog("SFTP host is required.");
-            return;
-        }
-
-        bool isTwoWay = directionCombo.SelectedIndex == 0;
+        // Provisional only. The real value arrives with the file on the verify below, which is
+        // what SharedLauncherPayload.ApplyAsync adopts.
         var newLauncher = new Launcher
         {
             Id = Guid.NewGuid().ToString(),
             Name = string.IsNullOrWhiteSpace(nameBox.Text) ? "Shared Launcher" : nameBox.Text.Trim(),
             IsShared = true,
             IsSharedOwner = false,
-            SharedTwoWay = isTwoWay,
             SharedSyncMode = mode,
             SharedPath = path,
             SharedSftpHost = hostBox.Text.Trim(),
             SharedSftpPort = int.TryParse(portBox.Text, out int p) ? p : 22,
             SharedSftpUsername = userBox.Text.Trim(),
             SharedSftpPrivateKeyPath = keyBox.Text.Trim(),
+            SharedWebDavUrl = davUrlBox.Text.Trim(),
+            SharedWebDavUsername = davUserBox.Text.Trim(),
+            SharedLinkUrl = oneDriveLinkBox.Text.Trim(),
         };
+
+        // The password has to be stored before verifying — it is keyed by launcher id, and
+        // verification is what proves the whole set of details actually works.
+        if (mode == SharedSyncModes.WebDav)
+            WebDavSharedStore.SetPassword(newLauncher, davPasswordBox.Password);
 
         // Verify remote before adding
         string? password = null;
@@ -816,6 +971,8 @@ public sealed partial class LaunchersPage : Page
         var (verified, itemCount, error) = await SftpSyncService.VerifySharedLauncherAsync(newLauncher, password);
         if (!verified)
         {
+            // The launcher is never added, so its stored password would be orphaned.
+            WebDavSharedStore.ClearPassword(newLauncher);
             await ShowErrorDialog($"Could not verify: {error}");
             return;
         }
@@ -834,10 +991,15 @@ public sealed partial class LaunchersPage : Page
 
     // ── Shared dialog helpers ───────────────────────────────────────
 
+    /// <summary>Example path shown for File mode, kept in one place so the two uses agree.</summary>
+    private const string FilePathPlaceholder =
+        @"C:\shared\launcher.json or \\server\share\launcher.json";
+
     private static (StackPanel Panel, ComboBox ModeCombo, TextBox PathBox,
         TextBox HostBox, TextBox PortBox, TextBox UserBox, TextBox KeyBox,
-        ComboBox DirectionCombo)
-        BuildShareForm(Launcher launcher)
+        ComboBox DirectionCombo, TextBox DavUrlBox, TextBox DavUserBox, PasswordBox DavPasswordBox,
+        TextBox OneDriveLinkBox)
+        BuildShareForm(Launcher launcher, bool isSubscribing)
     {
         // ── Direction ───────────────────────────────────────────────
         var directionCombo = new ComboBox { MinWidth = 160 };
@@ -845,10 +1007,25 @@ public sealed partial class LaunchersPage : Page
         directionCombo.Items.Add("1-way (owner publishes, others subscribe)");
         directionCombo.SelectedIndex = launcher.SharedTwoWay ? 0 : 1;
 
-        var modeCombo = new ComboBox { MinWidth = 160 };
-        modeCombo.Items.Add("File (local or network)");
-        modeCombo.Items.Add("SFTP");
+        // "How do you want to share this?" comes first and decides everything below it. The
+        // previous form showed Direction, Mode, Path and every provider panel at once, with Path
+        // meaning something different per mode — so the first thing a reader had to do was work
+        // out which half of the dialog applied to them.
+        var modeCombo = new ComboBox { MinWidth = 300, HorizontalAlignment = HorizontalAlignment.Stretch };
+        modeCombo.Items.Add("File: a folder, network share, or synced cloud folder");
+        modeCombo.Items.Add("SFTP server");
+        modeCombo.Items.Add("WebDAV server (Nextcloud, ownCloud...)");
+        modeCombo.Items.Add(isSubscribing ? "OneDrive: I have a share link" : "OneDrive: create a share link");
         modeCombo.SelectedIndex = launcher.SharedSyncMode;
+
+        // What each choice actually means, in the dialog rather than in docs no one opens.
+        var modeCaption = new TextBlock
+        {
+            FontSize = 12,
+            Opacity = 0.6,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 2, 0, 4),
+        };
 
         var pathBox = new TextBox
         {
@@ -856,10 +1033,49 @@ public sealed partial class LaunchersPage : Page
             Text = launcher.SharedPath,
         };
 
+        var pathCaption = new TextBlock
+        {
+            Text = "Any folder works, including a OneDrive, Google Drive or network share folder. "
+                 + "Whoever you are sharing with points at their own copy of the same folder.",
+            FontSize = 12,
+            Opacity = 0.6,
+            TextWrapping = TextWrapping.Wrap,
+        };
+        pathCaption.Visibility = launcher.IsFileSync ? Visibility.Visible : Visibility.Collapsed;
+
         var hostBox = new TextBox { PlaceholderText = "hostname or IP", Text = launcher.SharedSftpHost };
         var portBox = new TextBox { PlaceholderText = "22", Text = launcher.SharedSftpPort == 22 ? "" : launcher.SharedSftpPort.ToString() };
         var userBox = new TextBox { PlaceholderText = Environment.UserName, Text = launcher.SharedSftpUsername };
         var keyBox = new TextBox { PlaceholderText = "auto-detect (~/.ssh/)", Text = launcher.SharedSftpPrivateKeyPath };
+
+        // WebDAV-specific fields. Its own URL and account rather than the global WebDAV
+        // settings: the server a colleague shares from is routinely not the one you sync to.
+        var davUrlBox = new TextBox
+        {
+            PlaceholderText = "https://cloud.example.com/remote.php/dav/files/me/Shared/team.json",
+            Text = launcher.SharedWebDavUrl,
+        };
+        var davUserBox = new TextBox { PlaceholderText = "username", Text = launcher.SharedWebDavUsername };
+        var davPasswordBox = new PasswordBox { PlaceholderText = WebDavSharedStore.HasCredentials(launcher) ? "saved, type to replace" : "app password" };
+
+        var davPanel = new StackPanel { Spacing = 4 };
+
+        // ── OneDrive ────────────────────────────────────────────────
+        // No path anywhere. The owner never chooses where the file goes, and a subscriber only
+        // ever holds a link — showing a file path here is exactly what made this confusing.
+        var oneDriveLinkBox = new TextBox
+        {
+            PlaceholderText = "https://1drv.ms/... (paste the link you were sent)",
+            Text = launcher.SharedLinkUrl,
+        };
+        var oneDrivePanel = new StackPanel { Spacing = 4 };
+        var oneDriveNote = new TextBlock
+        {
+            FontSize = 12,
+            Opacity = 0.6,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 4, 0, 0),
+        };
 
         // SFTP-specific fields panel
         var sftpPanel = new StackPanel { Spacing = 4 };
@@ -870,31 +1086,119 @@ public sealed partial class LaunchersPage : Page
             target.Children.Add(element);
         }
 
+        // The link is an *input* only when subscribing. Publishing produces one, so an owner
+        // was previously shown a box captioned "leave this empty" — a field that exists to be
+        // ignored, in a dialog whose whole purpose is the thing it would have contained.
+        if (isSubscribing)
+            AddField(oneDrivePanel, "Share link", oneDriveLinkBox);
+        oneDrivePanel.Children.Add(oneDriveNote);
+
+        AddField(davPanel, "File URL", davUrlBox);
+        AddField(davPanel, "Username", davUserBox);
+        AddField(davPanel, "Password", davPasswordBox);
+        davPanel.Children.Add(new TextBlock
+        {
+            Text = "Everyone sharing this launcher points at the same URL with their own account. "
+                 + "Both sides can write, so 2-way sharing works.",
+            FontSize = 12,
+            Opacity = 0.6,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 4, 0, 0),
+        });
+
         AddField(sftpPanel, "SFTP Host", hostBox);
         AddField(sftpPanel, "Port", portBox);
         AddField(sftpPanel, "Username", userBox);
         AddField(sftpPanel, "Private Key", keyBox);
 
         sftpPanel.Visibility = launcher.IsSftpSync ? Visibility.Visible : Visibility.Collapsed;
+        davPanel.Visibility = launcher.IsWebDavSync ? Visibility.Visible : Visibility.Collapsed;
+        oneDrivePanel.Visibility = launcher.IsOneDriveSync ? Visibility.Visible : Visibility.Collapsed;
 
         // Update visibility and placeholder when mode changes
-        modeCombo.SelectionChanged += (s, e) =>
+        var pathRow = new StackPanel { Spacing = 4 };
+        AddField(pathRow, "Path", pathBox);
+
+        // One place decides what a mode shows, so the initial state and the change handler
+        // cannot drift apart — they did before, which is how a stale panel could linger.
+        void ApplyMode(int mode)
         {
-            bool isSftp = modeCombo.SelectedIndex == 1;
+            bool isFile = mode == SharedSyncModes.File;
+            bool isSftp = mode == SharedSyncModes.Sftp;
+            bool isDav = mode == SharedSyncModes.WebDav;
+            bool isOneDrive = mode == SharedSyncModes.OneDrive;
+
             sftpPanel.Visibility = isSftp ? Visibility.Visible : Visibility.Collapsed;
-            pathBox.PlaceholderText = isSftp
-                ? "~/shared/launcher.json"
-                : @"C:\shared\launcher.json or \\server\share\launcher.json";
-        };
+            davPanel.Visibility = isDav ? Visibility.Visible : Visibility.Collapsed;
+            oneDrivePanel.Visibility = isOneDrive ? Visibility.Visible : Visibility.Collapsed;
+
+            // Only File and SFTP are addressed by a path. WebDAV carries its whole location in
+            // its URL, and OneDrive has no user-visible location at all, so a Path row for
+            // either would be a second place to put the same thing — or an outright lie.
+            pathRow.Visibility = isFile || isSftp ? Visibility.Visible : Visibility.Collapsed;
+            pathCaption.Visibility = isFile ? Visibility.Visible : Visibility.Collapsed;
+
+            pathBox.PlaceholderText = isSftp ? "~/shared/launcher.json" : FilePathPlaceholder;
+
+            modeCaption.Text = mode switch
+            {
+                SharedSyncModes.Sftp =>
+                    "Everyone sharing this needs an account on the same SSH server.",
+                SharedSyncModes.WebDav =>
+                    "Everyone points at the same URL with their own account. Both sides can edit.",
+                SharedSyncModes.OneDrive =>
+                    "Little Launcher puts the file in your OneDrive and gives you a link to send. "
+                    + "Anyone with the link can open and edit it, so treat it like a password.",
+                _ => "Any folder both of you can reach: a network share, or a cloud folder you "
+                     + "have already shared with them through that service.",
+            };
+
+            oneDriveNote.Text = isOneDrive && !isSubscribing
+                ? "A link is created in your OneDrive when you press Share, and shown so you can "
+                  + "send it. Anyone with it can edit this launcher."
+                : "";
+            oneDriveNote.Visibility = oneDriveNote.Text.Length > 0
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+        }
+
+        modeCombo.SelectionChanged += (s, e) => ApplyMode(modeCombo.SelectedIndex);
 
         var panel = new StackPanel { Spacing = 4 };
-        AddField(panel, "Direction", directionCombo);
-        AddField(panel, "Mode", modeCombo);
-        AddField(panel, "Path", pathBox);
-        panel.Children.Add(sftpPanel);
 
-        return (panel, modeCombo, pathBox, hostBox, portBox, userBox, keyBox, directionCombo);
+        // Provider first, then only its inputs, then direction — the order the decisions
+        // are actually made in.
+        AddField(panel, isSubscribing ? "How was it shared with you?" : "How do you want to share this?", modeCombo);
+        panel.Children.Add(modeCaption);
+        panel.Children.Add(pathRow);
+        panel.Children.Add(pathCaption);
+        panel.Children.Add(sftpPanel);
+        panel.Children.Add(davPanel);
+        panel.Children.Add(oneDrivePanel);
+        // Only the owner chooses direction. A subscriber cannot know what the owner intended,
+        // and guessing wrong means either losing their edits or pushing changes into a share
+        // that was meant to be read-only, so they are told rather than asked: the answer is
+        // published in the file and adopted on the first pull.
+        if (!isSubscribing)
+            AddField(panel, "Direction", directionCombo);
+        else
+            panel.Children.Add(new TextBlock
+            {
+                Text = "Whether you can edit this launcher or only receive it is set by whoever "
+                     + "shared it, and applies automatically.",
+                FontSize = 12,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 8, 0, 0),
+            });
+
+        ApplyMode(modeCombo.SelectedIndex);
+
+        return (panel, modeCombo, pathBox, hostBox, portBox, userBox, keyBox, directionCombo,
+                davUrlBox, davUserBox, davPasswordBox, oneDriveLinkBox);
     }
+
+
 
     private async Task<string?> ShowPasswordPrompt()
     {

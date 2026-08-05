@@ -1,15 +1,29 @@
-using LittleLauncher.Classes.Settings;
+﻿using LittleLauncher.Classes.Settings;
 
 namespace LittleLauncher.Services;
 
 /// <summary>
-/// Manages automatic SFTP sync of launchers.
+/// Manages automatic sync of launchers.
 /// Handles: startup download, debounced upload on item changes, and periodic download.
-/// All triggers are gated by the SftpAutoSync toggle.
+/// All triggers are gated by <see cref="IsSyncEnabled"/>.
 /// </summary>
+/// <remarks>
+/// Transport-agnostic: every operation goes through <see cref="LauncherSyncService"/>, which
+/// resolves the configured provider (SFTP, OneDrive, Google Drive, a network share, or another
+/// folder). Nothing here should test a provider-specific setting.
+/// </remarks>
 public static class AutoSyncService
 {
     private static readonly NLog.Logger Logger = NLog.LogManager.GetCurrentClassLogger();
+
+    /// <summary>
+    /// True when auto-sync is switched on *and* the selected provider is configured enough to
+    /// use. Both halves matter: the toggle is shared across providers, so testing it alone would
+    /// have a machine that switched to a folder provider — but has not chosen a folder yet —
+    /// firing failing uploads on every edit.
+    /// </summary>
+    private static bool IsSyncEnabled =>
+        SettingsManager.Current.SftpAutoSync && LauncherSyncService.IsConfigured;
 
     private static System.Threading.Timer? _periodicTimer;
     private static System.Threading.Timer? _debounceTimer;
@@ -105,8 +119,7 @@ public static class AutoSyncService
     /// </summary>
     public static void NotifyItemsChanged()
     {
-        if (SettingsManager.Current.SftpAutoSync
-            && !string.IsNullOrWhiteSpace(SettingsManager.Current.SftpHost))
+        if (IsSyncEnabled)
         {
             _hasPendingLocalItemChanges = true;
 
@@ -122,8 +135,7 @@ public static class AutoSyncService
             return;
         }
 
-        if (!SettingsManager.Current.SftpAutoSync
-            || string.IsNullOrWhiteSpace(SettingsManager.Current.SftpHost))
+        if (!IsSyncEnabled)
             return;
 
         // Reset the debounce timer — upload 3 seconds after last change
@@ -145,8 +157,7 @@ public static class AutoSyncService
         _debounceTimer?.Dispose();
         _debounceTimer = null;
 
-        if (!SettingsManager.Current.SftpAutoSync
-            || string.IsNullOrWhiteSpace(SettingsManager.Current.SftpHost))
+        if (!IsSyncEnabled)
             return;
 
         _ = UploadAndPushSharedAsync("settings close flush");
@@ -167,13 +178,12 @@ public static class AutoSyncService
     /// </summary>
     public static async Task SyncOnStartupAsync()
     {
-        if (!SettingsManager.Current.SftpAutoSync
-            || string.IsNullOrWhiteSpace(SettingsManager.Current.SftpHost))
+        if (!IsSyncEnabled)
             return;
 
         try
         {
-            var (success, message) = await SftpSyncService.DownloadLaunchersAsync();
+            var (success, message) = await LauncherSyncService.DownloadLaunchersAsync();
             if (success)
             {
                 ClearPendingLocalItemChanges();
@@ -194,13 +204,12 @@ public static class AutoSyncService
 
     private static async Task UploadAndPushSharedAsync(string trigger)
     {
-        if (!SettingsManager.Current.SftpAutoSync
-            || string.IsNullOrWhiteSpace(SettingsManager.Current.SftpHost))
+        if (!IsSyncEnabled)
             return;
 
         try
         {
-            var (success, message) = await SftpSyncService.UploadLaunchersAsync();
+            var (success, message) = await LauncherSyncService.UploadLaunchersAsync();
             if (success)
             {
                 ClearPendingLocalItemChanges();
@@ -233,8 +242,7 @@ public static class AutoSyncService
 
     private static async Task DownloadSilentAsync(string trigger)
     {
-        if (!SettingsManager.Current.SftpAutoSync
-            || string.IsNullOrWhiteSpace(SettingsManager.Current.SftpHost))
+        if (!IsSyncEnabled)
             return;
 
         if (_hasPendingLocalItemChanges || SettingsManager.Current.LaunchersModifiedUtc != default)
@@ -253,7 +261,7 @@ public static class AutoSyncService
 
         try
         {
-            var (success, message) = await SftpSyncService.DownloadLaunchersAsync();
+            var (success, message) = await LauncherSyncService.DownloadLaunchersAsync();
             if (success)
             {
                 ClearPendingLocalItemChanges();

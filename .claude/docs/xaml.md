@@ -92,6 +92,24 @@ Conventions for these windows:
 - Size to content. Surplus height shows as a large empty gap, because the form is top-aligned above a bottom-anchored button row.
 - Don't leak the window: the flyout tracks the open editor and closes it when edit mode ends, so an orphan can't commit into a launcher the user has navigated away from.
 
+## Expander rows for on/off + settings
+
+`SyncPage` renders each sync destination as an `Expander`: icon, name and a live status line in
+the header, a `ToggleSwitch` on the right, and that destination's settings as the content.
+
+Two rules, both learned the hard way:
+
+- **Enabled and expanded must be separate, visible affordances.** An earlier version used a
+  selected-card highlight to mean "its settings are shown below", and it was not discoverable — a
+  border colour reads as *state*, not as *"click me, there is more"*. The chevron says it outright,
+  and the settings appear inside the thing you clicked rather than detached at the bottom.
+- **Setting `ToggleSwitch.IsOn` from code raises `Toggled` exactly as a click does.** Any refresh
+  that syncs toggles from settings must be wrapped in an `_initializing` guard, or it writes the
+  settings back over themselves.
+
+Give the expanders `HorizontalAlignment="Stretch"` *and* `HorizontalContentAlignment="Stretch"` (a
+shared `Style` is easiest) or they size to their content and the list looks ragged.
+
 ## Drag-and-Drop (FlyoutWindow)
 
 ListViews use `CanDragItems="True"` with custom handlers — **never `CanReorderItems`**, which cannot be overridden for cross-list drops. Dragging is gated behind flyout edit mode. See [drag-drop.md](drag-drop.md) for full details.

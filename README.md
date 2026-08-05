@@ -5,7 +5,7 @@
 <h1 align="center">Little Launcher</h1>
 
 <p align="center">
-  A Windows launcher with system-tray and taskbar icon support, settings-sync capability, built with WinUI 3, Windows App SDK, and SSH/SFTP.
+  A Windows launcher with system-tray and taskbar icon support, settings-sync capability, built with WinUI 3, Windows App SDK, WebView2, and SSH.NET.
 </p>
 
 <p align="center">
@@ -55,7 +55,7 @@
 
 ## Overview
 
-Little Launcher lives in the Windows system tray and/or taskbar. Clicking its icon opens a flyout with app and website shortcuts. It also provides SSH/SFTP-based settings synchronisation so you can keep your launcher configuration in sync across machines.
+Little Launcher lives in the Windows system tray and/or taskbar. Clicking its icon opens a flyout with app and website shortcuts. It also synchronises your settings — through OneDrive, Google Drive, a network file share, another folder, or your own SSH/SFTP server — so you can keep your launcher configuration in sync across machines.
 
 **Key features:**
 
@@ -70,8 +70,8 @@ Little Launcher lives in the Windows system tray and/or taskbar. Clicking its ic
 - **Direct flyout item actions** — right-click items in the live flyout to move, edit, or remove them without opening the settings editor.
 - **System-tray icons** — a tray icon that opens a flyout popup for shortcuts.
 - **Taskbar icons** — a companion helper exe (`LauncherShortcut`) can be pinned to the taskbar so one click opens the flyout without needing to find the tray icon.
-- **SSH/SFTP settings sync** — upload/download all launchers to a remote server using SSH.NET.
-- **Shared launchers** — share individual launchers via local/network files or per-launcher SFTP. Owners publish items; subscribers receive read-only copies.
+- **Settings sync** — keep all your launchers in sync across machines through **OneDrive**, **Google Drive**, **WebDAV** (Nextcloud, ownCloud, a NAS), a **network file share**, any other folder, or your own **SSH/SFTP** server. OneDrive and Google Drive sign in through your browser and use their own APIs, so no sync client has to be installed and an upload is confirmed by the service rather than handed to a background app. Each is granted only a private folder of its own — nothing else in your drive is visible to Little Launcher.
+- **Shared launchers** — share individual launchers through a OneDrive, Google Drive or network-share folder, any other file path, or per-launcher SFTP. Owners publish items; subscribers receive read-only copies, or 2-way sharing lets everyone edit.
 - **Export & import** — back up and restore items locally via JSON.
 - **Bookmark import** — import bookmarks directly from Chrome, Edge, Firefox, or any browser's exported HTML bookmarks file into a launcher.
 - **Update paths per install type** — unpackaged/WiX installs update via GitHub Releases + MSI, while Microsoft Store installs can check for and apply updates through the Store from inside the app.

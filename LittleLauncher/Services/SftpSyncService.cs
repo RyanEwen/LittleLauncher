@@ -1,8 +1,6 @@
-using LittleLauncher.Classes.Settings;
+﻿using LittleLauncher.Classes.Settings;
 using LittleLauncher.Models;
-using Microsoft.UI.Dispatching;
 using Renci.SshNet;
-using System.Collections.ObjectModel;
 using System.IO;
 using System.Text.Json;
 
@@ -17,15 +15,17 @@ namespace LittleLauncher.Services;
 ///   - Supports both private-key and password authentication.
 ///   - The remote path is fully configurable in UserSettings.
 ///   - Thread-safe: all operations are async and self-contained.
+///   - One of two global sync transports; <see cref="FolderSyncService"/> is the other, and
+///     <see cref="LauncherSyncService"/> chooses between them. The wire format and the
+///     newer-local download guard are shared, in <see cref="LauncherPayload"/>.
+///   - Also owns the per-launcher *shared* sync, which is independent of the global transport
+///     and has its own File/SFTP setting on each launcher.
 /// </summary>
 public static class SftpSyncService
 {
     private static readonly NLog.Logger Logger = NLog.LogManager.GetCurrentClassLogger();
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-    };
+    private static readonly JsonSerializerOptions JsonOptions = LauncherPayload.JsonOptions;
 
     /// <summary>
     /// Test the SFTP connection with current settings.
@@ -65,12 +65,11 @@ public static class SftpSyncService
             await Task.Run(() => client.Connect());
 
             string remoteDir = GetRemoteDirectory(client);
-            string remotePath = $"{remoteDir}/launchers.json";
+            string remotePath = $"{remoteDir}/{LauncherPayload.FileName}";
 
             await Task.Run(() => EnsureRemoteDirectory(client, remoteDir));
 
-            var launchers = SettingsManager.Current.Launchers;
-            using var stream = SerializeLaunchers(launchers);
+            using var stream = LauncherPayload.Serialize(SettingsManager.Current.Launchers);
             await Task.Run(() => client.UploadFile(stream, remotePath, canOverride: true));
 
             client.Disconnect();
@@ -105,7 +104,7 @@ public static class SftpSyncService
             await Task.Run(() => client.Connect());
 
             string remoteDir = GetRemoteDirectory(client);
-            string remotePath = $"{remoteDir}/launchers.json";
+            string remotePath = $"{remoteDir}/{LauncherPayload.FileName}";
 
             if (!await Task.Run(() => client.Exists(remotePath)))
             {
@@ -119,59 +118,14 @@ public static class SftpSyncService
 
             client.Disconnect();
 
-            var (launchers, remoteTimestamp) = DeserializeLaunchers(stream);
+            var (launchers, remoteTimestamp) = LauncherPayload.Deserialize(stream);
             if (launchers == null)
                 return (false, "Failed to parse launchers from server.");
 
-            // If this is a startup sync and we have a remote timestamp,
-            // compare with local settings file to avoid overwriting newer local changes.
-            // Applies to every automatic download, not just the one at startup. Periodic syncs
-            // used to skip this check entirely, so the server overwrote local launchers every few
-            // minutes however recently they had been edited — changes vanished well after being
-            // saved, which is precisely the failure this guard exists to prevent.
-            if (!force)
-            {
-                var localModified = SettingsManager.Current.LaunchersModifiedUtc;
-                if (localModified != default)
-                {
-                    Logger.Info($"Download skipped: local launcher changes at {localModified:u} have not been uploaded yet");
-                    return (false, "Local launcher changes are newer than the server; skipped download.");
-                }
+            if (LauncherPayload.ShouldSkipDownload(remoteTimestamp, force, out string reason))
+                return (false, reason);
 
-                if (remoteTimestamp.HasValue)
-                {
-                    var localSettingsPath = Path.Combine(
-                        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                        "LittleLauncher", "settings.json");
-                    if (File.Exists(localSettingsPath))
-                    {
-                        var localFileModified = File.GetLastWriteTimeUtc(localSettingsPath);
-                        if (localFileModified > remoteTimestamp.Value.UtcDateTime)
-                        {
-                            Logger.Info($"Download skipped: local settings ({localFileModified:u}) " +
-                                        $"are newer than remote ({remoteTimestamp.Value.UtcDateTime:u})");
-                            return (false, "Local settings are newer than server; skipped download.");
-                        }
-                    }
-                }
-            }
-
-            await ApplyLaunchersAsync(launchers);
-
-            // Normalize legacy glyphs and fetch missing icons
-            foreach (var launcher in SettingsManager.Current.Launchers)
-            {
-                foreach (var item in launcher.Items)
-                {
-                    item.NormalizeGlyph();
-                    if (item.IsGroup)
-                        foreach (var child in item.Children)
-                            child.NormalizeGlyph();
-                }
-                await FaviconService.FetchMissingItemIconsAsync(launcher.Items);
-            }
-
-            SettingsManager.SaveSettings();
+            await LauncherPayload.ApplyAsync(launchers);
 
             Logger.Info($"Launchers downloaded from {remotePath}");
             return (true, $"Launchers downloaded from {SettingsManager.Current.SftpHost}");
@@ -180,6 +134,40 @@ public static class SftpSyncService
         {
             Logger.Error(ex, "Failed to download launchers via SFTP");
             return (false, $"Download failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// When the server's copy last changed, or null when there is none.
+    /// </summary>
+    /// <remarks>
+    /// Used to pick which destination a download comes from, so it must not throw: an unreachable
+    /// host returning null takes it out of the running rather than failing the whole download.
+    /// Connects only when an SSH key resolves without a passphrase — this runs unattended on the
+    /// sync timer and must never sit waiting on a prompt.
+    /// </remarks>
+    public static async Task<DateTimeOffset?> GetRemoteModifiedAsync()
+    {
+        if (string.IsNullOrWhiteSpace(SettingsManager.Current.SftpHost)) return null;
+
+        try
+        {
+            using var client = CreateSftpClient(null);
+            await Task.Run(() => client.Connect());
+
+            string remotePath = $"{GetRemoteDirectory(client)}/{LauncherPayload.FileName}";
+            DateTimeOffset? modified = await Task.Run<DateTimeOffset?>(() =>
+                client.Exists(remotePath)
+                    ? new DateTimeOffset(client.GetAttributes(remotePath).LastWriteTimeUtc, TimeSpan.Zero)
+                    : null);
+
+            client.Disconnect();
+            return modified;
+        }
+        catch (Exception ex)
+        {
+            Logger.Debug(ex, "Could not read the SFTP timestamp");
+            return null;
         }
     }
 
@@ -192,6 +180,9 @@ public static class SftpSyncService
     public static async Task<(bool Success, string Message)> ShareLauncherAsync(
         Launcher launcher, string? password = null)
     {
+        if (launcher.IsOneDriveSync) return await OneDriveSharedStore.PushAsync(launcher);
+        if (launcher.IsWebDavSync) return await WebDavSharedStore.PushAsync(launcher);
+
         return launcher.IsFileSync
             ? await ShareLauncherFileAsync(launcher)
             : await ShareLauncherSftpAsync(launcher, password);
@@ -204,6 +195,9 @@ public static class SftpSyncService
     public static async Task<(bool Success, string Message)> SyncSharedLauncherAsync(
         Launcher launcher, string? password = null)
     {
+        if (launcher.IsOneDriveSync) return await OneDriveSharedStore.PullAsync(launcher);
+        if (launcher.IsWebDavSync) return await WebDavSharedStore.PullAsync(launcher);
+
         return launcher.IsFileSync
             ? await SyncSharedLauncherFileAsync(launcher)
             : await SyncSharedLauncherSftpAsync(launcher, password);
@@ -216,6 +210,9 @@ public static class SftpSyncService
     public static async Task<(bool Success, int ItemCount, string Error)> VerifySharedLauncherAsync(
         Launcher launcher, string? password = null)
     {
+        if (launcher.IsOneDriveSync) return await OneDriveSharedStore.VerifyAsync(launcher);
+        if (launcher.IsWebDavSync) return await WebDavSharedStore.VerifyAsync(launcher);
+
         return launcher.IsFileSync
             ? await VerifySharedLauncherFileAsync(launcher)
             : await VerifySharedLauncherSftpAsync(launcher, password);
@@ -233,8 +230,9 @@ public static class SftpSyncService
         {
             if (!launcher.IsShared) continue;
 
-            // File mode always works; SFTP mode requires an auto key
-            if (launcher.IsSftpSync && !HasAutoKeyForShared(launcher)) continue;
+            // File mode always works; SFTP needs a passphrase-free key; WebDAV needs its
+            // stored password. Anything that would prompt is skipped — this runs on a timer.
+            if (!HasAutoKeyForShared(launcher)) continue;
 
             if (launcher.SharedTwoWay)
             {
@@ -269,7 +267,7 @@ public static class SftpSyncService
         {
             if (!launcher.IsShared) continue;
             if (!launcher.SharedTwoWay && !launcher.IsSharedOwner) continue;
-            if (launcher.IsSftpSync && !HasAutoKeyForShared(launcher)) continue;
+            if (!HasAutoKeyForShared(launcher)) continue;
 
             var (ok, msg) = await ShareLauncherAsync(launcher);
             if (!ok) Logger.Warn($"Shared push failed for '{launcher.Name}': {msg}");
@@ -283,6 +281,14 @@ public static class SftpSyncService
     public static bool HasAutoKeyForShared(Launcher launcher)
     {
         if (launcher.IsFileSync) return true;
+
+        // WebDAV keeps its own password in ProtectedStore, so it never needs a prompt — but it
+        // does need that password to actually be there.
+        if (launcher.IsWebDavSync) return WebDavSharedStore.HasCredentials(launcher);
+
+        // OneDrive sharing rides the stored account token, so it never prompts — but it does
+        // need the wider sharing grant, and an unattended sync must not try to obtain one.
+        if (launcher.IsOneDriveSync) return OneDriveSharedStore.HasConsent;
 
         string? keyPath = ResolvePrivateKeyPath(
             string.IsNullOrWhiteSpace(launcher.SharedSftpPrivateKeyPath) ? null : launcher.SharedSftpPrivateKeyPath);
@@ -300,9 +306,13 @@ public static class SftpSyncService
             if (!string.IsNullOrEmpty(dir))
                 Directory.CreateDirectory(dir);
 
-            var items = new List<LauncherItem>(launcher.Items);
-            await using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read);
-            await JsonSerializer.SerializeAsync(stream, items, JsonOptions);
+            byte[] bytes = SharedLauncherPayload.Serialize(launcher);
+
+            // Written atomically because a shared path is very often a cloud-synced folder — the
+            // OneDrive or Drive folder is the easiest way to share a launcher with someone. Those
+            // clients upload the instant a file changes, so a plain write can be uploaded
+            // half-finished and land on a subscriber as truncated JSON.
+            await Task.Run(() => LauncherPayload.WriteAtomic(path, bytes));
 
             Logger.Info($"Shared launcher '{launcher.Name}' written to {path}");
             return (true, $"Saved to {path}");
@@ -322,21 +332,11 @@ public static class SftpSyncService
             if (!File.Exists(path))
                 return (false, "Shared launcher file not found.");
 
-            await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-            List<LauncherItem>? items;
-            try
-            {
-                items = await JsonSerializer.DeserializeAsync<List<LauncherItem>>(stream, JsonOptions);
-            }
-            catch
-            {
+            var file = SharedLauncherPayload.Deserialize(await File.ReadAllBytesAsync(path));
+            if (file == null)
                 return (false, "Failed to parse shared launcher file.");
-            }
 
-            if (items == null)
-                return (false, "Shared launcher file was empty.");
-
-            await ApplySharedItemsAsync(launcher, items);
+            await SharedLauncherPayload.ApplyAsync(launcher, file);
             Logger.Info($"Shared launcher '{launcher.Name}' synced from {path}");
             return (true, "Shared launcher updated.");
         }
@@ -355,12 +355,11 @@ public static class SftpSyncService
             if (!File.Exists(path))
                 return (false, 0, "File not found.");
 
-            await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-            var items = await JsonSerializer.DeserializeAsync<List<LauncherItem>>(stream, JsonOptions);
-            if (items == null)
+            var file = SharedLauncherPayload.Deserialize(await File.ReadAllBytesAsync(path));
+            if (file == null)
                 return (false, 0, "File exists but could not be parsed.");
 
-            return (true, items.Count, "");
+            return (true, file.Items.Count, "");
         }
         catch (Exception ex)
         {
@@ -383,10 +382,7 @@ public static class SftpSyncService
             if (!string.IsNullOrEmpty(remoteDir))
                 await Task.Run(() => EnsureRemoteDirectory(client, remoteDir));
 
-            var items = new List<LauncherItem>(launcher.Items);
-            using var stream = new MemoryStream();
-            JsonSerializer.Serialize(stream, items, JsonOptions);
-            stream.Position = 0;
+            using var stream = new MemoryStream(SharedLauncherPayload.Serialize(launcher));
             await Task.Run(() => client.UploadFile(stream, remotePath, canOverride: true));
 
             client.Disconnect();
@@ -421,20 +417,11 @@ public static class SftpSyncService
             ms.Position = 0;
             client.Disconnect();
 
-            List<LauncherItem>? items;
-            try
-            {
-                items = JsonSerializer.Deserialize<List<LauncherItem>>(ms, JsonOptions);
-            }
-            catch
-            {
+            var file = SharedLauncherPayload.Deserialize(ms.ToArray());
+            if (file == null)
                 return (false, "Failed to parse shared launcher file.");
-            }
 
-            if (items == null)
-                return (false, "Shared launcher file was empty.");
-
-            await ApplySharedItemsAsync(launcher, items);
+            await SharedLauncherPayload.ApplyAsync(launcher, file);
             Logger.Info($"Shared launcher '{launcher.Name}' synced from {launcher.SharedSftpHost}");
             return (true, "Shared launcher updated.");
         }
@@ -465,41 +452,16 @@ public static class SftpSyncService
             ms.Position = 0;
             client.Disconnect();
 
-            var items = JsonSerializer.Deserialize<List<LauncherItem>>(ms, JsonOptions);
-            if (items == null)
+            var file = SharedLauncherPayload.Deserialize(ms.ToArray());
+            if (file == null)
                 return (false, 0, "File exists but could not be parsed.");
 
-            return (true, items.Count, "");
+            return (true, file.Items.Count, "");
         }
         catch (Exception ex)
         {
             return (false, 0, ex.Message);
         }
-    }
-
-    /// <summary>
-    /// Apply downloaded shared items to a launcher on the UI thread,
-    /// fetch missing icons, and save settings.
-    /// Suppresses the auto-sync upload trigger to prevent feedback loops.
-    /// </summary>
-    private static async Task ApplySharedItemsAsync(Launcher launcher, List<LauncherItem> items)
-    {
-        AutoSyncService.SuppressNextChange = true;
-        var tcs = new TaskCompletionSource();
-        App.MainDispatcherQueue.TryEnqueue(() =>
-        {
-            launcher.Items.Clear();
-            foreach (var item in items)
-            {
-                item.NormalizeGlyph();
-                launcher.Items.Add(item);
-            }
-            tcs.SetResult();
-        });
-        await tcs.Task;
-
-        await FaviconService.FetchMissingItemIconsAsync(launcher.Items);
-        SettingsManager.SaveSettings();
     }
 
     // ── Private helpers ─────────────────────────────────────────────
@@ -623,134 +585,6 @@ public static class SftpSyncService
 
         if (!client.Exists(path))
             throw new InvalidOperationException($"Failed to create remote directory: {path}");
-    }
-
-    /// <summary>
-    /// Merge downloaded launchers into the existing Launchers collection on the UI thread.
-    /// Existing launchers are updated in-place (preserving object references for PropertyChanged
-    /// subscriptions and FlyoutWindow instances). New launchers are added; missing ones removed.
-    /// </summary>
-    private static async Task ApplyLaunchersAsync(List<Launcher> launchers)
-    {
-        var dispatcher = DispatcherQueue.GetForCurrentThread();
-        if (dispatcher != null)
-        {
-            MergeLaunchers(launchers);
-        }
-        else
-        {
-            var tcs = new TaskCompletionSource();
-            App.MainDispatcherQueue.TryEnqueue(() =>
-            {
-                MergeLaunchers(launchers);
-                tcs.SetResult();
-            });
-            await tcs.Task;
-        }
-
-        static void MergeLaunchers(List<Launcher> launchers)
-        {
-            var current = SettingsManager.Current.Launchers;
-            var downloadedById = launchers.ToDictionary(l => l.Id);
-
-            // Remove launchers that no longer exist on the server
-            for (int i = current.Count - 1; i >= 0; i--)
-            {
-                if (!downloadedById.ContainsKey(current[i].Id))
-                {
-                    Windows.LauncherPanels.Dispose(current[i].Id);
-                    current.RemoveAt(i);
-                }
-            }
-
-            // Update existing launchers in-place; add new ones
-            foreach (var downloaded in launchers)
-            {
-                var existing = current.FirstOrDefault(l => l.Id == downloaded.Id);
-                if (existing != null)
-                {
-                    existing.Name = downloaded.Name;
-                    existing.TrayIconMode = downloaded.TrayIconMode;
-                    existing.CustomTrayIconPath = downloaded.CustomTrayIconPath;
-                    existing.NIconHide = downloaded.NIconHide;
-
-                    // A web launcher carries no items, so without these it would arrive on the
-                    // other machine as an empty shortcut launcher.
-                    existing.Kind = downloaded.Kind;
-                    existing.WebUrl = downloaded.WebUrl;
-                    existing.WebFlyoutWidth = downloaded.WebFlyoutWidth;
-                    existing.WebFlyoutHeight = downloaded.WebFlyoutHeight;
-                    existing.WebZoomPercent = downloaded.WebZoomPercent;
-                    existing.WebHiddenPolicy = downloaded.WebHiddenPolicy;
-                    existing.WebIdleUnloadMinutes = downloaded.WebIdleUnloadMinutes;
-                    existing.WebReloadOnShow = downloaded.WebReloadOnShow;
-                    existing.WebPinFlyout = downloaded.WebPinFlyout;
-
-                    existing.Items.Clear();
-                    foreach (var item in downloaded.Items)
-                        existing.Items.Add(item);
-                }
-                else
-                {
-                    current.Add(downloaded);
-                }
-            }
-        }
-    }
-
-    /// <summary>
-    /// Envelope for the remote launchers.json file. Includes a UTC timestamp
-    /// so startup downloads can skip overwriting newer local data.
-    /// </summary>
-    private sealed class LaunchersEnvelope
-    {
-        public DateTimeOffset LastModified { get; set; }
-        public List<Launcher> Launchers { get; set; } = [];
-    }
-
-    /// <summary>
-    /// Serialize launchers to a MemoryStream as JSON, wrapped in a timestamped envelope.
-    /// </summary>
-    private static MemoryStream SerializeLaunchers(ObservableCollection<Launcher> launchers)
-    {
-        var envelope = new LaunchersEnvelope
-        {
-            LastModified = DateTimeOffset.UtcNow,
-            Launchers = new List<Launcher>(launchers)
-        };
-        var stream = new MemoryStream();
-        JsonSerializer.Serialize(stream, envelope, JsonOptions);
-        stream.Position = 0;
-        return stream;
-    }
-
-    /// <summary>
-    /// Deserialize launchers from a JSON stream.
-    /// Supports both the new envelope format and the legacy plain array format.
-    /// Returns the launcher list and an optional timestamp (null for legacy data).
-    /// </summary>
-    private static (List<Launcher>? Launchers, DateTimeOffset? LastModified) DeserializeLaunchers(MemoryStream stream)
-    {
-        try
-        {
-            // Try envelope format first
-            var envelope = JsonSerializer.Deserialize<LaunchersEnvelope>(stream, JsonOptions);
-            if (envelope?.Launchers != null && envelope.Launchers.Count > 0)
-                return (envelope.Launchers, envelope.LastModified);
-        }
-        catch { }
-
-        // Fall back to legacy plain array
-        stream.Position = 0;
-        try
-        {
-            var list = JsonSerializer.Deserialize<List<Launcher>>(stream, JsonOptions);
-            return (list, null);
-        }
-        catch
-        {
-            return (null, null);
-        }
     }
 
     /// <summary>
