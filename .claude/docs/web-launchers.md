@@ -110,6 +110,19 @@ navigation is history pushed by script with no document load to hang the update 
 authenticator completes inside the flyout; credentials belong to the OS, so the per-launcher user
 data folder does not isolate them.
 
+## Discoverability
+
+Two mechanisms, doing different jobs:
+
+- **`+ Add Web Launcher` on the Launchers page** — permanent, and the one that matters long term.
+  The kind is otherwise only discoverable by creating an ordinary launcher and noticing the Type
+  dropdown, which nobody does unprompted. It creates the launcher and opens its settings with the
+  caret already in the address field, which is the only thing left to supply.
+- **A one-time Home page notice for upgraders** (`UserSettings.ShowWebLauncherNotice`, raised by
+  `SettingsManager.RaiseUpgradeNotices`). Store updates install silently, so this is the only
+  channel that reaches those users; a Windows toast would not, because `AppNotificationManager`
+  is registered for unpackaged builds only.
+
 ## Settings layout
 
 Launcher settings show only **Web Address** and **Flyout Size** for a web launcher. Zoom, When

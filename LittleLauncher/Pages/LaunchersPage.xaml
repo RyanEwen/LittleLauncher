@@ -17,6 +17,15 @@
                     <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,8,0,60">
                         <Button x:Name="AddLauncherButton" Content="+ Add Launcher"
                                 Click="AddLauncherButton_Click" HorizontalAlignment="Left"/>
+                        <!-- A web launcher is otherwise only discoverable by opening launcher
+                             settings and noticing the Type dropdown. -->
+                        <Button x:Name="AddWebLauncherButton" Click="AddWebLauncherButton_Click"
+                                HorizontalAlignment="Left">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <FontIcon Glyph="&#xE774;" FontSize="14"/>
+                                <TextBlock Text="Add Web Launcher"/>
+                            </StackPanel>
+                        </Button>
                         <Button x:Name="AddSharedLauncherButton" Click="AddSharedLauncherButton_Click"
                                 HorizontalAlignment="Left">
                             <StackPanel Orientation="Horizontal" Spacing="8">

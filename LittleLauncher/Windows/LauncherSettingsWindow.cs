@@ -126,7 +126,15 @@ public sealed class LauncherSettingsWindow : Window
         SizeAndCentre();
 
         // Real sizing happens once layout has produced an ActualHeight.
-        form.Loaded += (_, _) => ResizeToContent(form);
+        form.Loaded += (_, _) =>
+        {
+            ResizeToContent(form);
+
+            // A brand-new web launcher needs exactly one thing: an address. Put the caret there
+            // rather than making the user find the field the window was opened for.
+            if (isNewLauncher && launcher.IsWebLauncher)
+                _urlBox?.Focus(FocusState.Programmatic);
+        };
 
         // Hidden: WinUI otherwise pops an "Esc" accelerator tooltip over the window.
         root.KeyboardAcceleratorPlacementMode = KeyboardAcceleratorPlacementMode.Hidden;

@@ -471,6 +471,37 @@ public sealed partial class LaunchersPage : Page
     }
 
     /// <summary>
+    /// Creates a web launcher and opens its settings, where the address is the only thing left
+    /// to supply.
+    /// </summary>
+    /// <remarks>
+    /// The kind is otherwise only discoverable by creating an ordinary launcher and noticing the
+    /// Type dropdown, which nobody does unprompted. A button that makes the capability visible at
+    /// the moment someone is already thinking about launchers beats explaining it after the fact
+    /// — and unlike the one-time upgrade notice, it keeps working for everyone who installs later.
+    /// </remarks>
+    private async void AddWebLauncherButton_Click(object sender, RoutedEventArgs e)
+    {
+        var newLauncher = new Launcher
+        {
+            Id = Guid.NewGuid().ToString(),
+            Name = "Web Launcher",
+            Kind = LauncherKinds.Web,
+            ShowTitle = true,
+        };
+        SettingsManager.Current.Launchers.Add(newLauncher);
+        SettingsManager.SaveSettings();
+
+        MainWindow.Current?.RefreshTrayIcons();
+        RebuildLauncherCards();
+
+        // No edit mode afterwards, unlike a shortcut launcher: a web launcher has no items, and
+        // its settings window is the whole of its setup.
+        await ShowLauncherSettingsDialog(newLauncher, isNewLauncher: true);
+        RebuildLauncherCards();
+    }
+
+    /// <summary>
     /// Bulk operations on a launcher's items. Per-item editing is done in the flyout's edit
     /// mode; only whole-list operations remain here.
     /// </summary>
