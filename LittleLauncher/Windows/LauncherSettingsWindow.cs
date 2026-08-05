@@ -624,6 +624,251 @@ public sealed class LauncherSettingsWindow : Window
     }
 
     /// <summary>
+    /// Builds the bookmark editor: the list, reordering, removal, and the two ways to add one.
+    /// </summary>
+    /// <remarks>
+    /// Two or more bookmarks turn the flyout into a bar-first mini-browser; one behaves exactly
+    /// like a plain web launcher. That threshold is stated in the row's subtitle rather than left
+    /// for the user to discover, because the flyout changes shape when they cross it.
+    /// </remarks>
+    private FrameworkElement BuildBookmarksRow(Launcher launcher)
+    {
+        var list = new StackPanel { Spacing = 4 };
+
+        // Which bookmark (if any) opens with the flyout.
+        var defaultCombo = new ComboBox { MinWidth = 200, HorizontalAlignment = HorizontalAlignment.Stretch };
+        bool populatingDefault = false;
+
+
+        var urlBox = new TextBox
+        {
+            PlaceholderText = "https://…",
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        var addButton = new Button { Content = "Add", Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+        var pickButton = new Button { Content = "From browser…", Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+
+        void Persist()
+        {
+            SettingsManager.SaveSettings();
+            WebFlyoutWindow.ApplyLauncherChanges(launcher.Id);
+        }
+
+        void Rebuild()
+        {
+            list.Children.Clear();
+
+            if (launcher.WebBookmarks.Count == 0)
+            {
+                list.Children.Add(new TextBlock
+                {
+                    Text = "No bookmarks yet.",
+                    FontSize = 12,
+                    Opacity = 0.5,
+                });
+            }
+
+            foreach (var bookmark in launcher.WebBookmarks.ToList())
+            {
+                var captured = bookmark;
+
+                var label = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+                label.Children.Add(new TextBlock
+                {
+                    Text = string.IsNullOrWhiteSpace(captured.Name) ? captured.Url : captured.Name,
+                    FontSize = 13,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                });
+                label.Children.Add(new TextBlock
+                {
+                    Text = captured.Url,
+                    FontSize = 11,
+                    Opacity = 0.5,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                });
+
+                var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2, VerticalAlignment = VerticalAlignment.Center };
+
+                Button Small(string glyph, string tooltip, Action onClick, bool enabled = true)
+                {
+                    var b = new Button
+                    {
+                        Content = new FontIcon { Glyph = glyph, FontSize = 11 },
+                        Padding = new Thickness(6, 4, 6, 4),
+                        MinWidth = 0,
+                        MinHeight = 0,
+                        IsEnabled = enabled,
+                        Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["SubtleFillColorTransparentBrush"],
+                        BorderThickness = new Thickness(0),
+                    };
+                    ToolTipService.SetToolTip(b, tooltip);
+                    b.Click += (_, _) => onClick();
+                    return b;
+                }
+
+                int index = launcher.WebBookmarks.IndexOf(captured);
+                buttons.Children.Add(Small("", "Move up", () =>
+                {
+                    int i = launcher.WebBookmarks.IndexOf(captured);
+                    if (i <= 0) return;
+                    launcher.WebBookmarks.Move(i, i - 1);
+                    Persist();
+                    Rebuild();
+                }, index > 0));
+                buttons.Children.Add(Small("", "Move down", () =>
+                {
+                    int i = launcher.WebBookmarks.IndexOf(captured);
+                    if (i < 0 || i >= launcher.WebBookmarks.Count - 1) return;
+                    launcher.WebBookmarks.Move(i, i + 1);
+                    Persist();
+                    Rebuild();
+                }, index >= 0 && index < launcher.WebBookmarks.Count - 1));
+                buttons.Children.Add(Small("", "Remove", () =>
+                {
+                    launcher.WebBookmarks.Remove(captured);
+                    Persist();
+                    Rebuild();
+                }));
+
+                var row = new Grid();
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                Grid.SetColumn(label, 0);
+                Grid.SetColumn(buttons, 1);
+                row.Children.Add(label);
+                row.Children.Add(buttons);
+                list.Children.Add(row);
+            }
+        }
+
+        void Add(string name, string url)
+        {
+            url = WebFlyoutWindow.NormalizeUrl(url);
+            if (string.IsNullOrWhiteSpace(url)) return;
+
+            var bookmark = new WebBookmark(string.IsNullOrWhiteSpace(name) ? HostOf(url) : name, url);
+            launcher.WebBookmarks.Add(bookmark);
+            Persist();
+            Rebuild();
+            RebuildDefaultCombo();
+
+            // A provisional icon so the bar is not a row of globes; the real one replaces it the
+            // first time the bookmark is opened with a signed-in browser.
+            _ = FetchBookmarkIconAsync(launcher, bookmark);
+        }
+
+        addButton.Click += (_, _) =>
+        {
+            Add("", urlBox.Text.Trim());
+            urlBox.Text = "";
+        };
+
+        pickButton.Click += async (_, _) =>
+        {
+            var picked = await Pages.BookmarkPicker.PickAsync(Content.XamlRoot);
+            if (picked == null) return;
+            Add(picked.Name, picked.Url);
+        };
+
+        var addRow = new Grid { Margin = new Thickness(0, 8, 0, 0) };
+        addRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        addRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        addRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        Grid.SetColumn(urlBox, 0);
+        Grid.SetColumn(addButton, 1);
+        Grid.SetColumn(pickButton, 2);
+        addRow.Children.Add(urlBox);
+        addRow.Children.Add(addButton);
+        addRow.Children.Add(pickButton);
+
+        void RebuildDefaultCombo()
+        {
+            populatingDefault = true;
+            defaultCombo.Items.Clear();
+            defaultCombo.Items.Add(new ComboBoxItem { Content = "None — open as just the bar", Tag = "" });
+            foreach (var b in launcher.WebBookmarks)
+                defaultCombo.Items.Add(new ComboBoxItem { Content = string.IsNullOrWhiteSpace(b.Name) ? b.Url : b.Name, Tag = b.Url });
+
+            int selected = 0;
+            for (int i = 1; i < defaultCombo.Items.Count; i++)
+            {
+                if (defaultCombo.Items[i] is ComboBoxItem item && (string)item.Tag == launcher.WebDefaultBookmarkUrl)
+                {
+                    selected = i;
+                    break;
+                }
+            }
+            defaultCombo.SelectedIndex = selected;
+            populatingDefault = false;
+        }
+
+        defaultCombo.SelectionChanged += (_, _) =>
+        {
+            if (populatingDefault) return;
+            if (defaultCombo.SelectedItem is not ComboBoxItem item) return;
+            launcher.WebDefaultBookmarkUrl = (string)item.Tag;
+            Persist();
+        };
+
+        var defaultLabel = new TextBlock
+        {
+            Text = "Opens by default",
+            FontSize = 12,
+            Opacity = 0.6,
+            Margin = new Thickness(0, 12, 0, 4),
+        };
+
+        var body = new StackPanel();
+        body.Children.Add(list);
+        body.Children.Add(addRow);
+        body.Children.Add(defaultLabel);
+        body.Children.Add(defaultCombo);
+
+        Rebuild();
+        RebuildDefaultCombo();
+
+        return BuildStackedRow(
+            "Bookmarks",
+            "Two or more show as a bar along the bottom of the flyout, which expands when you pick one",
+            body);
+    }
+
+    /// <summary>Host of a URL, used as a bookmark's name until the page offers a better one.</summary>
+    private static string HostOf(string url)
+    {
+        try { return new Uri(url).Host; }
+        catch (UriFormatException) { return url; }
+    }
+
+    /// <summary>
+    /// Fetches a provisional icon for a bookmark, the same unauthenticated way the launcher's own
+    /// icon is fetched — good enough for public sites, and replaced by the page's declared icon
+    /// once it has actually been opened.
+    /// </summary>
+    private static async Task FetchBookmarkIconAsync(Launcher launcher, WebBookmark bookmark)
+    {
+        try
+        {
+            string? cached = await Services.FaviconService.FetchAndCacheAsync(bookmark.Url);
+            if (string.IsNullOrEmpty(cached) || !File.Exists(cached)) return;
+
+            string dest = WebFlyoutWindow.GetBookmarkIconPath(launcher.Id, bookmark.Url);
+            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+            File.Copy(cached, dest, overwrite: true);
+
+            bookmark.IconPath = dest;
+            SettingsManager.SaveSettings();
+            WebFlyoutWindow.ApplyLauncherChanges(launcher.Id);
+        }
+        catch (Exception ex)
+        {
+            NLog.LogManager.GetCurrentClassLogger().Debug(ex, "Bookmark icon fetch failed for {Url}", bookmark.Url);
+        }
+    }
+
+    /// <summary>
     /// Builds the rows that only apply to a web launcher.
     /// </summary>
     /// <remarks>
@@ -680,6 +925,34 @@ public sealed class LauncherSettingsWindow : Window
         urlControls.Children.Add(bookmarkButton);
 
         var urlRow = BuildStackedRow("Web Address", "The page this launcher opens", urlControls);
+        var bookmarksRow = BuildBookmarksRow(launcher);
+
+        // Explicit, not inferred from the number of bookmarks: adding a second one should not
+        // silently change what the tray icon does.
+        var contentCombo = new ComboBox { MinWidth = 200 };
+        contentCombo.Items.Add(new ComboBoxItem { Content = "A single web address", Tag = false });
+        contentCombo.Items.Add(new ComboBoxItem { Content = "Bookmarks (bar along the bottom)", Tag = true });
+        contentCombo.SelectedIndex = launcher.WebUseBookmarks ? 1 : 0;
+
+        var contentRow = BuildRow("Shows", "Whether this launcher opens one page or a bar of them", contentCombo);
+
+        void UpdateContentMode()
+        {
+            bool web = launcher.IsWebLauncher;
+            urlRow.Visibility = web && !launcher.WebUseBookmarks ? Visibility.Visible : Visibility.Collapsed;
+            bookmarksRow.Visibility = web && launcher.WebUseBookmarks ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        contentCombo.SelectionChanged += (_, _) =>
+        {
+            if (contentCombo.SelectedItem is not ComboBoxItem selected || selected.Tag is not bool useBookmarks) return;
+            if (useBookmarks == launcher.WebUseBookmarks) return;
+
+            launcher.WebUseBookmarks = useBookmarks;
+            SettingsManager.SaveSettings();
+            WebFlyoutWindow.ApplyLauncherChanges(launcher.Id);
+            UpdateContentMode();
+        };
 
         // ── Panel size ──────────────────────────────────────────
         var widthBox = new NumberBox
@@ -852,13 +1125,14 @@ public sealed class LauncherSettingsWindow : Window
 
         void Refresh()
         {
+            UpdateContentMode();
             urlBox.Text = launcher.WebUrl;
             widthBox.Value = launcher.ResolvedWebFlyoutWidth;
             heightBox.Value = launcher.ResolvedWebFlyoutHeight;
             UpdateIdleVisibility();
         }
 
-        return ([urlRow, sizeRow, advanced], Refresh);
+        return ([contentRow, urlRow, bookmarksRow, sizeRow, advanced], Refresh);
     }
 
     private (Button Button, Grid CustomRow) BuildIconChooser(Launcher launcher)
