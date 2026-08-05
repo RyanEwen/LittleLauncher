@@ -71,9 +71,11 @@
           </com:ComServer>
         </com:Extension>
 
-        <uap:Extension Category="windows.toastNotificationActivation">
-          <uap:ToastNotificationActivation ToastActivatorCLSID="9C7A1E42-6B58-4F3D-9D21-3A5C0E7B4F16" />
-        </uap:Extension>
+        <!-- desktop:, not uap: — the uap form of this extension is UWP-only, and makeappx
+             rejects it for a full-trust desktop package with an enumeration-constraint error. -->
+        <desktop:Extension Category="windows.toastNotificationActivation">
+          <desktop:ToastNotificationActivation ToastActivatorCLSID="9C7A1E42-6B58-4F3D-9D21-3A5C0E7B4F16" />
+        </desktop:Extension>
       </Extensions>
     </Application>
   </Applications>
