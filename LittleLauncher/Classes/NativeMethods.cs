@@ -218,6 +218,10 @@ public static partial class NativeMethods
     [DllImport("user32.dll")]
     internal static extern IntPtr MonitorFromPoint(POINT pt, int dwFlags);
 
+    /// <summary>The monitor a window is on — used to size it to that screen, not the primary.</summary>
+    [LibraryImport("user32.dll")]
+    internal static partial IntPtr MonitorFromWindow(IntPtr hwnd, int dwFlags);
+
     [DllImport("user32.dll")]
     internal static extern uint GetDoubleClickTime();
 
@@ -421,6 +425,9 @@ public static partial class NativeMethods
 
     internal const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
     internal const int DWMWCP_ROUND = 2;
+
+    /// <summary>Square corners — a window filling the screen must not round away its own pixels.</summary>
+    internal const int DWMWCP_DONOTROUND = 1;
 
     /// <summary>Windows 11 window border colour, as a COLORREF (0x00BBGGRR).</summary>
     internal const int DWMWA_BORDER_COLOR = 34;

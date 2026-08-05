@@ -135,6 +135,10 @@ public sealed class WebFlyoutWindow : Window
     /// </remarks>
     private string _barSignature = "";
 
+    /// <summary>True while the page has an element in fullscreen and the window has grown to suit.</summary>
+    private bool _isFullScreen;
+    private RECT _preFullScreenRect;
+
     private bool _isMovingWindow;
     private POINT _moveStartCursor;
     private RECT _moveStartRect;
@@ -455,6 +459,7 @@ public sealed class WebFlyoutWindow : Window
 
     private void Grip_PointerPressed(object sender, PointerRoutedEventArgs e)
     {
+        if (_isFullScreen) return;
         if (sender is not ResizeGrip grip || grip.Tag is not ResizeEdges edges) return;
 
         GetCursorPos(out _resizeStartCursor);
@@ -1259,6 +1264,8 @@ public sealed class WebFlyoutWindow : Window
     {
         if (_webView == null) return;
 
+        if (_isFullScreen) ApplyFullScreen(false);
+
         var webView = _webView;
         _webView = null;
         _navigatedUrl = "";
@@ -1400,6 +1407,11 @@ public sealed class WebFlyoutWindow : Window
         core.NavigationStarting += (_, _) => SetStatus("Loading…", busy: true, showRetry: false);
 
         core.HistoryChanged += (_, _) => UpdateNavigationButtons();
+
+        // A page going fullscreen only resizes its own element; making the window fill the
+        // screen is the host's job. Without this, "fullscreen" video is still boxed inside
+        // whatever size the flyout happens to be.
+        core.ContainsFullScreenElementChanged += (_, _) => ApplyFullScreen(core.ContainsFullScreenElement);
 
         core.NavigationCompleted += (_, e) =>
         {
@@ -1597,6 +1609,7 @@ public sealed class WebFlyoutWindow : Window
     /// </remarks>
     private void BeginWindowMove(object sender, PointerRoutedEventArgs e)
     {
+        if (_isFullScreen) return;
         if (_hwnd == IntPtr.Zero || !IsWindow(_hwnd)) return;
         if (!e.GetCurrentPoint(null).Properties.IsLeftButtonPressed) return;
         if (!GetWindowRect(_hwnd, out _moveStartRect)) return;
@@ -1658,6 +1671,66 @@ public sealed class WebFlyoutWindow : Window
         _launcher.WebFlyoutPosition = position;
         SettingsManager.SaveSettings();
         Services.AutoSyncService.NotifyLaunchersChanged();
+    }
+
+    /// <summary>
+    /// Grows the flyout to fill its monitor while the page is showing something fullscreen, and
+    /// puts it back afterwards.
+    /// </summary>
+    /// <remarks>
+    /// The whole monitor, not the work area — fullscreen means over the taskbar too. The header
+    /// and bookmark bar are hidden for the duration, and the root's fixed bar-mode height is
+    /// released so the page can actually fill the window rather than being clipped to the size
+    /// the flyout was.
+    /// </remarks>
+    private void ApplyFullScreen(bool fullScreen)
+    {
+        if (fullScreen == _isFullScreen) return;
+        if (_hwnd == IntPtr.Zero || !IsWindow(_hwnd)) return;
+
+        if (fullScreen)
+        {
+            if (!GetWindowRect(_hwnd, out _preFullScreenRect)) return;
+            _isFullScreen = true;
+
+            _header.Visibility = Visibility.Collapsed;
+            _bookmarkBar.Visibility = Visibility.Collapsed;
+            _root.ClearValue(FrameworkElement.HeightProperty);
+            _root.VerticalAlignment = VerticalAlignment.Stretch;
+
+            // The page has to reach the actual edges. Two things otherwise frame it: the inset
+            // that keeps the browser clear of the resize grips, which shows as a band of acrylic
+            // down each side, and the window's rounded corners, which cut the corners off a
+            // screen-filling video.
+            _contentHost.Margin = new Thickness(0);
+            int squareCorners = DWMWCP_DONOTROUND;
+            DwmSetWindowAttribute(_hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref squareCorners, sizeof(int));
+
+            var monitorInfo = new MONITORINFOEX { cbSize = Marshal.SizeOf<MONITORINFOEX>() };
+            GetMonitorInfo(MonitorFromWindow(_hwnd, MONITOR_DEFAULTTONEAREST), ref monitorInfo);
+            var bounds = monitorInfo.rcMonitor;
+
+            SetWindowPos(_hwnd, IntPtr.Zero, bounds.Left, bounds.Top,
+                bounds.Right - bounds.Left, bounds.Bottom - bounds.Top,
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            return;
+        }
+
+        _isFullScreen = false;
+
+        // Back to whatever the flyout was: bar mode restores its own chrome and anchoring.
+        _header.Visibility = IsBarMode && !_isExpanded ? Visibility.Collapsed : Visibility.Visible;
+        _contentHost.Margin = new Thickness(GripThickness, 0, GripThickness, GripThickness);
+        int roundedCorners = DWMWCP_ROUND;
+        DwmSetWindowAttribute(_hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref roundedCorners, sizeof(int));
+
+        RebuildBookmarkBar();
+        ApplyRootAnchor();
+
+        SetWindowPos(_hwnd, IntPtr.Zero, _preFullScreenRect.Left, _preFullScreenRect.Top,
+            _preFullScreenRect.Right - _preFullScreenRect.Left,
+            _preFullScreenRect.Bottom - _preFullScreenRect.Top,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
     }
 
     /// <summary>Steps back through the page's own history, not the flyout's.</summary>
@@ -1838,7 +1911,7 @@ public sealed class WebFlyoutWindow : Window
         if (args.WindowActivationState != WindowActivationState.Deactivated) return;
         // A drag that leaves the window, and any owned window, both pin the flyout open — the
         // same rule the item flyout applies to edit mode and its editors.
-        if (_isShowing || !_isOpen || _launcher.WebPinFlyout || _isModalOpen || _isResizing || _isMovingWindow) return;
+        if (_isShowing || !_isOpen || _launcher.WebPinFlyout || _isModalOpen || _isResizing || _isMovingWindow || _isFullScreen) return;
 
         // The browser's own HWNDs are children of this window, so clicking into the page
         // deactivates the XAML window without the user having gone anywhere. Read the
@@ -1851,7 +1924,7 @@ public sealed class WebFlyoutWindow : Window
             // at one moment and acting on it at another is exactly how a pinned flyout ends up
             // dismissed anyway.
             if (!_isOpen || _isShowing || _isHiding) return;
-            if (_launcher.WebPinFlyout || _isModalOpen || _isResizing || _isMovingWindow) return;
+            if (_launcher.WebPinFlyout || _isModalOpen || _isResizing || _isMovingWindow || _isFullScreen) return;
 
             var foreground = GetForegroundWindow();
             if (foreground == _hwnd || IsChild(_hwnd, foreground)) return;
