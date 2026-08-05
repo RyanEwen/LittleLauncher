@@ -67,6 +67,14 @@ The alpha is window state and **survives being parked off screen**, so any path 
 window back on screen has to clear it first or the flyout returns invisible. `ParkOffScreen`
 and `ShowAnimated`/`ShowWithoutAnimation` all call `ClearFade` for that reason.
 
+## Focus loss with a hosted browser
+
+A window hosting WebView2 gets `Deactivated` when the user merely clicks *into the page*, because
+the browser's HWNDs are children of the host. A panel that dismisses on focus loss must therefore
+confirm the user actually left: `GetForegroundWindow()` compared against the window itself and
+`IsChild(hwnd, foreground)`. `WebFlyoutWindow` does this on the next dispatcher turn rather than
+inside the event, so the foreground switch has settled before it is read.
+
 ## Constants & Enums
 
 - Win32 constants as `internal const int` or `internal const uint`

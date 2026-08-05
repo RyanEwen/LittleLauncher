@@ -122,7 +122,7 @@ The companion exe is deployed to `<AppDataDir>` by `EnsureFlyoutShortcut()` for 
 Pin identity comes **solely from relaunch properties** set on the companion exe's MessageBox HWND via a CBT hook:
 - `PKEY_AppUserModel_ID` = `LittleLauncher.Launcher.{guid}.{TickCount64}` — unique per pin attempt to bust Windows' per-AUMID icon cache
 - `PKEY_AppUserModel_RelaunchCommand` = the companion exe path + `--launcher {guid}`
-- `PKEY_AppUserModel_RelaunchIconResource` = timestamped `app-icon-{id}-pin{tick}.ico` path (same path as `LoadImage` uses)
+- `PKEY_AppUserModel_RelaunchIconResource` = timestamped `app-icon-{id}-pin{tick}.ico` path (same path as `LoadImage` uses), written as an **icon resource reference — `"path,0"`, never a bare path**
 - `PKEY_AppUserModel_RelaunchDisplayNameResource` = `"Little Launcher - {name}"`
 - CBT hook also calls `SetWindowTextW()` to set the MessageBox title (taskbar reads this for the button tooltip)
 
@@ -133,11 +133,47 @@ The pin flow (in `LaunchersPage.PinToTaskbar_Click`):
 4. Launches companion exe with `--pin --launcher {guid} --name "{name}" --icon "{pinnedPath}"`
 5. Restores Settings window + `SetForegroundWindow` after companion exe exits
 
+> **`RelaunchIconResource` must carry a resource index.** It is an icon *resource* string
+> (`"C:\...\app-icon-{id}-pin{tick}.ico,0"`), the same format the Start Menu shortcut's
+> `IconLocation` uses — not a bare file path. Windows cannot parse a path on its own and silently
+> falls back to the generic document icon, so the pinned taskbar button comes up **blank**. This is
+> easy to misdiagnose, because the window's *title bar* icon still looks right: that one comes from
+> `WM_SETICON`, which is unaffected. If a pin is blank, check this string before anything else.
+
 Both `LoadImage` (WM_SETICON on the MessageBox HWND) and `RelaunchIconResource` use the **same timestamped path**. Windows caches icon bitmaps per file path in its icon cache DB, so reusing a stable path across pin attempts would serve stale cached bitmaps.
 
 `CleanUpStaleIconFiles()` keeps the **most recent** `-pin*.ico` per launcher and deletes older ones. This ensures the pinned shortcut's `RelaunchIconResource` still points to a valid file after app restart.
 
 > **WARNING:** Windows 11's taskbar caches the pin icon bitmap per AUMID at pin time. Changing the icon on disk does NOT update the pinned icon. The only way to update is to unpin and re-pin. The stamped AUMID ensures each re-pin sees a fresh identity.
+
+### Diagnosing a blank pin icon
+
+**`SHGetPropertyStoreForWindow` does not round-trip across processes.** Reading another process's
+window property store returns `<EMPTY>` for every key, and *writing* to it returns `S_OK` from both
+`SetValue` and `Commit` and still reads back empty. An external tool therefore cannot tell whether
+the companion's relaunch properties were applied — do not conclude "the properties are unset" from
+an outside read, as that is wrong. To actually check, log the HRESULTs and read the values back
+**inside** the companion, in `--pin` mode (which already shows a modal, so it is not on the
+latency-critical flyout path).
+
+What is known good: `WM_SETICON` lands (both icon handles are set, which is why the *title bar*
+icon looks right — it does not come from the relaunch properties), and the per-launcher `.ico`
+exists and loads at the taskbar's requested size. A blank pin was last seen only in a dev
+environment that had been run from several paths and switched between packaged and unpackaged
+builds; treated as dev-only rather than chased further.
+
+### Testing pin behaviour
+
+Pin identity is **path-based and persistent**, so it cannot be tested from a throwaway directory:
+`EnsureStartMenuShortcuts()` re-points the Start Menu shortcut at whatever exe is running, and a
+pin records the path it was created from. Run the build from a stable location when testing this
+flow. (A temp-folder test run left the Start Menu shortcut aimed into `%Temp%`, which is what
+"Windows is searching for LittleLauncherFlyout.exe" looks like afterwards.)
+
+Debug builds also deploy the **framework-dependent** companion (~175 KB apphost + its `.dll`,
+`.deps.json`, `.runtimeconfig.json`) where Release deploys the self-contained AOT binary (~1.7 MB).
+Both embed the app icon via `<ApplicationIcon>`, so the icon itself is not the difference — but
+prefer a Release build when validating anything about pinning.
 
 **Per-launcher Start Menu shortcuts are NOT created.** Previous versions used AUMID-stamped `.lnk` files in the Start Menu as the primary pin identity source. This was removed because combining shortcuts with relaunch properties caused Windows to see two identity sources and create duplicate "(2)" pins. `CleanUpStaleFlyoutShortcuts()` removes any leftover per-launcher shortcuts from previous versions on startup.
 

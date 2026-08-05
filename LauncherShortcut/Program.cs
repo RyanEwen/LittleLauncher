@@ -220,7 +220,12 @@ static class Program
                 string exePath = Path.Combine(AppContext.BaseDirectory, "LittleLauncherFlyout.exe");
                 _relaunchAppId = aumid;
                 _relaunchCommand = $"\"{exePath}\" --launcher {launcherId}";
-                _relaunchIcon = File.Exists(loadIconPath) ? loadIconPath : exePath;
+                // Must be an icon *resource* reference — "path,index" — not a bare path.
+                // Windows cannot parse a path on its own, so the taskbar silently falls back to
+                // the generic document icon: the pinned button came up blank while the window's
+                // title bar (which is driven by WM_SETICON, not this) showed the right icon.
+                // Same format the Start Menu shortcut's IconLocation already uses.
+                _relaunchIcon = File.Exists(loadIconPath) ? $"{loadIconPath},0" : $"{exePath},0";
                 _relaunchDisplayName = string.IsNullOrEmpty(launcherName)
                     ? "Little Launcher"
                     : $"Little Launcher - {launcherName}";

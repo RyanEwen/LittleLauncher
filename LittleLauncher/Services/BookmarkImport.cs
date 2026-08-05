@@ -23,6 +23,40 @@ public sealed class BookmarkNode
     }
 }
 
+/// <summary>A single bookmark, flattened out of its folder tree for searching.</summary>
+/// <param name="FolderPath">The folder chain it came from, e.g. "Bookmarks bar / Home".</param>
+public sealed record FlatBookmark(string Name, string Url, string FolderPath)
+{
+    /// <summary>True when every whitespace-separated term appears in the name, URL or folder.</summary>
+    /// <remarks>
+    /// Term-wise rather than substring: bookmark titles and URLs put the useful words in a
+    /// different order from the one the user remembers, so "cameras hass" has to find
+    /// "Cameras" at hass.ryan-ewen.com.
+    /// </remarks>
+    public bool Matches(string[] terms)
+    {
+        foreach (string term in terms)
+        {
+            if (Name.Contains(term, StringComparison.OrdinalIgnoreCase)) continue;
+            if (Url.Contains(term, StringComparison.OrdinalIgnoreCase)) continue;
+            if (FolderPath.Contains(term, StringComparison.OrdinalIgnoreCase)) continue;
+            return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Reads as a bookmark, not as a record.
+    /// </summary>
+    /// <remarks>
+    /// A <c>ListView</c> row falls back to <c>ToString()</c> for its accessible name, so the
+    /// compiler-generated one had screen readers announcing
+    /// "FlatBookmark { Name = …, Url = …, FolderPath = … }" for every row. The rows render from a
+    /// template either way; this is purely what assistive tech and automation hear.
+    /// </remarks>
+    public override string ToString() => $"{Name} — {Url}";
+}
+
 /// <summary>
 /// Reads bookmark trees out of installed browser profiles for the "Import bookmarks"
 /// flow. Chromium profiles store JSON; Gecko profiles store either an LZ4-compressed
@@ -30,6 +64,57 @@ public sealed class BookmarkNode
 /// </summary>
 public static class BookmarkImport
 {
+    /// <summary>
+    /// Reads a profile's bookmark tree, picking the reader that matches the browser's engine.
+    /// </summary>
+    /// <remarks>
+    /// The engine switch and the profile-path rule below it are easy to get subtly wrong, so both
+    /// callers — the multi-select import flow and the single-bookmark picker — share this rather
+    /// than repeating them.
+    /// </remarks>
+    public static List<BookmarkNode> ReadBookmarks(KnownBrowser browser, BrowserProfile profile)
+    {
+        // Gecko profiles carry the full path in DirectoryName; Chromium stores a folder name
+        // relative to the user-data directory.
+        string profileDir = browser.Engine == BrowserEngine.Gecko
+            ? profile.DirectoryName
+            : Path.Combine(browser.ProfileDataDir, profile.DirectoryName);
+
+        return browser.Engine == BrowserEngine.Gecko
+            ? ReadGeckoBookmarks(profileDir)
+            : ReadChromiumBookmarks(profileDir);
+    }
+
+    /// <summary>
+    /// Flattens a bookmark tree to its URL leaves, each tagged with the folder path it came from.
+    /// </summary>
+    /// <remarks>
+    /// A flat list is what makes bookmarks searchable: the folder a bookmark lives in becomes a
+    /// piece of text to match and to show as context, instead of a level the user has to expand.
+    /// </remarks>
+    public static List<FlatBookmark> Flatten(IEnumerable<BookmarkNode> roots)
+    {
+        var results = new List<FlatBookmark>();
+
+        void Walk(BookmarkNode node, string path)
+        {
+            if (!node.IsFolder)
+            {
+                results.Add(new FlatBookmark(node.Name, node.Url!, path));
+                return;
+            }
+
+            string childPath = string.IsNullOrEmpty(path) ? node.Name : $"{path} / {node.Name}";
+            foreach (var child in node.Children)
+                Walk(child, childPath);
+        }
+
+        foreach (var root in roots)
+            Walk(root, "");
+
+        return results;
+    }
+
     /// <summary>Reads bookmarks from a Chromium profile directory, returning a root folder tree.</summary>
     public static List<BookmarkNode> ReadChromiumBookmarks(string profileDir)
     {

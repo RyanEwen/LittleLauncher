@@ -199,7 +199,7 @@ public sealed partial class MainWindow : Window
         EnsureStartMenuShortcuts();
         EnsureFlyoutShortcut();
         CleanUpStaleIconFiles();
-        FlyoutWindow.WarmUp(this, SettingsManager.Current.Launchers);
+        LauncherPanels.WarmUp(this, SettingsManager.Current.Launchers);
         _ = StartAutoSyncAsync();
         _ = FetchMissingIconsOnStartupAsync();
 
@@ -431,7 +431,12 @@ public sealed partial class MainWindow : Window
 
         SaveSettingsIconToAppData();
         SettingsWindow.GetCurrent()?.RefreshIcon();
-        FlyoutWindow.WarmUp(this, SettingsManager.Current.Launchers);
+
+        // A launcher that has been switched between kinds still owns the panel it used to use.
+        foreach (var launcher in SettingsManager.Current.Launchers)
+            LauncherPanels.SyncKind(launcher);
+
+        LauncherPanels.WarmUp(this, SettingsManager.Current.Launchers);
     }
 
     /// <summary>
@@ -1507,7 +1512,7 @@ public sealed partial class MainWindow : Window
                 {
                     GetCursorPos(out var pt);
                     string lid = targetLauncherId;
-                    DispatcherQueue.TryEnqueue(() => FlyoutWindow.Toggle(this, pt.X, pt.Y, lid));
+                    DispatcherQueue.TryEnqueue(() => LauncherPanels.Toggle(this, pt.X, pt.Y, lid));
                 }
                 else if (notification == WM_RBUTTONUP || notification == WM_CONTEXTMENU)
                 {
@@ -1532,7 +1537,7 @@ public sealed partial class MainWindow : Window
                 int anchorX = (int)wParam;
                 int anchorY = (int)lParam;
                 TryResolveLauncherAnchorPoint(targetId, anchorX, anchorY, out anchorX, out anchorY);
-                DispatcherQueue.TryEnqueue(() => FlyoutWindow.Toggle(this, anchorX, anchorY, targetId));
+                DispatcherQueue.TryEnqueue(() => LauncherPanels.Toggle(this, anchorX, anchorY, targetId));
                 return IntPtr.Zero;
             }
         }

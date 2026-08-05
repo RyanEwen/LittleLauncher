@@ -60,6 +60,7 @@ Little Launcher lives in the Windows system tray and/or taskbar. Clicking its ic
 **Key features:**
 
 - **Multiple launchers** — define multiple named launchers, each with its own icon and items.
+- **Web launchers** — point a launcher at a URL instead of a list of shortcuts, and its tray icon opens that page itself: a Home Assistant dashboard, a webmail inbox, a status board, one click away. It stays signed in between restarts, and while it is closed the page is suspended and then unloaded entirely, so a hidden dashboard uses no CPU, network or memory.
 - **Application & website shortcuts** — launch any executable or URL with one click from the flyout.
 - **Manual icon picker** — choose item icons from Fluent glyphs, emojis, bundled app icons, uploaded images, or the selfh.st icon catalog.
 - **View modes** — choose between list view, icon grid view, or a compact tray-sized small-icon grid with no labels.

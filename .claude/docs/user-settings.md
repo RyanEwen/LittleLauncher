@@ -25,6 +25,53 @@
   }
   ```
 
+## Defaults vs. `WhenWritingDefault` — the trap that eats settings
+
+`SettingsManager.JsonOptions` sets `DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault`,
+which omits any property currently holding **the CLR default for its type** — `false`, `0`, `null`.
+Combine that with a field initialiser or constructor assignment that sets a *non*-CLR-default value
+and the setting becomes impossible to change:
+
+> The user picks the CLR-default value → the key is omitted on save → the initialiser puts the old
+> value back on load. The setting silently reverts, forever.
+
+This is not hypothetical. `FlyoutAnimationsEnabled` defaulted to `true`, so turning animations
+**off** wrote nothing at all and they were on again after the next restart. Verified by toggling it
+off, closing the settings window, and finding no `FlyoutAnimationsEnabled` key in settings.json.
+
+### Fixing it
+
+Pick one, in this order of preference:
+
+1. **Phrase the property so `false` / `0` is the default behaviour.** `WebPinFlyout` rather than an
+   auto-hide flag; `WebHiddenPolicies.UnloadWhenIdle == 0`. Nothing to remember later.
+2. **Treat `0` as "unset" and resolve the real default in a `[JsonIgnore]` `Resolved*` property.**
+   What `WebFlyoutWidth` / `WebZoomPercent` / `WebIdleUnloadMinutes` do.
+3. **Opt the property out of the policy** with `[JsonIgnore(Condition = JsonIgnoreCondition.Never)]`,
+   which forces it to be written even at its default. Used on `FlyoutAnimationsEnabled`, where
+   renaming the key would have orphaned every existing settings file for no user-visible gain.
+
+Never leave a `bool` that defaults to `true` un-annotated.
+
+### Audit — the remaining non-CLR-default initialisers
+
+These share the shape but not the bug, because the CLR default is not a value the UI can produce
+or a configuration that would work:
+
+| Property | Default | Why it is safe |
+|---|---|---|
+| `SftpPort`, `Launcher.SharedSftpPort` | 22 | Port `0` is not a valid port |
+| `SftpAutoSyncInterval` | 5 | A `0`-minute interval is not offered |
+| `SftpRemotePath` | `~/.config/LittleLauncher/` | Clearing the box reverts to the default — which is the desirable outcome, since an empty remote path is not a usable configuration |
+| `Launcher.Name` | `"Launcher"` | `LauncherSettingsWindow.CommitName` refuses an empty name |
+| `Launcher.TrayIconMode` | `Composite` | The gallery cannot produce an empty mode |
+| `Launcher.IconModeIconsPerRow` | 3 | The picker offers 1–12, never 0 |
+| `LauncherItem.IsExpanded` | `true` | `[JsonIgnore]` — never serialised at all |
+
+`Launcher.ShowTitle` is the case that was already handled correctly: it defaults to `false` in the
+model, and `LaunchersPage` sets it to `true` on *newly created* launchers rather than changing the
+model default, which would have flipped it on for every existing launcher.
+
 ## JSON Serialization
 
 - Properties marked `[JsonIgnore]` are excluded from settings.json
@@ -55,6 +102,25 @@
 - `IconModeIconsPerRow` (`[ObservableProperty]`, default 3, clamped to 1–12, controls icon density in icon-mode flyouts and the launcher item editor)
 - `ShowTitle` (`[ObservableProperty]`, shows launcher name at top of flyout)
 - `Items: ObservableCollection<LauncherItem>`
+
+### Web launcher properties (all `[ObservableProperty]`)
+
+- `Kind` (`int`) — `LauncherKinds.Items` (0, default) or `LauncherKinds.Web` (1)
+- `WebUrl` (`string`) — the page a web launcher opens
+- `WebFlyoutWidth` / `WebFlyoutHeight` (`int`, DIPs) — **0 means unset**; read them through
+  `ResolvedWebFlyoutWidth` / `ResolvedWebFlyoutHeight`
+- `WebZoomPercent` (`int`) — 0 means 100%; read `ResolvedWebZoomFactor`
+- `WebHiddenPolicy` (`int`) — `WebHiddenPolicies.UnloadWhenIdle` (0, default) / `Suspend` (1) / `KeepRunning` (2)
+- `WebIdleUnloadMinutes` (`int`) — 0 means the default; read `ResolvedWebIdleUnloadMinutes`
+- `WebReloadOnShow` (`bool`) — re-fetch on every open
+- `WebPinFlyout` (`bool`) — stay open when focus is lost
+- `IsWebLauncher` — `[JsonIgnore]` convenience over `Kind`
+
+**Why every one of those defaults to 0 / false:** `WhenWritingDefault` omits a property holding the
+CLR default, so a non-zero field initialiser is silently restored on the next load. Numeric settings
+therefore treat `0` as "unset" and resolve the real default in a `Resolved*` property, and booleans
+are phrased so `false` is the default behaviour (`WebPinFlyout`, not an auto-hide flag). A `bool`
+that defaults to `true` **cannot be turned off** in this settings file.
 
 ### Sharing Properties (plain auto-properties, not `[ObservableProperty]`)
 - `IsShared` (bool) — whether this launcher participates in sharing

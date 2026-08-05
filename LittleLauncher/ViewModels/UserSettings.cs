@@ -26,7 +26,21 @@ public partial class UserSettings : ObservableObject
     public partial bool Startup { get; set; }
 
     /// <summary>Animate launcher flyouts when they open and close.</summary>
+    /// <remarks>
+    /// <para><c>JsonIgnoreCondition.Never</c> is load-bearing, not decoration. This is the one
+    /// setting here that defaults to <c>true</c>, and <see cref="SettingsManager.JsonOptions"/>
+    /// serialises with <c>DefaultIgnoreCondition = WhenWritingDefault</c> — which drops any
+    /// property holding the *CLR* default. Turning animations off therefore wrote <c>false</c>…
+    /// by omitting the key entirely, and the constructor put <c>true</c> back on the next load.
+    /// The setting could not be turned off at all: verified by toggling it off, closing the
+    /// settings window, and finding no <c>FlyoutAnimationsEnabled</c> key in settings.json.</para>
+    /// <para>Any future setting whose default is <c>true</c> (or any non-zero number) needs this
+    /// attribute, or the phrasing inverted so <c>false</c> is the default behaviour — the approach
+    /// the launcher's <c>Web*</c> properties take. See
+    /// <see href="../../.claude/docs/user-settings.md">user-settings.md</see>.</para>
+    /// </remarks>
     [ObservableProperty]
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public partial bool FlyoutAnimationsEnabled { get; set; }
 
     // NIconHide, TrayIconMode, CustomTrayIconPath are kept here as legacy XML migration fields only.

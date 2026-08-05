@@ -4,7 +4,9 @@
 
 ```
 App.xaml  →  MainWindow (invisible, owns tray icon)
-                ├── FlyoutWindow (launcher popup)
+                ├── LauncherPanels (routes a tray click by Launcher.Kind)
+                │     ├── FlyoutWindow (launcher popup — items)
+                │     └── WebFlyoutWindow (WebView2 popup — a web page)
                 └── SettingsWindow (WinUI 3 + NavigationView)
                       ├── HomePage
                       ├── LaunchersPage
@@ -58,6 +60,47 @@ flyout survives the user switching to Explorer to pick something up. The Windows
 is *not* a usable drag source: its data package exposes only the app name as text, with the
 shell item hidden in a clipboard format WinUI 3''s `DataPackageView` does not surface. Dragging
 the same apps from their `.lnk` files under `Start Menu\Programs` in Explorer works.
+
+
+## Web launchers
+
+`Launcher.Kind` decides which window a tray click opens. `Windows/LauncherPanels.cs` is the only
+place that resolves it — tray clicks, the companion exe's `PostMessage`, launcher deletion and
+sync-driven removal all route through `Toggle` / `Dispose` / `SyncKind` / `WarmUp` rather than
+naming a window class.
+
+`WebFlyoutWindow` presents exactly like `FlyoutWindow` — borderless, always on top,
+`WS_EX_TOOLWINDOW`, anchored above the taskbar, the same slide-and-fade, dismissed on focus loss —
+but its **resource model is the inverse**, and that is the feature rather than an implementation
+detail:
+
+| | FlyoutWindow | WebFlyoutWindow |
+|---|---|---|
+| At startup | Warmed up and pre-rendered | Nothing exists |
+| Dismissed | Parked off screen, fully resident | Parked, browser collapsed + suspended, memory target `Low` |
+| Idle | Stays resident forever | Browser closed after `WebIdleUnloadMinutes` (default policy) |
+
+The flyout keeps everything because its content is cheap to hold and expensive to re-rasterise. A
+browser is the opposite: a dashboard of camera cards keeps decoding video and polling for as long as
+its renderer lives, so it is built late and torn down early. Suspension (`TrySuspendAsync`) is
+best-effort — it declines during media capture or downloads — so the idle unload, not the suspend,
+is what makes "costs nothing while hidden" true.
+
+Measured end to end: opening the flyout started six `msedgewebview2` processes, dismissing left them
+suspended, and the idle timer returned the process count to exactly its pre-open baseline. Reopening
+after that rebuilds from nothing and lands at the same anchored position.
+
+The flyout is resized by dragging its edges — invisible XAML grips, since a window with no
+non-client area has no system sizing border to grab — and the dragged size is persisted onto the
+launcher. Its header gear opens `LauncherSettingsWindow` under the same modal contract the item
+flyout uses (pin open, drop always-on-top, restore activation on close).
+
+Per-launcher WebView2 profiles live in `%AppData%\LittleLauncher\WebProfiles\{launcherId}`, which is
+what keeps a dashboard signed in across app restarts.
+
+See [.claude/docs/web-launchers.md](.claude/docs/web-launchers.md) for the WinUI WebView2 limits
+worked around (no controller access, so zoom is CSS; focus-loss must be re-verified against
+`GetForegroundWindow` because the browser's HWNDs are children of the window).
 
 ## Owned editor windows
 

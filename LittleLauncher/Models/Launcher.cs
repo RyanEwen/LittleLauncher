@@ -70,6 +70,49 @@ public static class TrayIconModes
     };
 }
 
+/// <summary>Integer constants for <see cref="Launcher.Kind"/>.</summary>
+public static class LauncherKinds
+{
+    /// <summary>The tray icon opens a flyout of launcher items. The original — and default — kind.</summary>
+    public const int Items = 0;
+
+    /// <summary>The tray icon opens a web flyout showing <see cref="Launcher.WebUrl"/>.</summary>
+    public const int Web = 1;
+
+    public static int Normalize(int value) => value == Web ? Web : Items;
+
+    public static bool IsWeb(int value) => Normalize(value) == Web;
+}
+
+/// <summary>
+/// Integer constants for <see cref="Launcher.WebHiddenPolicy"/> — what a web launcher's
+/// browser does once its flyout is dismissed.
+/// </summary>
+/// <remarks>
+/// The default is deliberately the cheapest option: a web flyout exists to be looked at for a
+/// few seconds, and a Home Assistant dashboard full of camera cards keeps decoding video for
+/// as long as its renderer lives. Ordered so that the value that costs the least when hidden
+/// is <c>0</c> — <c>WhenWritingDefault</c> omits it from settings.json entirely.
+/// </remarks>
+public static class WebHiddenPolicies
+{
+    /// <summary>Suspend on dismiss, then tear the browser down after <see cref="Launcher.WebIdleUnloadMinutes"/>.</summary>
+    public const int UnloadWhenIdle = 0;
+
+    /// <summary>Suspend on dismiss but keep the browser alive, so the next open is instant.</summary>
+    public const int Suspend = 1;
+
+    /// <summary>Leave the page running while hidden. For pages that must not lose state or stream.</summary>
+    public const int KeepRunning = 2;
+
+    public static int Normalize(int value) => value switch
+    {
+        Suspend => Suspend,
+        KeepRunning => KeepRunning,
+        _ => UnloadWhenIdle,
+    };
+}
+
 /// <summary>Integer constants for <see cref="Launcher.ViewMode"/>.</summary>
 public static class LauncherViewModes
 {
@@ -116,7 +159,44 @@ public partial class Launcher : ObservableObject
     public const int DefaultIconModeIconsPerRow = 3;
     public const int MaxIconModeIconsPerRow = 12;
 
+    // ── Web flyout geometry ──────────────────────────────────────────
+    // Zero means "unset" for every one of these, because WhenWritingDefault omits a 0 from
+    // settings.json — so the resolvers below, not the field initialisers, hold the defaults.
+
+    public const int DefaultWebFlyoutWidth = 480;
+    public const int DefaultWebFlyoutHeight = 720;
+    public const int MinWebFlyoutWidth = 320;
+    public const int MinWebFlyoutHeight = 240;
+    public const int MaxWebFlyoutDimension = 4000;
+    public const int DefaultWebIdleUnloadMinutes = 5;
+    public const int MinWebZoomPercent = 25;
+    public const int MaxWebZoomPercent = 400;
+
     public static int ClampIconModeIconsPerRow(int value) => Math.Clamp(value, MinIconModeIconsPerRow, MaxIconModeIconsPerRow);
+
+    /// <summary>Resolved web flyout width in DIPs, with 0 meaning the default.</summary>
+    [JsonIgnore]
+    public int ResolvedWebFlyoutWidth => WebFlyoutWidth <= 0
+        ? DefaultWebFlyoutWidth
+        : Math.Clamp(WebFlyoutWidth, MinWebFlyoutWidth, MaxWebFlyoutDimension);
+
+    /// <summary>Resolved web flyout height in DIPs, with 0 meaning the default.</summary>
+    [JsonIgnore]
+    public int ResolvedWebFlyoutHeight => WebFlyoutHeight <= 0
+        ? DefaultWebFlyoutHeight
+        : Math.Clamp(WebFlyoutHeight, MinWebFlyoutHeight, MaxWebFlyoutDimension);
+
+    /// <summary>Resolved page zoom factor, with 0 meaning 100%.</summary>
+    [JsonIgnore]
+    public double ResolvedWebZoomFactor => WebZoomPercent <= 0
+        ? 1.0
+        : Math.Clamp(WebZoomPercent, MinWebZoomPercent, MaxWebZoomPercent) / 100.0;
+
+    /// <summary>Resolved idle-unload delay, with 0 meaning the default.</summary>
+    [JsonIgnore]
+    public int ResolvedWebIdleUnloadMinutes => WebIdleUnloadMinutes <= 0
+        ? DefaultWebIdleUnloadMinutes
+        : Math.Clamp(WebIdleUnloadMinutes, 1, 720);
 
     /// <summary>
     /// Stable GUID-based identifier.
@@ -164,6 +244,67 @@ public partial class Launcher : ObservableObject
     /// <summary>When true, the launcher name is shown at the top of the flyout popup.</summary>
     [ObservableProperty]
     public partial bool ShowTitle { get; set; }
+
+    // ── Web launcher ────────────────────────────────────────────────
+
+    /// <summary>
+    /// What this launcher's tray icon opens.
+    /// Use <see cref="LauncherKinds"/> constants: 0 = a flyout of items, 1 = a web panel.
+    /// </summary>
+    [ObservableProperty]
+    public partial int Kind { get; set; }
+
+    /// <summary>The page a web launcher shows. Ignored unless <see cref="Kind"/> is Web.</summary>
+    [ObservableProperty]
+    public partial string WebUrl { get; set; } = "";
+
+    /// <summary>
+    /// Web flyout width in DIPs. 0 means "not set" and resolves to
+    /// <see cref="DefaultWebFlyoutWidth"/> — the property is omitted from settings.json while
+    /// it holds the CLR default, so 0 has to mean the default rather than a real size.
+    /// </summary>
+    [ObservableProperty]
+    public partial int WebFlyoutWidth { get; set; }
+
+    /// <summary>Web flyout height in DIPs. 0 resolves to <see cref="DefaultWebFlyoutHeight"/>.</summary>
+    [ObservableProperty]
+    public partial int WebFlyoutHeight { get; set; }
+
+    /// <summary>Page zoom as a percentage. 0 resolves to 100.</summary>
+    [ObservableProperty]
+    public partial int WebZoomPercent { get; set; }
+
+    /// <summary>What the browser does when the panel is dismissed. See <see cref="WebHiddenPolicies"/>.</summary>
+    [ObservableProperty]
+    public partial int WebHiddenPolicy { get; set; }
+
+    /// <summary>
+    /// Minutes the flyout may sit dismissed before the browser is torn down, under
+    /// <see cref="WebHiddenPolicies.UnloadWhenIdle"/>. 0 resolves to
+    /// <see cref="DefaultWebIdleUnloadMinutes"/>.
+    /// </summary>
+    [ObservableProperty]
+    public partial int WebIdleUnloadMinutes { get; set; }
+
+    /// <summary>Reload the page every time the flyout is opened, rather than showing it as it was left.</summary>
+    [ObservableProperty]
+    public partial bool WebReloadOnShow { get; set; }
+
+    /// <summary>
+    /// Keep the flyout on screen when it loses focus, instead of dismissing like a flyout.
+    /// </summary>
+    /// <remarks>
+    /// Phrased as "keep open" rather than "auto-hide" so the default behaviour is <c>false</c>:
+    /// a bool that defaults to <c>true</c> cannot be turned off in this settings file, because
+    /// <c>WhenWritingDefault</c> drops <c>false</c> on write and the field initialiser puts it
+    /// back on load.
+    /// </remarks>
+    [ObservableProperty]
+    public partial bool WebPinFlyout { get; set; }
+
+    /// <summary>True when this launcher opens a web flyout rather than an item flyout.</summary>
+    [JsonIgnore]
+    public bool IsWebLauncher => LauncherKinds.IsWeb(Kind);
 
     /// <summary>
     /// The launcher items (shortcuts, groups, headings, column breaks) in this launcher.

@@ -65,6 +65,21 @@ There is **no type dropdown**. The target is chosen via a two-item `SelectorBar`
 - **Target resolution:** `ResolveTarget()` keys off the active tab — `custom` → the typed path/link (classified by `LooksLikeWebUrl` / `LooksLikeFilePath` into website vs application); `list` → the selected `AppPickerEntry`. It returns `(path, isPwa, isWebsite)`; `SyncDerived()` pushes that into the derived flags and the app-window options' visibility.
 - Stored values are unchanged from before (PWA → AUMID in `Path` + `IsPwa`; Store app → `shell:AppsFolder\…` path; exe → file path; website URL → `IsWebsite`), so launch behaviour in `FlyoutWindow` is preserved.
 
+## Settings rows (code-built)
+
+`LauncherSettingsWindow.BuildRow` lays out a label/subtitle in a `Star` column with the control in
+an `Auto` column. Two rules keep it from collapsing:
+
+- **The control is centred vertically, never stretched.** A control with the default alignment
+  grows to the row's height, and the row is as tall as its label — so a subtitle that wraps to two
+  lines silently inflates the input beside it. `BuildRow` sets `VerticalAlignment.Center` on every
+  control it lays out, so this cannot come back per-row.
+- **Anything with long, open-ended content uses `BuildStackedRow` instead** (label above,
+  full-width control below). An `Auto` column sizes to its content, so a control holding a URL
+  claims the width the text wants and starves the `Star` label column — a long web address once
+  squeezed "Web Address" into a three-character ribbon of wrapped text and stretched the box down
+  the whole height of it.
+
 ## Owned windows, not ContentDialog
 
 UI opened from the flyout (`ItemEditorWindow`, `TextPromptWindow`, `LauncherSettingsWindow`) uses standalone `Window`s. A `ContentDialog` renders inside its host window's content area and **cannot overflow the HWND** — hosted in a flyout that is often ~175px wide and ~130 dips tall, even a one-field dialog gets its input and buttons clipped.

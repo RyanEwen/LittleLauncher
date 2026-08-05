@@ -46,4 +46,3 @@ Audit all project documentation and bring it up to date with the current codebas
 - Only update docs for things that actually changed — do not rewrite sections that are still accurate
 - If a section is correct, leave it alone
 - If you are unsure whether something changed, read the relevant source file to verify before editing the doc
-- The original GitHub Copilot docs under `.github/` are kept in sync separately; if you change a `.claude/docs/` guide, mirror the change into the matching `.github/instructions/*.instructions.md` (or note the divergence)

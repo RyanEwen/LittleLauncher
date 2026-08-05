@@ -186,14 +186,9 @@ internal static class LauncherBulkOps
             if (step1 == null) return;
             (lastBrowser, lastProfile) = step1.Value;
 
-            // Gecko profiles store the full profile path in DirectoryName; Chromium stores a relative subdirectory name
-            string profileDir = lastBrowser.Engine == BrowserEngine.Gecko
-                ? lastProfile.DirectoryName
-                : Path.Combine(lastBrowser.ProfileDataDir, lastProfile.DirectoryName);
-
-            var bookmarkRoots = lastBrowser.Engine == BrowserEngine.Gecko
-                ? BookmarkImport.ReadGeckoBookmarks(profileDir)
-                : BookmarkImport.ReadChromiumBookmarks(profileDir);
+            // Shared with the single-bookmark picker, so the engine switch and the
+            // Gecko-vs-Chromium profile-path rule live in one place.
+            var bookmarkRoots = BookmarkImport.ReadBookmarks(lastBrowser, lastProfile);
 
             if (bookmarkRoots.Count == 0 || bookmarkRoots.Sum(r => r.CountLeaves()) == 0)
             {
@@ -337,58 +332,42 @@ internal static class LauncherBulkOps
     }
 
     /// <summary>
-    /// Shows a TreeView dialog for selecting bookmarks from a folder hierarchy.
+    /// Shows a searchable TreeView dialog for selecting bookmarks from a folder hierarchy.
     /// Returns (selected URL nodes, goBack=false) on confirm, (null, goBack=true) on Back,
     /// or (null, goBack=false) on Cancel.
     /// </summary>
+    /// <remarks>
+    /// <para>The tree is rebuilt on every keystroke, keeping folders that still have a matching
+    /// descendant. A folder whose own name matches keeps all of its children, so searching for a
+    /// folder name offers up that whole folder's worth in one go.</para>
+    /// <para><b>Selection lives in <c>chosen</c>, not in the TreeView.</b> Filtering destroys and
+    /// re-creates nodes, so a selection held only by the control would be silently dropped every
+    /// time the search text changed — tick three bookmarks, search for something else, and those
+    /// three would never be imported. The tree is authoritative only for the rows it is currently
+    /// showing; everything outside the filter keeps the state it had.</para>
+    /// </remarks>
     private static async Task<(List<BookmarkNode>? Selected, bool GoBack)> ShowBookmarkSelectorAsync(XamlRoot xamlRoot,
         List<BookmarkNode> roots)
     {
+        var chosen = new HashSet<BookmarkNode>();
         var nodeMap = new Dictionary<TreeViewNode, BookmarkNode>();
         var contentToNode = new Dictionary<BookmarkLabel, TreeViewNode>();
+        var visibleLeaves = new List<TreeViewNode>();
+        bool batchUpdating = false;
 
-        TreeViewNode MakeNode(BookmarkNode bm, bool isRoot = false)
-        {
-            string text = bm.IsFolder
-                ? $"{bm.Name}  ({bm.CountLeaves()})"
-                : bm.Name;
-            var label = new BookmarkLabel(text);
-            var node = new TreeViewNode { Content = label, IsExpanded = isRoot };
-            nodeMap[node] = bm;
-            contentToNode[label] = node;
-            foreach (var child in bm.Children)
-                node.Children.Add(MakeNode(child));
-            return node;
-        }
+        int totalCount = roots.Sum(r => r.CountLeaves());
 
         var treeView = new TreeView
         {
             SelectionMode = TreeViewSelectionMode.Multiple,
-            MaxHeight = 420
+            MaxHeight = 380
         };
 
-        int totalCount = roots.Sum(r => r.CountLeaves());
-        foreach (var root in roots)
-            treeView.RootNodes.Add(MakeNode(root, isRoot: true));
-
-        // Clicking a folder name toggles expand/collapse
-        treeView.ItemInvoked += (_, args) =>
+        var searchBox = new TextBox
         {
-            if (args.InvokedItem is BookmarkLabel invokedLabel &&
-                contentToNode.TryGetValue(invokedLabel, out var node) &&
-                nodeMap.TryGetValue(node, out var bm) && bm.IsFolder)
-            {
-                node.IsExpanded = !node.IsExpanded;
-            }
+            PlaceholderText = "Search bookmarks",
+            HorizontalAlignment = HorizontalAlignment.Stretch
         };
-
-        // Flat list of all nodes for Select All / Deselect All
-        var allNodes = new List<TreeViewNode>();
-        void CollectNodes(IList<TreeViewNode> nodes)
-        {
-            foreach (var n in nodes) { allNodes.Add(n); CollectNodes(n.Children); }
-        }
-        CollectNodes(treeView.RootNodes);
 
         var selectedCountText = new TextBlock
         {
@@ -396,6 +375,13 @@ internal static class LauncherBulkOps
             Opacity = 0.7,
             FontSize = 13,
             Text = "None selected"
+        };
+
+        var matchCountText = new TextBlock
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+            FontSize = 12,
+            Opacity = 0.55
         };
 
         var dialog = new ContentDialog
@@ -409,35 +395,151 @@ internal static class LauncherBulkOps
             IsPrimaryButtonEnabled = false
         };
 
-        bool batchUpdating = false;
-
-        void UpdateCount()
+        static bool NodeMatches(BookmarkNode bm, string[] terms)
         {
-            int count = treeView.SelectedNodes.Count(n => nodeMap.TryGetValue(n, out var bm) && !bm.IsFolder);
+            foreach (string term in terms)
+            {
+                if (bm.Name.Contains(term, StringComparison.OrdinalIgnoreCase)) continue;
+                if (bm.Url?.Contains(term, StringComparison.OrdinalIgnoreCase) == true) continue;
+                return false;
+            }
+            return true;
+        }
+
+        void UpdateCount(int shown)
+        {
+            int count = chosen.Count;
             selectedCountText.Text = count > 0 ? $"{count} selected" : "None selected";
             dialog.IsPrimaryButtonEnabled = count > 0;
             dialog.PrimaryButtonText = count > 0 ? $"Import {count}" : "Import";
+            matchCountText.Text = shown == totalCount ? "" : $"showing {shown} of {totalCount}";
         }
 
-        treeView.SelectionChanged += (_, _) => { if (!batchUpdating) UpdateCount(); };
+        // The tree speaks only for the rows it is showing; anything filtered out keeps its state.
+        void SyncChosenFromTree()
+        {
+            if (batchUpdating) return;
 
+            var selectedNow = treeView.SelectedNodes
+                .Where(n => nodeMap.TryGetValue(n, out var bm) && !bm.IsFolder)
+                .Select(n => nodeMap[n])
+                .ToHashSet();
+
+            foreach (var leaf in visibleLeaves)
+            {
+                var bm = nodeMap[leaf];
+                if (selectedNow.Contains(bm)) chosen.Add(bm);
+                else chosen.Remove(bm);
+            }
+
+            UpdateCount(visibleLeaves.Count);
+        }
+
+        // Returns the built node and how many bookmarks are under it, or null when nothing
+        // inside it survives the filter.
+        (TreeViewNode Node, int Leaves)? Build(BookmarkNode bm, string[] terms, bool isRoot, bool ancestorMatched)
+        {
+            bool selfMatches = terms.Length == 0 || NodeMatches(bm, terms);
+
+            if (!bm.IsFolder)
+            {
+                if (!selfMatches && !ancestorMatched) return null;
+                var leafLabel = new BookmarkLabel(bm.Name);
+                var leafNode = new TreeViewNode { Content = leafLabel };
+                nodeMap[leafNode] = bm;
+                contentToNode[leafLabel] = leafNode;
+                visibleLeaves.Add(leafNode);
+                return (leafNode, 1);
+            }
+
+            var children = new List<TreeViewNode>();
+            int leaves = 0;
+            foreach (var child in bm.Children)
+            {
+                var built = Build(child, terms, isRoot: false, ancestorMatched || selfMatches);
+                if (built == null) continue;
+                children.Add(built.Value.Node);
+                leaves += built.Value.Leaves;
+            }
+
+            if (children.Count == 0) return null;
+
+            var label = new BookmarkLabel($"{bm.Name}  ({leaves})");
+            // Searching expands everything: a match buried three folders deep is no use hidden.
+            var node = new TreeViewNode { Content = label, IsExpanded = isRoot || terms.Length > 0 };
+            nodeMap[node] = bm;
+            contentToNode[label] = node;
+            foreach (var child in children)
+                node.Children.Add(child);
+            return (node, leaves);
+        }
+
+        void Rebuild()
+        {
+            string[] terms = searchBox.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+            batchUpdating = true;
+            treeView.RootNodes.Clear();
+            nodeMap.Clear();
+            contentToNode.Clear();
+            visibleLeaves.Clear();
+
+            foreach (var root in roots)
+            {
+                var built = Build(root, terms, isRoot: true, ancestorMatched: false);
+                if (built != null) treeView.RootNodes.Add(built.Value.Node);
+            }
+
+            // Re-tick whatever was already chosen and is visible again.
+            foreach (var leaf in visibleLeaves)
+            {
+                if (chosen.Contains(nodeMap[leaf]))
+                    treeView.SelectedNodes.Add(leaf);
+            }
+
+            batchUpdating = false;
+            UpdateCount(visibleLeaves.Count);
+        }
+
+        // Clicking a folder name toggles expand/collapse
+        treeView.ItemInvoked += (_, args) =>
+        {
+            if (args.InvokedItem is BookmarkLabel invokedLabel &&
+                contentToNode.TryGetValue(invokedLabel, out var node) &&
+                nodeMap.TryGetValue(node, out var bm) && bm.IsFolder)
+            {
+                node.IsExpanded = !node.IsExpanded;
+            }
+        };
+
+        treeView.SelectionChanged += (_, _) => SyncChosenFromTree();
+        searchBox.TextChanged += (_, _) => Rebuild();
+
+        // Both act on what is currently shown, so "Select All" under a search means "select all
+        // matches" — which is the reason to search before selecting in the first place.
         var selectAllButton = new HyperlinkButton { Content = "Select All", Padding = new Thickness(0) };
         var deselectAllButton = new HyperlinkButton { Content = "Deselect All", Padding = new Thickness(0) };
 
         selectAllButton.Click += (_, _) =>
         {
             batchUpdating = true;
-            treeView.SelectedNodes.Clear();
-            foreach (var n in allNodes) treeView.SelectedNodes.Add(n);
+            foreach (var leaf in visibleLeaves)
+            {
+                chosen.Add(nodeMap[leaf]);
+                if (!treeView.SelectedNodes.Contains(leaf))
+                    treeView.SelectedNodes.Add(leaf);
+            }
             batchUpdating = false;
-            UpdateCount();
+            UpdateCount(visibleLeaves.Count);
         };
         deselectAllButton.Click += (_, _) =>
         {
             batchUpdating = true;
+            foreach (var leaf in visibleLeaves)
+                chosen.Remove(nodeMap[leaf]);
             treeView.SelectedNodes.Clear();
             batchUpdating = false;
-            UpdateCount();
+            UpdateCount(visibleLeaves.Count);
         };
 
         var toolRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
@@ -446,23 +548,22 @@ internal static class LauncherBulkOps
         toolRow.Children.Add(deselectAllButton);
         toolRow.Children.Add(new TextBlock { Text = "·", VerticalAlignment = VerticalAlignment.Center, Opacity = 0.4 });
         toolRow.Children.Add(selectedCountText);
+        toolRow.Children.Add(matchCountText);
 
         var content = new StackPanel { Spacing = 8, MinWidth = 480 };
+        content.Children.Add(searchBox);
         content.Children.Add(toolRow);
         content.Children.Add(treeView);
 
         dialog.Content = content;
+
+        Rebuild();
 
         var result = await dialog.ShowAsync();
 
         if (result == ContentDialogResult.Secondary) return (null, true);   // Back
         if (result != ContentDialogResult.Primary) return (null, false);    // Cancel
 
-        var selected = treeView.SelectedNodes
-            .Where(n => nodeMap.TryGetValue(n, out var bm) && !bm.IsFolder)
-            .Select(n => nodeMap[n])
-            .ToList();
-
-        return (selected, false);
+        return (chosen.ToList(), false);
     }
 }

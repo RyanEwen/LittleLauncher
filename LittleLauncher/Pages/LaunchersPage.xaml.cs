@@ -82,11 +82,22 @@ public sealed partial class LaunchersPage : Page
     private Border BuildLauncherCard(Launcher launcher)
     {
         // ── Items row (clickable drill-in with chevron) ─────────────
+        // A web launcher has no items, so the same row reports its address instead and drills
+        // in to the one place that can change it.
         int itemCount = CountLauncherItems(launcher.Items);
+        bool isWeb = launcher.IsWebLauncher;
 
         var itemsLabel = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-        itemsLabel.Children.Add(new TextBlock { Text = "Items", FontSize = 14 });
-        itemsLabel.Children.Add(new TextBlock { Text = $"{itemCount} item{(itemCount == 1 ? "" : "s")}", FontSize = 12, Opacity = 0.5 });
+        itemsLabel.Children.Add(new TextBlock { Text = isWeb ? "Web Page" : "Items", FontSize = 14 });
+        itemsLabel.Children.Add(new TextBlock
+        {
+            Text = isWeb
+                ? (string.IsNullOrWhiteSpace(launcher.WebUrl) ? "No web address set" : launcher.WebUrl)
+                : $"{itemCount} item{(itemCount == 1 ? "" : "s")}",
+            FontSize = 12,
+            Opacity = 0.5,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        });
 
         var chevron = new FontIcon
         {
@@ -114,7 +125,10 @@ public sealed partial class LaunchersPage : Page
             Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["SubtleFillColorTransparentBrush"],
             BorderThickness = new Thickness(0),
         };
-        itemsRow.Click += ItemsBulkOps_Click;
+        if (isWeb)
+            itemsRow.Click += async (_, _) => await ShowLauncherSettingsDialog(launcher);
+        else
+            itemsRow.Click += ItemsBulkOps_Click;
 
         // ── Delete button (in header bar) ──────────────────────────
         var deleteBtn = new Button
@@ -247,7 +261,8 @@ public sealed partial class LaunchersPage : Page
             headerButtons.Children.Add(settingsBtn);
         }
 
-        if (!launcher.IsShared)
+        // Sharing publishes a launcher's items, of which a web launcher has none.
+        if (!launcher.IsShared && !isWeb)
         {
             var shareBtn = new Button
             {
@@ -449,7 +464,9 @@ public sealed partial class LaunchersPage : Page
 
         // A brand-new launcher is empty, so there is nothing on screen to discover editing
         // from. Open it in edit mode; the flyout's own empty-state text takes it from there.
-        if (MainWindow.Current is { } owner)
+        // A web launcher has no items to edit — its address was set in the settings window
+        // that just closed, so there is nothing left to do.
+        if (MainWindow.Current is { } owner && !newLauncher.IsWebLauncher)
             FlyoutWindow.ShowInEditMode(owner, newLauncher.Id);
     }
 
@@ -547,8 +564,8 @@ public sealed partial class LaunchersPage : Page
         var result = await dialog.ShowAsync();
         if (result != ContentDialogResult.Primary) return;
 
-        // Dispose the flyout window for this launcher
-        FlyoutWindow.DisposeLauncher(launcher.Id);
+        // Dispose whichever panel this launcher owns
+        LauncherPanels.Dispose(launcher.Id);
 
         SettingsManager.Current.Launchers.Remove(launcher);
         SettingsManager.SaveSettings();

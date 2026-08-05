@@ -155,6 +155,24 @@ public partial class LauncherItem : ObservableObject
     public static LauncherItem CreateColumnBreak() => new() { IsColumnBreak = true };
 
     /// <summary>
+    /// The item as a person would name it.
+    /// </summary>
+    /// <remarks>
+    /// A <c>ListViewItem</c> derives its accessible name from <c>ToString()</c> when the row is
+    /// built from a template rather than plain text — which every flyout list is. Without this,
+    /// a screen reader announced "LittleLauncher.Models.LauncherItem" for every shortcut in
+    /// every launcher. Column breaks are invisible sentinels and headings have no target, so
+    /// they say what they are rather than pretending to be launchable.
+    /// </remarks>
+    public override string ToString()
+    {
+        if (IsColumnBreak) return "Column break";
+        if (IsGroup) return $"{Name} (group)";
+        if (string.IsNullOrEmpty(Path)) return Name;   // heading
+        return Name;
+    }
+
+    /// <summary>
     /// Normalizes legacy glyph text names (e.g. "Globe24") to Unicode characters.
     /// Called after deserialization from XML import/sync to fix old data.
     /// </summary>

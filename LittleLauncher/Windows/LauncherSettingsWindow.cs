@@ -42,6 +42,10 @@ public sealed class LauncherSettingsWindow : Window
     private readonly IntPtr _hwnd;
     private readonly Launcher _launcher;
     private TextBox? _nameBox;
+    private TextBox? _urlBox;
+    private Button? _doneButton;
+    private bool _isNewLauncher;
+
 
     /// <summary>
     /// Opens launcher settings. Completes when the window closes.
@@ -79,15 +83,16 @@ public sealed class LauncherSettingsWindow : Window
 
         var doneButton = new Button
         {
-            // A launcher created here goes straight on to item editing, so "Done" would be a
-            // lie — the user has one more step.
-            Content = isNewLauncher ? "Next: Add Items" : "Done",
             Style = (Style)Application.Current.Resources["AccentButtonStyle"],
             MinWidth = 90,
             HorizontalAlignment = HorizontalAlignment.Right,
             Margin = new Thickness(0, 16, 0, 0),
         };
         doneButton.Click += (_, _) => Close();
+
+        _isNewLauncher = isNewLauncher;
+        _doneButton = doneButton;
+        UpdateAcceptButton();
 
         var body = new Grid { Padding = new Thickness(24, 8, 24, 24) };
         body.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
@@ -132,11 +137,28 @@ public sealed class LauncherSettingsWindow : Window
         Closed += (_, _) =>
         {
             CommitName();
+            CommitWebUrl();
             _completion.TrySetResult(true);
         };
     }
 
-    /// <summary>The name is the only deferred edit; everything else applies as it changes.</summary>
+    /// <summary>
+    /// Labels the accept button for what actually happens next.
+    /// </summary>
+    /// <remarks>
+    /// A new shortcut launcher goes straight on to item editing, so "Done" would be a lie — the
+    /// user has one more step. A web launcher has no items and nothing follows, so the same
+    /// wording is the opposite lie: it promises a step that does not exist, and
+    /// <c>LaunchersPage</c> deliberately does not open edit mode for it. Re-run whenever the type
+    /// changes, since that decides which of the two this is.
+    /// </remarks>
+    private void UpdateAcceptButton()
+    {
+        if (_doneButton == null) return;
+        _doneButton.Content = _isNewLauncher && !_launcher.IsWebLauncher ? "Next: Add Items" : "Done";
+    }
+
+    /// <summary>The two text fields are the deferred edits; everything else applies as it changes.</summary>
     private void CommitName()
     {
         if (_nameBox == null) return;
@@ -147,6 +169,58 @@ public sealed class LauncherSettingsWindow : Window
         SettingsManager.SaveSettings();
         MainWindow.Current?.RefreshTrayIcons();
         FlyoutWindow.InvalidateItems(_launcher.Id);
+        WebFlyoutWindow.ApplyLauncherChanges(_launcher.Id);
+    }
+
+    /// <summary>
+    /// Commits the web address and, unless the user has chosen an icon, adopts the site's icon —
+    /// a composite is built from item icons, so a web launcher would otherwise sit in the tray as
+    /// the generic app icon.
+    /// </summary>
+    /// <remarks>
+    /// This is the *provisional* icon: an unauthenticated favicon fetch, which gives the launcher
+    /// something immediately but comes back empty-handed for a page behind a login. The real one
+    /// is whatever the page declares once it loads in the flyout
+    /// (<see cref="WebFlyoutWindow.AdoptPageIconAsync"/>). Both write the same managed path, so
+    /// the page icon can replace this one — and neither touches an icon the user picked.
+    /// </remarks>
+    private void CommitWebUrl()
+    {
+        if (_urlBox == null) return;
+        string url = _urlBox.Text.Trim();
+        if (url == _launcher.WebUrl) return;
+
+        _launcher.WebUrl = url;
+        SettingsManager.SaveSettings();
+        WebFlyoutWindow.ApplyLauncherChanges(_launcher.Id);
+
+        if (WebFlyoutWindow.MayAdoptPageIcon(_launcher) && !string.IsNullOrEmpty(url))
+            _ = AdoptSiteIconAsync(_launcher, WebFlyoutWindow.NormalizeUrl(url));
+    }
+
+    private static async Task AdoptSiteIconAsync(Launcher launcher, string url)
+    {
+        try
+        {
+            string? iconPath = await Services.FaviconService.FetchAndCacheAsync(url);
+            if (string.IsNullOrEmpty(iconPath) || !File.Exists(iconPath)) return;
+
+            // Copied out of the favicon cache (which is pruned on the item-icon schedule) to the
+            // managed page-icon path — the distinct name is what lets the flyout tell an icon we
+            // adopted from one the user chose, and so upgrade it later.
+            string destPath = WebFlyoutWindow.GetPageIconPath(launcher.Id);
+            Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
+            File.Copy(iconPath, destPath, overwrite: true);
+
+            launcher.CustomTrayIconPath = destPath;
+            launcher.TrayIconMode = TrayIconModes.Custom;
+            SettingsManager.SaveSettings();
+            MainWindow.Current?.UpdateTrayIcon(launcher);
+        }
+        catch (Exception ex)
+        {
+            NLog.LogManager.GetCurrentClassLogger().Warn(ex, "Could not adopt the site icon for {Name}", launcher.Name);
+        }
     }
 
     /// <summary>
@@ -418,17 +492,365 @@ public sealed class LauncherSettingsWindow : Window
         taskbarRow.Children.Add(taskbarLabel);
         taskbarRow.Children.Add(pinBtn);
 
+        // ── Web launcher rows ───────────────────────────────────
+        var (webRows, refreshWebRows) = BuildWebRows(launcher);
+
+        // ── Type ─────────────────────────────────────────────────
+        // Last to be built, first to be shown: it decides which of the two sets of rows above
+        // is relevant, so it needs both of them to exist.
+        var typeCombo = new ComboBox { MinWidth = 160 };
+        var kinds = new[]
+        {
+            (Label: "Shortcuts", Value: LauncherKinds.Items),
+            (Label: "Web page", Value: LauncherKinds.Web),
+        };
+        foreach (var kind in kinds)
+            typeCombo.Items.Add(new ComboBoxItem { Content = kind.Label, Tag = kind.Value });
+        typeCombo.SelectedIndex = Array.FindIndex(kinds, k => k.Value == LauncherKinds.Normalize(launcher.Kind));
+
+        var itemRows = new[] { viewModeRow, iconsPerRowRow, showTitleRow };
+
+        void UpdateKindVisibility()
+        {
+            bool isWeb = launcher.IsWebLauncher;
+            foreach (var row in itemRows)
+                row.Visibility = isWeb ? Visibility.Collapsed : Visibility.Visible;
+            if (!isWeb)
+                UpdateIconModeControls();   // the icons-per-row row has its own condition
+            foreach (var row in webRows)
+                row.Visibility = isWeb ? Visibility.Visible : Visibility.Collapsed;
+            refreshWebRows();
+            UpdateAcceptButton();
+        }
+
+        typeCombo.SelectionChanged += (s, e) =>
+        {
+            if (typeCombo.SelectedItem is not ComboBoxItem selected || selected.Tag is not int kind)
+                return;
+            if (kind == LauncherKinds.Normalize(launcher.Kind))
+                return;
+
+            launcher.Kind = kind;
+            SettingsManager.SaveSettings();
+            // Releases the panel the launcher no longer uses and warms up the one it now does.
+            MainWindow.Current?.RefreshTrayIcons();
+            UpdateKindVisibility();
+        };
+
+        var typeRow = BuildRow("Type", "What the tray icon opens", typeCombo);
+
+        UpdateKindVisibility();
+
         // ── Build dialog content ────────────────────────────────
         var panel = new StackPanel { Spacing = 12 };
         panel.Children.Add(nameRow);
+        panel.Children.Add(typeRow);
         panel.Children.Add(iconRow);
         panel.Children.Add(customIconRow);
         panel.Children.Add(viewModeRow);
         panel.Children.Add(iconsPerRowRow);
         panel.Children.Add(showTitleRow);
+        foreach (var row in webRows)
+            panel.Children.Add(row);
         panel.Children.Add(hideRow);
         panel.Children.Add(taskbarRow);
         return panel;
+    }
+
+    /// <summary>
+    /// Builds a settings row with the control on its own line, full width, under the label.
+    /// </summary>
+    /// <remarks>
+    /// For controls whose content is long and open-ended — a URL, a path. The side-by-side
+    /// <see cref="BuildRow"/> sizes its control column to <c>Auto</c>, so a wide control starves
+    /// the label column: a long address squeezed "Web Address" into a three-character ribbon of
+    /// wrapped text and stretched the box down the full height of it. Giving the control the whole
+    /// width sidesteps the competition rather than trying to balance it.
+    /// </remarks>
+    private static FrameworkElement BuildStackedRow(string title, string subtitle, FrameworkElement control)
+    {
+        var panel = new StackPanel { Spacing = 2 };
+        panel.Children.Add(new TextBlock { Text = title, FontSize = 14 });
+        panel.Children.Add(new TextBlock
+        {
+            Text = subtitle,
+            FontSize = 12,
+            Opacity = 0.5,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 6),
+        });
+        control.HorizontalAlignment = HorizontalAlignment.Stretch;
+        panel.Children.Add(control);
+        return panel;
+    }
+
+    /// <summary>Builds one label/control settings row in the same shape as the rows above.</summary>
+    private static Grid BuildRow(string title, string subtitle, FrameworkElement control)
+    {
+        var row = new Grid();
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var label = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
+        label.Children.Add(new TextBlock { Text = title, FontSize = 14 });
+        label.Children.Add(new TextBlock
+        {
+            Text = subtitle,
+            FontSize = 12,
+            Opacity = 0.5,
+            TextWrapping = TextWrapping.Wrap,
+        });
+
+        // Centred, never stretched. A control with the default vertical alignment grows to the
+        // row's height, and the row is as tall as its label — so a subtitle that wraps to two
+        // lines silently inflates the input beside it. That is what made the "Unload After"
+        // number box look oversized while the identical box on the (single-line) row above
+        // looked normal.
+        control.VerticalAlignment = VerticalAlignment.Center;
+
+        Grid.SetColumn(label, 0);
+        Grid.SetColumn(control, 1);
+        row.Children.Add(label);
+        row.Children.Add(control);
+        return row;
+    }
+
+    /// <summary>
+    /// Builds the rows that only apply to a web launcher.
+    /// </summary>
+    /// <remarks>
+    /// Only the two settings a web launcher cannot work without — its address and its size — are
+    /// shown outright. Everything else (zoom, what the browser does when hidden, reload, pin,
+    /// browsing data) is tuning for a launcher that already works, so it sits in a collapsed
+    /// <c>Advanced</c> expander rather than making the common case read as an eight-field form.
+    /// Pin is doubly safe to demote: it also has a button in the flyout's own header.
+    /// </remarks>
+    /// <returns>
+    /// The rows, plus a callback that re-reads the launcher into the controls.
+    /// </returns>
+    private (IReadOnlyList<FrameworkElement> Rows, Action Refresh) BuildWebRows(Launcher launcher)
+    {
+        // ── Address ─────────────────────────────────────────────
+        var urlBox = new TextBox
+        {
+            PlaceholderText = "https://homeassistant.local:8123/lovelace/cameras",
+            Text = launcher.WebUrl,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            // Without this the box stretches to whatever height the row ends up being.
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        _urlBox = urlBox;
+
+        // Typing a dashboard URL from memory is the worst way to enter one; it is already a
+        // bookmark in the browser the user set it up in.
+        var bookmarkButton = new Button
+        {
+            Content = "Bookmark…",
+            Margin = new Thickness(8, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        bookmarkButton.Click += async (_, _) =>
+        {
+            var picked = await Pages.BookmarkPicker.PickAsync(Content.XamlRoot);
+            if (picked == null) return;
+
+            urlBox.Text = picked.Url;
+
+            // Committed immediately rather than on close: the name is worth adopting too, and
+            // doing that silently at close would overwrite a name the user had just typed.
+            CommitWebUrl();
+            if (_nameBox != null && string.IsNullOrWhiteSpace(_nameBox.Text))
+                _nameBox.Text = picked.Name;
+        };
+
+        var urlControls = new Grid();
+        urlControls.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        urlControls.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        Grid.SetColumn(urlBox, 0);
+        Grid.SetColumn(bookmarkButton, 1);
+        urlControls.Children.Add(urlBox);
+        urlControls.Children.Add(bookmarkButton);
+
+        var urlRow = BuildStackedRow("Web Address", "The page this launcher opens", urlControls);
+
+        // ── Panel size ──────────────────────────────────────────
+        var widthBox = new NumberBox
+        {
+            Value = launcher.ResolvedWebFlyoutWidth,
+            Minimum = Launcher.MinWebFlyoutWidth,
+            Maximum = Launcher.MaxWebFlyoutDimension,
+            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact,
+            Width = 120,
+        };
+        var heightBox = new NumberBox
+        {
+            Value = launcher.ResolvedWebFlyoutHeight,
+            Minimum = Launcher.MinWebFlyoutHeight,
+            Maximum = Launcher.MaxWebFlyoutDimension,
+            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact,
+            Width = 120,
+        };
+
+        var sizeControls = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
+        sizeControls.Children.Add(widthBox);
+        sizeControls.Children.Add(new TextBlock { Text = "×", VerticalAlignment = VerticalAlignment.Center, Opacity = 0.5 });
+        sizeControls.Children.Add(heightBox);
+
+        widthBox.ValueChanged += (_, _) =>
+        {
+            if (double.IsNaN(widthBox.Value)) return;
+            launcher.WebFlyoutWidth = (int)widthBox.Value;
+            SettingsManager.SaveSettings();
+            WebFlyoutWindow.ApplyLauncherChanges(launcher.Id);
+        };
+        heightBox.ValueChanged += (_, _) =>
+        {
+            if (double.IsNaN(heightBox.Value)) return;
+            launcher.WebFlyoutHeight = (int)heightBox.Value;
+            SettingsManager.SaveSettings();
+            WebFlyoutWindow.ApplyLauncherChanges(launcher.Id);
+        };
+
+        var sizeRow = BuildRow("Flyout Size", "Width × height of the web flyout, in pixels", sizeControls);
+
+        // ── Zoom ────────────────────────────────────────────────
+        var zoomCombo = new ComboBox { MinWidth = 100 };
+        int[] zoomLevels = [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200];
+        foreach (int zoom in zoomLevels)
+            zoomCombo.Items.Add(new ComboBoxItem { Content = $"{zoom}%", Tag = zoom });
+        int currentZoom = (int)Math.Round(launcher.ResolvedWebZoomFactor * 100);
+        zoomCombo.SelectedIndex = Math.Max(0, Array.IndexOf(zoomLevels, currentZoom));
+        zoomCombo.SelectionChanged += (_, _) =>
+        {
+            if (zoomCombo.SelectedItem is not ComboBoxItem selected || selected.Tag is not int zoom) return;
+            launcher.WebZoomPercent = zoom;
+            SettingsManager.SaveSettings();
+            WebFlyoutWindow.ApplyLauncherChanges(launcher.Id);
+        };
+        var zoomRow = BuildRow("Zoom", "Page zoom inside the flyout", zoomCombo);
+
+        // ── Hidden policy ───────────────────────────────────────
+        var policyCombo = new ComboBox { MinWidth = 200 };
+        var policies = new[]
+        {
+            (Label: "Unload when idle", Value: WebHiddenPolicies.UnloadWhenIdle),
+            (Label: "Stay loaded (suspended)", Value: WebHiddenPolicies.Suspend),
+            (Label: "Keep running", Value: WebHiddenPolicies.KeepRunning),
+        };
+        foreach (var policy in policies)
+            policyCombo.Items.Add(new ComboBoxItem { Content = policy.Label, Tag = policy.Value });
+        policyCombo.SelectedIndex = Array.FindIndex(policies, p => p.Value == WebHiddenPolicies.Normalize(launcher.WebHiddenPolicy));
+
+        var policyRow = BuildRow(
+            "When Hidden",
+            "Unloading frees all memory and stops video and polling; staying loaded reopens instantly",
+            policyCombo);
+
+        // ── Idle delay ──────────────────────────────────────────
+        var idleBox = new NumberBox
+        {
+            Value = launcher.ResolvedWebIdleUnloadMinutes,
+            Minimum = 1,
+            Maximum = 720,
+            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact,
+            Width = 120,
+        };
+        idleBox.ValueChanged += (_, _) =>
+        {
+            if (double.IsNaN(idleBox.Value)) return;
+            launcher.WebIdleUnloadMinutes = (int)idleBox.Value;
+            SettingsManager.SaveSettings();
+        };
+        var idleRow = BuildRow("Unload After", "Minutes the flyout may sit closed before the page is dropped", idleBox);
+
+        // Gated on the kind as well as the policy: the caller shows every web row at once, and
+        // this row is the one exception that must stay hidden even then.
+        void UpdateIdleVisibility()
+        {
+            idleRow.Visibility = launcher.IsWebLauncher &&
+                WebHiddenPolicies.Normalize(launcher.WebHiddenPolicy) == WebHiddenPolicies.UnloadWhenIdle
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+        }
+
+        policyCombo.SelectionChanged += (_, _) =>
+        {
+            if (policyCombo.SelectedItem is not ComboBoxItem selected || selected.Tag is not int policy) return;
+            launcher.WebHiddenPolicy = policy;
+            SettingsManager.SaveSettings();
+            UpdateIdleVisibility();
+        };
+        UpdateIdleVisibility();
+
+        // ── Reload on show ──────────────────────────────────────
+        var reloadToggle = new ToggleSwitch { IsOn = launcher.WebReloadOnShow, OnContent = "", OffContent = "", MinWidth = 0 };
+        reloadToggle.Toggled += (_, _) =>
+        {
+            launcher.WebReloadOnShow = reloadToggle.IsOn;
+            SettingsManager.SaveSettings();
+        };
+        var reloadRow = BuildRow("Reload On Open", "Fetch the page again each time, instead of showing it as you left it", reloadToggle);
+
+        // ── Keep open on focus loss ─────────────────────────────
+        var pinToggle = new ToggleSwitch { IsOn = launcher.WebPinFlyout, OnContent = "", OffContent = "", MinWidth = 0 };
+        pinToggle.Toggled += (_, _) =>
+        {
+            launcher.WebPinFlyout = pinToggle.IsOn;
+            SettingsManager.SaveSettings();
+        };
+        var pinRow = BuildRow("Pin Open", "Stay on screen when you click elsewhere, instead of dismissing like a flyout", pinToggle);
+
+        // ── Sign-out / clear data ───────────────────────────────
+        var clearButton = new Button { Content = "Clear" };
+        clearButton.Click += async (_, _) =>
+        {
+            clearButton.IsEnabled = false;
+            try
+            {
+                await WebFlyoutWindow.ClearBrowsingDataAsync(launcher);
+                clearButton.Content = "Cleared";
+            }
+            catch (Exception ex)
+            {
+                NLog.LogManager.GetCurrentClassLogger().Warn(ex, "Clearing web launcher data failed");
+                await ShowErrorAsync("Could not clear this launcher's browsing data. Close its panel and try again.");
+                clearButton.Content = "Clear";
+            }
+            finally
+            {
+                clearButton.IsEnabled = true;
+            }
+        };
+        var clearRow = BuildRow("Browsing Data", "Signs out of the page and clears its cookies and cache", clearButton);
+
+        // ── Advanced ────────────────────────────────────────────
+        var advancedPanel = new StackPanel { Spacing = 12 };
+        foreach (var row in new[] { zoomRow, policyRow, idleRow, reloadRow, pinRow, clearRow })
+            advancedPanel.Children.Add(row);
+
+        var advanced = new Expander
+        {
+            Header = "Advanced",
+            IsExpanded = false,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            Content = advancedPanel,
+        };
+
+        // Deliberately *not* resizing the window as this expands. Growing the window to fit
+        // read as a jolt — the window jumped a beat after the expander had already animated —
+        // and the form is already inside a ScrollViewer with the button row pinned below it,
+        // so revealing the section just scrolls. Nothing to chase, nothing to animate.
+
+        void Refresh()
+        {
+            urlBox.Text = launcher.WebUrl;
+            widthBox.Value = launcher.ResolvedWebFlyoutWidth;
+            heightBox.Value = launcher.ResolvedWebFlyoutHeight;
+            UpdateIdleVisibility();
+        }
+
+        return ([urlRow, sizeRow, advanced], Refresh);
     }
 
     private (Button Button, Grid CustomRow) BuildIconChooser(Launcher launcher)

@@ -641,7 +641,7 @@ public static class SftpSyncService
             {
                 if (!downloadedById.ContainsKey(current[i].Id))
                 {
-                    Windows.FlyoutWindow.DisposeLauncher(current[i].Id);
+                    Windows.LauncherPanels.Dispose(current[i].Id);
                     current.RemoveAt(i);
                 }
             }
@@ -656,6 +656,18 @@ public static class SftpSyncService
                     existing.TrayIconMode = downloaded.TrayIconMode;
                     existing.CustomTrayIconPath = downloaded.CustomTrayIconPath;
                     existing.NIconHide = downloaded.NIconHide;
+
+                    // A web launcher carries no items, so without these it would arrive on the
+                    // other machine as an empty shortcut launcher.
+                    existing.Kind = downloaded.Kind;
+                    existing.WebUrl = downloaded.WebUrl;
+                    existing.WebFlyoutWidth = downloaded.WebFlyoutWidth;
+                    existing.WebFlyoutHeight = downloaded.WebFlyoutHeight;
+                    existing.WebZoomPercent = downloaded.WebZoomPercent;
+                    existing.WebHiddenPolicy = downloaded.WebHiddenPolicy;
+                    existing.WebIdleUnloadMinutes = downloaded.WebIdleUnloadMinutes;
+                    existing.WebReloadOnShow = downloaded.WebReloadOnShow;
+                    existing.WebPinFlyout = downloaded.WebPinFlyout;
 
                     existing.Items.Clear();
                     foreach (var item in downloaded.Items)

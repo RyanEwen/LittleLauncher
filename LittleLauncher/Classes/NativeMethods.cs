@@ -267,6 +267,21 @@ public static partial class NativeMethods
     [DllImport("user32.dll")]
     internal static extern IntPtr SetFocus(IntPtr hWnd);
 
+    [LibraryImport("user32.dll")]
+    internal static partial IntPtr GetForegroundWindow();
+
+    /// <summary>
+    /// True when <paramref name="hWnd"/> is a descendant of <paramref name="hWndParent"/>.
+    /// </summary>
+    /// <remarks>
+    /// A hosted browser runs its own child HWNDs, so focus landing inside one deactivates the
+    /// XAML window even though the user has not left it. Panels that dismiss on focus loss test
+    /// the foreground window against this before hiding.
+    /// </remarks>
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool IsChild(IntPtr hWndParent, IntPtr hWnd);
+
     internal const int SW_HIDE = 0;
     internal const int SW_MAXIMIZE = 3;
     internal const int SW_SHOWNOACTIVATE = 4;
