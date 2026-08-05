@@ -1132,6 +1132,48 @@ public sealed class LauncherSettingsWindow : Window
         };
         var pinRow = BuildRow("Pin Open", "Stay on screen when you click elsewhere, instead of dismissing like a flyout", pinToggle);
 
+        // ── Opening position ────────────────────────────────────
+        var anchorCombo = new ComboBox { MinWidth = 200 };
+        (string Label, int Value)[] anchors =
+        [
+            ("Near its tray icon", WebAnchors.Tray),
+            ("Top left", WebAnchors.TopLeft),
+            ("Top centre", WebAnchors.TopCenter),
+            ("Top right", WebAnchors.TopRight),
+            ("Left", WebAnchors.Left),
+            ("Centre", WebAnchors.Center),
+            ("Right", WebAnchors.Right),
+            ("Bottom left", WebAnchors.BottomLeft),
+            ("Bottom centre", WebAnchors.BottomCenter),
+            ("Bottom right", WebAnchors.BottomRight),
+        ];
+        foreach (var a in anchors)
+            anchorCombo.Items.Add(new ComboBoxItem { Content = a.Label, Tag = a.Value });
+        anchorCombo.SelectedIndex = Array.FindIndex(anchors, a => a.Value == WebAnchors.Normalize(launcher.WebAnchor));
+
+        var anchorSubtitle = new TextBlock { FontSize = 12, Opacity = 0.5, TextWrapping = TextWrapping.Wrap };
+
+        void UpdateAnchorText() => anchorSubtitle.Text = launcher.WebRememberPosition
+            ? "Where it opens the first time — after that it opens where you last left it"
+            : "Where it opens on the screen holding its tray icon";
+
+        anchorCombo.SelectionChanged += (_, _) =>
+        {
+            if (anchorCombo.SelectedItem is not ComboBoxItem selected || selected.Tag is not int anchor) return;
+            if (anchor == WebAnchors.Normalize(launcher.WebAnchor)) return;
+
+            launcher.WebAnchor = anchor;
+
+            // A remembered position outranks the anchor, so leaving one in place would mean
+            // picking a corner and watching the flyout open exactly where it did before.
+            launcher.WebFlyoutPosition = "";
+
+            SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
+        };
+
+        var anchorRow = BuildRow("Opens At", anchorSubtitle, anchorCombo);
+
         // ── Remember position ───────────────────────────────────
         var rememberToggle = new ToggleSwitch { IsOn = launcher.WebRememberPosition, OnContent = "", OffContent = "", MinWidth = 0 };
         rememberToggle.Toggled += (_, _) =>
@@ -1144,6 +1186,7 @@ public sealed class LauncherSettingsWindow : Window
 
             SettingsManager.SaveSettings();
             Services.AutoSyncService.NotifyLaunchersChanged();
+            UpdateAnchorText();   // the anchor means "first open" only while this is on
         };
         var rememberRow = BuildRow("Remember Position",
             "Keep this flyout where you drag it; otherwise a move lasts until you close it",
@@ -1208,7 +1251,7 @@ public sealed class LauncherSettingsWindow : Window
 
         // ── Advanced ────────────────────────────────────────────
         var advancedPanel = new StackPanel { Spacing = 12 };
-        foreach (var row in new[] { zoomRow, policyRow, idleRow, reloadRow, pinRow, rememberRow, profileRow, clearRow })
+        foreach (var row in new[] { zoomRow, policyRow, idleRow, reloadRow, pinRow, anchorRow, rememberRow, profileRow, clearRow })
             advancedPanel.Children.Add(row);
 
         var advanced = new Expander
@@ -1229,6 +1272,7 @@ public sealed class LauncherSettingsWindow : Window
         {
             UpdateContentMode();
             UpdateProfileText();
+            UpdateAnchorText();
             urlBox.Text = launcher.WebUrl;
             widthBox.Value = launcher.ResolvedWebFlyoutWidth;
             heightBox.Value = launcher.ResolvedWebFlyoutHeight;

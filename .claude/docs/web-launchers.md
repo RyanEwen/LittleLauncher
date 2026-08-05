@@ -272,6 +272,28 @@ share nothing by default: separate cookies, storage and cache, which is what mak
 the same site possible. Nothing is shared with the user's real Edge or Chrome either, so a launcher
 starts signed out even where the desktop browser is signed in.
 
+### Where it opens
+
+Placement resolves in one order, in `CalculatePlacement`, and each step only runs because the one
+above it did not apply:
+
+| Rank | Source | Applies when |
+|---|---|---|
+| 1 | `WebFlyoutPosition` | `WebRememberPosition` is on *and* the flyout has been dragged |
+| 2 | `WebAnchor` (`WebAnchors`) | A corner, edge or centre has been chosen |
+| 3 | The tray icon | The default — above a bottom taskbar, below a top one |
+
+So with **Remember Position** on, the anchor decides the *first* open and nothing after it; with it
+off, the anchor decides every open. That ranking is why **changing the anchor clears
+`WebFlyoutPosition`** — otherwise picking a corner on a flyout that had been dragged would appear
+to do nothing at all, the remembered position silently outranking the choice just made. The row's
+subtitle states which of the two behaviours is currently in force.
+
+An anchored flyout is placed on the **work area of the monitor whose tray icon was clicked**, not
+the primary monitor: a corner should mean a corner of the screen being worked on. It also slides in
+from the nearer edge — down from a top anchor, up from anything else — rather than travelling
+across the screen from wherever the tray happens to be.
+
 ### The shared profile
 
 `Launcher.WebSharedProfile` (Advanced → **Sign-ins**) points a launcher at `WebProfiles\Shared`

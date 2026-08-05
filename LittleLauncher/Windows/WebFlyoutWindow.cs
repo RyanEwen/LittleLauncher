@@ -2067,6 +2067,33 @@ public sealed class WebFlyoutWindow : Window
             return new FlyoutPlacement(savedLeft, savedTop, savedTop, width, height, SlideEdge.Bottom);
         }
 
+        // A fixed anchor replaces the tray-relative placement — on the monitor whose tray icon
+        // was clicked, so a corner still means a corner of the screen the user is working on.
+        // It ranks below the remembered position above, which is what makes it "where this opens
+        // until you move it".
+        int anchor = WebAnchors.Normalize(_launcher.WebAnchor);
+        if (anchor != WebAnchors.Tray)
+        {
+            int anchoredLeft =
+                WebAnchors.IsLeft(anchor) ? workArea.Left + gap :
+                WebAnchors.IsRight(anchor) ? workArea.Right - width - gap :
+                workArea.Left + ((workArea.Right - workArea.Left - width) / 2);
+
+            int anchoredTop =
+                WebAnchors.IsTop(anchor) ? workArea.Top + gap :
+                WebAnchors.IsBottom(anchor) ? workArea.Bottom - height - gap :
+                workArea.Top + ((workArea.Bottom - workArea.Top - height) / 2);
+
+            // Slides down from a top anchor and up from anything else, so it always arrives from
+            // the nearest edge rather than travelling across the screen.
+            var anchoredEdge = WebAnchors.IsTop(anchor) ? SlideEdge.Top : SlideEdge.Bottom;
+            int anchoredStart = anchoredEdge == SlideEdge.Top
+                ? anchoredTop - slideDistance
+                : anchoredTop + slideDistance;
+
+            return new FlyoutPlacement(anchoredLeft, anchoredTop, anchoredStart, width, height, anchoredEdge);
+        }
+
         var edge = nearTop ? SlideEdge.Top : SlideEdge.Bottom;
         int startTop = edge == SlideEdge.Top ? top - slideDistance : top + slideDistance;
         return new FlyoutPlacement(left, top, startTop, width, height, edge);

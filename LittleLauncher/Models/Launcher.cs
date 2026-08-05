@@ -114,6 +114,37 @@ public static class WebHiddenPolicies
     };
 }
 
+/// <summary>
+/// Where a web flyout opens when it has not been moved. See <see cref="Launcher.WebAnchor"/>.
+/// </summary>
+/// <remarks>
+/// <see cref="Tray"/> is <c>0</c> so the tray-relative placement every web launcher shipped with
+/// is what <c>WhenWritingDefault</c> leaves in the file — which is to say, nothing.
+/// </remarks>
+public static class WebAnchors
+{
+    /// <summary>Above (or below) the tray icon that was clicked, as a flyout normally behaves.</summary>
+    public const int Tray = 0;
+
+    public const int TopLeft = 1;
+    public const int TopCenter = 2;
+    public const int TopRight = 3;
+    public const int Left = 4;
+    public const int Center = 5;
+    public const int Right = 6;
+    public const int BottomLeft = 7;
+    public const int BottomCenter = 8;
+    public const int BottomRight = 9;
+
+    public static int Normalize(int value) =>
+        value >= Tray && value <= BottomRight ? value : Tray;
+
+    public static bool IsTop(int a) => a is TopLeft or TopCenter or TopRight;
+    public static bool IsBottom(int a) => a is BottomLeft or BottomCenter or BottomRight;
+    public static bool IsLeft(int a) => a is TopLeft or Left or BottomLeft;
+    public static bool IsRight(int a) => a is TopRight or Right or BottomRight;
+}
+
 /// <summary>Integer constants for <see cref="Launcher.ViewMode"/>.</summary>
 public static class LauncherViewModes
 {
@@ -344,6 +375,18 @@ public partial class Launcher : ObservableObject
     /// </remarks>
     [ObservableProperty]
     public partial string WebDefaultBookmarkUrl { get; set; } = "";
+
+    /// <summary>
+    /// Where this web flyout opens when it has not been moved. See <see cref="WebAnchors"/>.
+    /// </summary>
+    /// <remarks>
+    /// Ranks below <see cref="WebFlyoutPosition"/>: a flyout the user has dragged somewhere opens
+    /// where they left it, so with <see cref="WebRememberPosition"/> on this decides the *first*
+    /// open and nothing after it. Changing it clears the remembered position, or picking a corner
+    /// would appear to do nothing at all.
+    /// </remarks>
+    [ObservableProperty]
+    public partial int WebAnchor { get; set; }
 
     /// <summary>
     /// Keep a moved flyout where it was put, across dismissals and restarts.

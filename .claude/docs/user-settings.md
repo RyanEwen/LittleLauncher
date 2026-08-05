@@ -117,6 +117,10 @@ model default, which would have flipped it on for every existing launcher.
   launcher that sets it, instead of a private per-launcher folder. Defaults `false`, which is both
   the safe direction under `WhenWritingDefault` and the behaviour that shipped first — an upgrade
   must not move a launcher onto a profile it was never signed in to
+- `WebAnchor` (`int`) — where the flyout opens when it has not been moved: `WebAnchors.Tray`
+  (0, default) or one of the nine corner/edge/centre positions. Outranked by `WebFlyoutPosition`,
+  so with `WebRememberPosition` on it decides only the first open; changing it clears
+  `WebFlyoutPosition` so the new choice actually takes effect
 - `WebPinFlyout` (`bool`) — stay open when focus is lost
 - `WebUseBookmarks` (`bool`) — bar of bookmarks instead of a single address. Defaults `false`, so
   the safe direction under `WhenWritingDefault`
