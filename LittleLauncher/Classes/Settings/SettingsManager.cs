@@ -67,6 +67,38 @@ public static class SettingsManager
     private static Version? AppVersion =>
         System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
 
+    /// <summary>The version that introduced web launchers, and so the one-time notice about them.</summary>
+    private static readonly Version WebLauncherVersion = new(1, 25, 0);
+
+    /// <summary>
+    /// Raises any one-time notices this upgrade has earned. Call **before**
+    /// <see cref="StampVersion"/>, which overwrites the evidence.
+    /// </summary>
+    /// <remarks>
+    /// Only ever called from the two load paths that found an existing settings file. A fresh
+    /// install has never seen the old behaviour, so announcing a change to it is pure noise —
+    /// which is why the defaults path deliberately does not call this.
+    /// </remarks>
+    private static void RaiseUpgradeNotices(string? previousVersion)
+    {
+        if (IsOlderThan(previousVersion, WebLauncherVersion))
+            _current.ShowWebLauncherNotice = true;
+    }
+
+    /// <summary>
+    /// True when a recorded version predates <paramref name="threshold"/>.
+    /// </summary>
+    /// <remarks>
+    /// A missing or unparseable value counts as older: settings files written before
+    /// <see cref="UserSettings.LastRunVersion"/> existed carry nothing, and those are upgraders
+    /// too — arguably the oldest ones.
+    /// </remarks>
+    private static bool IsOlderThan(string? version, Version threshold)
+    {
+        if (string.IsNullOrWhiteSpace(version)) return true;
+        return !Version.TryParse(version, out var parsed) || parsed < threshold;
+    }
+
     /// <summary>
     /// Records the running version in the settings file, so an upgrade can be detected later.
     /// </summary>
@@ -109,6 +141,8 @@ public static class SettingsManager
                     _current = deserialized;
                     _current.CompleteInitialization();
                     NormalizeAllGlyphs();
+                    // Before StampVersion, which replaces the value being compared against.
+                    RaiseUpgradeNotices(_current.LastRunVersion);
                     StampVersion();
                     Logger.Info("Settings successfully restored");
                     return _current;
@@ -127,6 +161,7 @@ public static class SettingsManager
                         _current = xmlSettings;
                         _current.CompleteInitialization();
                         NormalizeAllGlyphs();
+                        RaiseUpgradeNotices(_current.LastRunVersion);
                         StampVersion();
 
                         // Save in new JSON format and rename old file

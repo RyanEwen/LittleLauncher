@@ -27,7 +27,33 @@ public partial class HomePage : Page
         LoadAppIcon();
         VersionTextBlock.Text = SettingsManager.Current.LastKnownVersion;
         BuildTypeTextBlock.Text = GetBuildTypeLabel();
+        WhatsNewInfoBar.IsOpen = SettingsManager.Current.ShowWebLauncherNotice;
         _ = CheckForUpdateAsync();
+    }
+
+    /// <summary>
+    /// Sends the user to the Launchers page, where the new kind is actually created.
+    /// </summary>
+    /// <remarks>
+    /// The notice is dismissed by acting on it, not just by closing it — someone who has been
+    /// taken to the page does not need telling again.
+    /// </remarks>
+    private void WhatsNewAction_Click(object sender, RoutedEventArgs e)
+    {
+        DismissWhatsNew();
+        SettingsWindow.GetCurrent()?.NavigateTo(typeof(LaunchersPage));
+    }
+
+    private void WhatsNewInfoBar_CloseButtonClick(InfoBar sender, object args) => DismissWhatsNew();
+
+    /// <summary>Clears the flag for good. Saved immediately, so it survives a hard exit.</summary>
+    private void DismissWhatsNew()
+    {
+        WhatsNewInfoBar.IsOpen = false;
+        if (!SettingsManager.Current.ShowWebLauncherNotice) return;
+
+        SettingsManager.Current.ShowWebLauncherNotice = false;
+        SettingsManager.SaveSettings();
     }
 
     private static string GetBuildTypeLabel()

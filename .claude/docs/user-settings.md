@@ -142,7 +142,10 @@ that defaults to `true` **cannot be turned off** in this settings file.
 settings file. `SettingsManager.StampVersion()` sets it on **all three** load paths (JSON,
 legacy XML migration, and the defaults fallback).
 
-It exists so a future release can detect an upgrade. Two rules if you add a one-time notice:
+It is consumed by `SettingsManager.RaiseUpgradeNotices`, which turns on one-time notices for
+people upgrading — currently `ShowWebLauncherNotice`, the Home page banner introducing web
+launchers in 1.25.0. **Call it before `StampVersion`**, which overwrites the value being compared
+against. Two rules, both load-bearing:
 
 - **Only fire when a settings file already existed.** A fresh install has never seen whatever
   is being announced, so the notice is pure noise. `RestoreSettings` reaches the defaults path
@@ -151,9 +154,20 @@ It exists so a future release can detect an upgrade. Two rules if you add a one-
   field yet, so `previous == null` is what identifies an upgrader.
 
 ```csharp
-if (existingInstall && (previous == null || previous < SomeFeatureVersion))
-    _current.ShowSomeNotice = true;
+if (IsOlderThan(previousVersion, WebLauncherVersion))
+    _current.ShowWebLauncherNotice = true;
 ```
+
+`RestoreSettings` calls it from the JSON and legacy-XML paths only — the two that found an
+existing file. The defaults path deliberately does not.
+
+The flag itself defaults to `false` and is switched *on* by the upgrade check. That direction is
+what makes it dismissible at all: dismissing writes `false`, `WhenWritingDefault` drops the key,
+and the notice stays gone. Phrased the other way round it could never be turned off — see the
+`WhenWritingDefault` section above.
+
+Verified across all three paths: upgrading from 1.24.2 raises it, a second launch on 1.25.0 does
+not re-raise it, and a fresh install with no settings file never sees it.
 
 Prefer making the new behaviour discoverable in place over announcing it. The "item editing has
 moved" notice was removed once the Launchers page gained an **Edit items** entry that opens the
@@ -167,4 +181,4 @@ Group related properties together with comment headers matching existing style:
 - Launchers
 - SFTP Sync
 
-`UserSettings` appearance/behaviour properties currently include `AppTheme`, `Startup`, and `FlyoutAnimationsEnabled` (default `true`, controls whether `FlyoutWindow` uses animated open/close transitions).
+`UserSettings` appearance/behaviour properties currently include `AppTheme`, `Startup`, `ShowWebLauncherNotice`, and `FlyoutAnimationsEnabled` (default `true`, controls whether `FlyoutWindow` uses animated open/close transitions).

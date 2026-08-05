@@ -60,6 +60,20 @@ public partial class UserSettings : ObservableObject
     [ObservableProperty]
     public partial string LastKnownVersion { get; set; }
 
+    /// <summary>
+    /// Shows the one-time "web launchers" notice on the Home page. Set by
+    /// <see cref="SettingsManager"/> when an existing install is upgraded past the version that
+    /// introduced them; cleared when the user dismisses it.
+    /// </summary>
+    /// <remarks>
+    /// Defaults to <c>false</c> and is switched *on* by the upgrade check, which is what makes it
+    /// safe under this file's <c>WhenWritingDefault</c> policy: dismissing writes <c>false</c>,
+    /// the key is dropped, and the notice stays gone. A flag phrased the other way round could
+    /// never be dismissed. See the docs on defaults in user-settings.md.
+    /// </remarks>
+    [ObservableProperty]
+    public partial bool ShowWebLauncherNotice { get; set; }
+
     // ── Taskbar Widget ──────────────────────────────────────────────
 
     /// <summary>Whether the little launcher widget is enabled.</summary>

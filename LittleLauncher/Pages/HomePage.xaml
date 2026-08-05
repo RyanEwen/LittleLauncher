@@ -24,6 +24,22 @@
             </InfoBar.ActionButton>
         </InfoBar>
 
+        <!-- One-time notice after upgrading, opened by SettingsManager's upgrade check.
+             Store updates install silently, so this is the only channel that reaches
+             those users at all. -->
+        <InfoBar x:Name="WhatsNewInfoBar"
+                 Title="New: web launchers"
+                 Message="A launcher can now open a web page instead of a list of shortcuts — a Home Assistant dashboard, webmail, or any site — straight from its tray icon. It stays signed in, and uses nothing while it's closed."
+                 IsOpen="False"
+                 IsClosable="True"
+                 Severity="Success"
+                 CloseButtonClick="WhatsNewInfoBar_CloseButtonClick"
+                 Margin="0,8,0,0">
+            <InfoBar.ActionButton>
+                <Button Content="Set one up" Click="WhatsNewAction_Click" />
+            </InfoBar.ActionButton>
+        </InfoBar>
+
         <TextBlock Text="Home" FontSize="24" FontWeight="SemiBold" Margin="0,24,0,12" />
 
         <TextBlock Text="Dashboard" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,6" />
