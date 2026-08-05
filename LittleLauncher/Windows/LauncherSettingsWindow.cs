@@ -344,7 +344,7 @@ public sealed class LauncherSettingsWindow : Window
         nameRow.Children.Add(nameBox);
 
         // ── Icon chooser ─────────────────────────────────────────
-        var (iconButton, customIconRow) = BuildIconChooser(launcher);
+        var (iconButton, customIconRow, refreshIconPreview) = BuildIconChooser(launcher);
 
         var iconRow = new Grid();
         iconRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -352,7 +352,9 @@ public sealed class LauncherSettingsWindow : Window
 
         var iconLabel = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         iconLabel.Children.Add(new TextBlock { Text = "Icon", FontSize = 14 });
-        iconLabel.Children.Add(new TextBlock { Text = "Icon style for this launcher", FontSize = 12, Opacity = 0.5 });
+        // Text set by UpdateKindVisibility — a web launcher's icon arrives on its own.
+        var iconSubtitle = new TextBlock { FontSize = 12, Opacity = 0.5, TextWrapping = TextWrapping.Wrap };
+        iconLabel.Children.Add(iconSubtitle);
         Grid.SetColumn(iconLabel, 0);
         Grid.SetColumn(iconButton, 1);
         iconRow.Children.Add(iconLabel);
@@ -520,7 +522,7 @@ public sealed class LauncherSettingsWindow : Window
         taskbarRow.Children.Add(pinBtn);
 
         // ── Web launcher rows ───────────────────────────────────
-        var (webRows, refreshWebRows) = BuildWebRows(launcher);
+        var (webAddressRows, webOptionRows, refreshWebRows) = BuildWebRows(launcher);
 
         // ── Type ─────────────────────────────────────────────────
         // Last to be built, first to be shown: it decides which of the two sets of rows above
@@ -544,9 +546,13 @@ public sealed class LauncherSettingsWindow : Window
                 row.Visibility = isWeb ? Visibility.Collapsed : Visibility.Visible;
             if (!isWeb)
                 UpdateIconModeControls();   // the icons-per-row row has its own condition
-            foreach (var row in webRows)
+            foreach (var row in webAddressRows.Concat(webOptionRows))
                 row.Visibility = isWeb ? Visibility.Visible : Visibility.Collapsed;
             refreshWebRows();
+            iconSubtitle.Text = isWeb
+                ? "Taken from the page automatically — or pick one here"
+                : "Icon style for this launcher";
+            refreshIconPreview();
             UpdateAcceptButton();
         }
 
@@ -573,12 +579,17 @@ public sealed class LauncherSettingsWindow : Window
         var panel = new StackPanel { Spacing = 12 };
         panel.Children.Add(nameRow);
         panel.Children.Add(typeRow);
+        // The address comes before the icon, because for a web launcher the icon is *derived*
+        // from it. Asked the other way round, the form made the user choose an icon for a page
+        // it had not been told about yet, which reads as a requirement rather than an override.
+        foreach (var row in webAddressRows)
+            panel.Children.Add(row);
         panel.Children.Add(iconRow);
         panel.Children.Add(customIconRow);
         panel.Children.Add(viewModeRow);
         panel.Children.Add(iconsPerRowRow);
         panel.Children.Add(showTitleRow);
-        foreach (var row in webRows)
+        foreach (var row in webOptionRows)
             panel.Children.Add(row);
         panel.Children.Add(hideRow);
         panel.Children.Add(taskbarRow);
@@ -901,9 +912,12 @@ public sealed class LauncherSettingsWindow : Window
     /// Pin is doubly safe to demote: it also has a button in the flyout's own header.
     /// </remarks>
     /// <returns>
-    /// The rows, plus a callback that re-reads the launcher into the controls.
+    /// The rows that say <em>what page</em>, the rows that say <em>how to show it</em>, and a
+    /// callback that re-reads the launcher into the controls. They are returned separately
+    /// because the icon row is laid out between them — see <c>BuildForm</c>.
     /// </returns>
-    private (IReadOnlyList<FrameworkElement> Rows, Action Refresh) BuildWebRows(Launcher launcher)
+    private (IReadOnlyList<FrameworkElement> AddressRows, IReadOnlyList<FrameworkElement> OptionRows, Action Refresh)
+        BuildWebRows(Launcher launcher)
     {
         // ── Address ─────────────────────────────────────────────
         var urlBox = new TextBox
@@ -1179,10 +1193,10 @@ public sealed class LauncherSettingsWindow : Window
             UpdateIdleVisibility();
         }
 
-        return ([contentRow, urlRow, bookmarksRow, sizeRow, advanced], Refresh);
+        return ([contentRow, urlRow, bookmarksRow], [sizeRow, advanced], Refresh);
     }
 
-    private (Button Button, Grid CustomRow) BuildIconChooser(Launcher launcher)
+    private (Button Button, Grid CustomRow, Action Refresh) BuildIconChooser(Launcher launcher)
     {
         // ── Preview elements for the button content ──
         var previewIcon = new FontIcon { FontSize = 18, VerticalAlignment = VerticalAlignment.Center };
@@ -1211,6 +1225,30 @@ public sealed class LauncherSettingsWindow : Window
             // Clear any custom color from a previous glyph selection
             previewIcon.ClearValue(FontIcon.ForegroundProperty);
             previewEmoji.ClearValue(TextBlock.ForegroundProperty);
+
+            // A web launcher wears the icon of the page it opens until someone picks one instead
+            // (WebFlyoutWindow.MayAdoptPageIcon). Neither of the two modes that state describes
+            // reads as that: "Composite" composes item icons it hasn't got, and "Custom" names a
+            // file the user never chose. Both are shown as what they actually are.
+            if (launcher.IsWebLauncher && WebFlyoutWindow.MayAdoptPageIcon(launcher))
+            {
+                string adopted = WebFlyoutWindow.GetPageIconPath(launcher.Id);
+                if (mode == TrayIconModes.Custom && File.Exists(adopted))
+                {
+                    var bitmap = new BitmapImage { CreateOptions = BitmapCreateOptions.IgnoreImageCache };
+                    bitmap.UriSource = new Uri(adopted);
+                    previewImage.Source = bitmap;
+                    previewImage.Visibility = Visibility.Visible;
+                }
+                else
+                {
+                    previewIcon.Glyph = "";   // globe — nothing has loaded yet
+                    previewIcon.Visibility = Visibility.Visible;
+                }
+                previewLabel.Text = "From the page";
+                customIconRow.Visibility = Visibility.Collapsed;
+                return;
+            }
 
             if (mode == TrayIconModes.Composite)
             {
@@ -1365,7 +1403,7 @@ public sealed class LauncherSettingsWindow : Window
         button.Flyout = flyout;
         UpdatePreview();
 
-        return (button, customIconRow);
+        return (button, customIconRow, UpdatePreview);
     }
 
     private Grid BuildCustomIconRow(Launcher launcher)

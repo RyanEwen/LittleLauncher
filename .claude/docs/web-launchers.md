@@ -241,6 +241,15 @@ Both that provisional fetch and the page icon write the same managed path
 (`web-favicon-{launcherId}.png`), which is what lets `MayAdoptPageIcon` tell an icon *we* adopted
 from one the user chose: the former is upgraded freely, the latter is never touched.
 
+**That has to be visible in the form, or it reads as the opposite.** The address rows are laid out
+*before* the icon row for exactly this reason — asked the other way round, the form made the user
+choose an icon for a page it had not been told about yet, which presents an automatic behaviour as
+a required decision. The icon row also names the state rather than the mode: while
+`MayAdoptPageIcon` holds, the button shows the adopted image (or a globe before anything has
+loaded) labelled **From the page**, not `Composite` — which composes item icons a web launcher
+hasn't got — or `Custom`, which names a file the user never picked. The custom-path row stays
+hidden until they actually choose one.
+
 **The address can be chosen from browser bookmarks.** `Pages/BookmarkPicker.PickAsync` shows a
 searchable, flattened list of the bookmarks in a chosen browser profile — a dashboard URL is
 miserable to type from memory and is invariably already bookmarked. It shares its reading half
