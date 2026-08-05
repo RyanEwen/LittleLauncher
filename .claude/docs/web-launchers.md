@@ -265,6 +265,46 @@ Each web launcher gets `%AppData%\LittleLauncher\WebProfiles\{launcherId}` as it
 folder (via `MainWindow.GetPhysicalAppDataDir()`, so it survives MSIX VFS redirection). That is what
 keeps a dashboard signed in across restarts, and keeps two launchers signed in as different users.
 
+**Cookies and sessions are therefore per launcher, not per bookmark.** Every bookmark in one
+launcher's bar shares that launcher's profile — they are tabs of the same browser, so signing in
+on one is a sign-in for all of them, and a site that both use sees a single session. Two launchers
+share nothing by default: separate cookies, storage and cache, which is what makes two accounts on
+the same site possible. Nothing is shared with the user's real Edge or Chrome either, so a launcher
+starts signed out even where the desktop browser is signed in.
+
+### The shared profile
+
+`Launcher.WebSharedProfile` (Advanced → **Sign-ins**) points a launcher at `WebProfiles\Shared`
+instead of its own folder, pooling it with every other launcher that sets it. Isolation stays the
+default — it is the setting that cannot surprise anyone, and it is what shipped — but several
+launchers onto one system otherwise means signing in to that system once per launcher, and again
+every time a session expires.
+
+`GetUserDataFolder(Launcher)` is the resolution point; the `(string launcherId)` overload it calls
+still names a private folder and is what makes the shared name safe (launcher ids are GUIDs, so
+nothing private can be called `Shared`).
+
+Three things this has to get right:
+
+- **Several environments, one folder.** WebView2 allows it *within a process* only when the
+  environments are created with identical options. Ours are (`new CoreWebView2EnvironmentOptions()`
+  with no browser-executable folder), so the shared profile works — but anything added to those
+  options later has to be added for every launcher, or launchers on the shared profile start
+  failing to initialise while private ones carry on fine.
+- **Switching profile needs the browser dropped.** The folder binds when the environment is
+  created, so a launcher moved on or off the shared profile keeps using the old one until
+  `ReloadProfile` discards the browser. It rebuilds only a panel that is actually on screen with
+  something loaded — starting a browser for a dismissed panel, or for a collapsed bookmark bar,
+  would undo the resource promise.
+- **Clearing is per profile, not per launcher.** `ClearBrowsingDataAsync` resolves
+  `ProfileSiblings` first: on the shared profile one `ClearBrowsingDataAsync` on any live core
+  clears the lot (they are views onto one profile, not copies), and the disk path has to dispose
+  every sibling panel before deleting or the delete hits a locked file. The row's subtitle says
+  which of the two is about to happen.
+
+"Clear browsing data" in launcher settings calls `CoreWebView2.Profile.ClearBrowsingDataAsync()`
+when the flyout is loaded, and deletes the folder when it is not.
+
 ## Settings that must default to zero / false
 
 `settings.json` is written with `DefaultIgnoreCondition = WhenWritingDefault`, so a property holding

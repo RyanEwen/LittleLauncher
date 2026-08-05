@@ -113,6 +113,10 @@ model default, which would have flipped it on for every existing launcher.
 - `WebHiddenPolicy` (`int`) — `WebHiddenPolicies.UnloadWhenIdle` (0, default) / `Suspend` (1) / `KeepRunning` (2)
 - `WebIdleUnloadMinutes` (`int`) — 0 means the default; read `ResolvedWebIdleUnloadMinutes`
 - `WebReloadOnShow` (`bool`) — re-fetch on every open
+- `WebSharedProfile` (`bool`) — pool cookies and logins in `WebProfiles\Shared` with every other
+  launcher that sets it, instead of a private per-launcher folder. Defaults `false`, which is both
+  the safe direction under `WhenWritingDefault` and the behaviour that shipped first — an upgrade
+  must not move a launcher onto a profile it was never signed in to
 - `WebPinFlyout` (`bool`) — stay open when focus is lost
 - `WebUseBookmarks` (`bool`) — bar of bookmarks instead of a single address. Defaults `false`, so
   the safe direction under `WhenWritingDefault`

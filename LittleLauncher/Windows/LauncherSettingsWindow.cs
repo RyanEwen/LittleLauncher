@@ -624,7 +624,20 @@ public sealed class LauncherSettingsWindow : Window
     }
 
     /// <summary>Builds one label/control settings row in the same shape as the rows above.</summary>
-    private static Grid BuildRow(string title, string subtitle, FrameworkElement control)
+    private static Grid BuildRow(string title, string subtitle, FrameworkElement control) =>
+        BuildRow(title, new TextBlock
+        {
+            Text = subtitle,
+            FontSize = 12,
+            Opacity = 0.5,
+            TextWrapping = TextWrapping.Wrap,
+        }, control);
+
+    /// <summary>
+    /// As above, for a row whose subtitle is rewritten later — the caller keeps the
+    /// <see cref="TextBlock"/> and sets its text.
+    /// </summary>
+    private static Grid BuildRow(string title, TextBlock subtitle, FrameworkElement control)
     {
         var row = new Grid();
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -632,13 +645,7 @@ public sealed class LauncherSettingsWindow : Window
 
         var label = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
         label.Children.Add(new TextBlock { Text = title, FontSize = 14 });
-        label.Children.Add(new TextBlock
-        {
-            Text = subtitle,
-            FontSize = 12,
-            Opacity = 0.5,
-            TextWrapping = TextWrapping.Wrap,
-        });
+        label.Children.Add(subtitle);
 
         // Centred, never stretched. A control with the default vertical alignment grows to the
         // row's height, and the row is as tall as its label — so a subtitle that wraps to two
@@ -1142,6 +1149,39 @@ public sealed class LauncherSettingsWindow : Window
             "Keep this flyout where you drag it; otherwise a move lasts until you close it",
             rememberToggle);
 
+        // ── Profile ─────────────────────────────────────────────
+        // A combo rather than a toggle: "shared with other launchers" is a statement about where
+        // the sign-ins live, and naming both ends of it beats an unlabelled switch.
+        var profileCombo = new ComboBox { MinWidth = 200 };
+        profileCombo.Items.Add(new ComboBoxItem { Content = "Private to this launcher", Tag = false });
+        profileCombo.Items.Add(new ComboBoxItem { Content = "Shared with other launchers", Tag = true });
+        profileCombo.SelectedIndex = launcher.WebSharedProfile ? 1 : 0;
+
+        var clearSubtitle = new TextBlock { FontSize = 12, Opacity = 0.5, TextWrapping = TextWrapping.Wrap };
+
+        void UpdateProfileText() => clearSubtitle.Text = launcher.WebSharedProfile
+            ? "Signs out of the shared profile — every launcher using it"
+            : "Signs out of the page and clears its cookies and cache";
+
+        profileCombo.SelectionChanged += (_, _) =>
+        {
+            if (profileCombo.SelectedItem is not ComboBoxItem selected || selected.Tag is not bool shared) return;
+            if (shared == launcher.WebSharedProfile) return;
+
+            launcher.WebSharedProfile = shared;
+            SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
+
+            // The folder is bound when the browser is created, so the running one is still on the
+            // old profile until it is dropped.
+            WebFlyoutWindow.ReloadProfile(launcher.Id);
+            UpdateProfileText();
+        };
+
+        var profileRow = BuildRow("Sign-ins",
+            "Whether cookies and logins are this launcher's alone, or pooled with every launcher set to share",
+            profileCombo);
+
         // ── Sign-out / clear data ───────────────────────────────
         var clearButton = new Button { Content = "Clear" };
         clearButton.Click += async (_, _) =>
@@ -1163,11 +1203,12 @@ public sealed class LauncherSettingsWindow : Window
                 clearButton.IsEnabled = true;
             }
         };
-        var clearRow = BuildRow("Browsing Data", "Signs out of the page and clears its cookies and cache", clearButton);
+        UpdateProfileText();
+        var clearRow = BuildRow("Browsing Data", clearSubtitle, clearButton);
 
         // ── Advanced ────────────────────────────────────────────
         var advancedPanel = new StackPanel { Spacing = 12 };
-        foreach (var row in new[] { zoomRow, policyRow, idleRow, reloadRow, pinRow, rememberRow, clearRow })
+        foreach (var row in new[] { zoomRow, policyRow, idleRow, reloadRow, pinRow, rememberRow, profileRow, clearRow })
             advancedPanel.Children.Add(row);
 
         var advanced = new Expander
@@ -1187,6 +1228,7 @@ public sealed class LauncherSettingsWindow : Window
         void Refresh()
         {
             UpdateContentMode();
+            UpdateProfileText();
             urlBox.Text = launcher.WebUrl;
             widthBox.Value = launcher.ResolvedWebFlyoutWidth;
             heightBox.Value = launcher.ResolvedWebFlyoutHeight;

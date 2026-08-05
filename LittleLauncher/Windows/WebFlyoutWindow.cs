@@ -741,24 +741,82 @@ public sealed class WebFlyoutWindow : Window
     /// Clears cookies, storage and cache for a web launcher — the way to sign out of a page the
     /// flyout has stayed signed in to.
     /// </summary>
+    /// <remarks>
+    /// Scoped to the <em>profile</em>, not the launcher: on the shared profile there is one set
+    /// of cookies behind several launchers, so this signs all of them out and every panel on it
+    /// has to let go before the folder can be deleted.
+    /// </remarks>
     public static async Task ClearBrowsingDataAsync(Launcher launcher)
     {
-        if (Instances.TryGetValue(launcher.Id, out var panel) && panel._webView?.CoreWebView2 is { } core)
+        var siblings = ProfileSiblings(launcher);
+
+        foreach (string id in siblings)
         {
-            await core.Profile.ClearBrowsingDataAsync();
-            return;
+            if (Instances.TryGetValue(id, out var panel) && panel._webView?.CoreWebView2 is { } core)
+            {
+                // One clear does the whole profile — the siblings are views onto it, not copies.
+                await core.Profile.ClearBrowsingDataAsync();
+                return;
+            }
         }
 
         // Nothing loaded — the profile is just a folder on disk.
-        DisposeLauncher(launcher.Id);
-        string folder = GetUserDataFolder(launcher.Id);
+        foreach (string id in siblings)
+            DisposeLauncher(id);
+
+        string folder = GetUserDataFolder(launcher);
         if (Directory.Exists(folder))
             Directory.Delete(folder, recursive: true);
     }
 
     /// <summary>Where a web launcher's cookies, storage and cache live, so logins survive restarts.</summary>
+    /// <remarks>
+    /// A launcher on the shared profile answers with the one folder every such launcher uses, so
+    /// they are one signed-in browser rather than several. Launcher ids are GUIDs, so the shared
+    /// folder's name cannot collide with a private one.
+    /// </remarks>
+    internal static string GetUserDataFolder(Launcher launcher) =>
+        launcher.WebSharedProfile ? SharedUserDataFolder : GetUserDataFolder(launcher.Id);
+
     internal static string GetUserDataFolder(string launcherId) =>
         Path.Combine(MainWindow.GetPhysicalAppDataDir(), "WebProfiles", launcherId);
+
+    /// <summary>The profile behind every launcher with <c>WebSharedProfile</c> set.</summary>
+    internal static string SharedUserDataFolder =>
+        Path.Combine(MainWindow.GetPhysicalAppDataDir(), "WebProfiles", "Shared");
+
+    /// <summary>
+    /// Every launcher whose cookies live in the same folder as this one's — itself alone unless
+    /// it is on the shared profile, in which case all of them are.
+    /// </summary>
+    private static List<string> ProfileSiblings(Launcher launcher)
+    {
+        if (!launcher.WebSharedProfile) return [launcher.Id];
+
+        return SettingsManager.Current.Launchers
+            .Where(l => l.IsWebLauncher && l.WebSharedProfile)
+            .Select(l => l.Id)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Drops the browser so the next open rebuilds it against whatever profile the launcher now
+    /// points at. The user-data folder is fixed when the environment is created, so a launcher
+    /// moved on or off the shared profile keeps using the old one until this runs.
+    /// </summary>
+    public static void ReloadProfile(string launcherId)
+    {
+        if (!Instances.TryGetValue(launcherId, out var panel)) return;
+
+        bool wasLoaded = panel._webView != null;
+        panel.UnloadWebView();
+
+        // Only rebuild it if there is something on screen to rebuild; a dismissed panel — or a
+        // collapsed bookmark bar — deliberately has no browser, and starting one here would
+        // undo the whole resource promise.
+        if (wasLoaded && panel._isOpen && !string.IsNullOrEmpty(panel.CurrentTargetUrl()))
+            _ = panel.PrepareContentAsync();
+    }
 
     // ── Bookmark bar ────────────────────────────────────────────────
 
@@ -1345,12 +1403,15 @@ public sealed class WebFlyoutWindow : Window
 
         try
         {
-            string userDataFolder = GetUserDataFolder(_launcher.Id);
+            string userDataFolder = GetUserDataFolder(_launcher);
             Directory.CreateDirectory(userDataFolder);
 
             // A per-launcher profile keeps each panel signed in independently and, more to the
             // point, keeps it signed in at all — the alternative is re-authenticating to a home
-            // dashboard on every app restart.
+            // dashboard on every app restart. Launchers opted into the shared profile point at
+            // one folder instead; safe to do from several environments in this process because
+            // every one of them is created with identical options (WebView2 rejects a second
+            // environment on the same folder only when the options differ).
             var environment = await CoreWebView2Environment.CreateWithOptionsAsync(
                 browserExecutableFolder: "",
                 userDataFolder: userDataFolder,

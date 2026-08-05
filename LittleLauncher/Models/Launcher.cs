@@ -304,6 +304,24 @@ public partial class Launcher : ObservableObject
     public partial bool WebPinFlyout { get; set; }
 
     /// <summary>
+    /// Put this launcher's cookies, logins and cache in one profile shared with every other
+    /// launcher that sets it, instead of its own private one.
+    /// </summary>
+    /// <remarks>
+    /// Isolation is the default because it is the one that cannot surprise anyone — two launchers
+    /// can be two accounts on the same site. Sharing is for the opposite case: several launchers
+    /// onto the same system, where a private profile means signing in to it once per launcher and
+    /// again whenever a session expires.
+    /// <para>
+    /// Off by default, so the CLR default under <c>WhenWritingDefault</c> is the isolated
+    /// behaviour that shipped first — an existing launcher cannot be moved onto a profile it was
+    /// never signed in to by an upgrade.
+    /// </para>
+    /// </remarks>
+    [ObservableProperty]
+    public partial bool WebSharedProfile { get; set; }
+
+    /// <summary>
     /// When true this web launcher shows a bookmark bar; when false it opens
     /// <see cref="WebUrl"/> directly.
     /// </summary>
