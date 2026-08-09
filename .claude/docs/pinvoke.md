@@ -88,6 +88,20 @@ confirm the user actually left: `GetForegroundWindow()` compared against the win
 `IsChild(hwnd, foreground)`. `WebFlyoutWindow` does this on the next dispatcher turn rather than
 inside the event, so the foreground switch has settled before it is read.
 
+**`IsChild` is not enough on its own — an owned window is not a child.** A file picker, the Windows
+Security passkey prompt and a print dialog are top-level windows *owned by* the window that raised
+them, and they belong to whoever raised them, which for anything a hosted browser opens is another
+process. Both tests miss them, and the panel dismisses itself in the middle of the operation the
+dialog exists for. Walk the owner chain with `GetWindow(hwnd, GW_OWNER)` — bounded, since a
+malformed chain must not spin — and, for dialogs the browser owns itself, compare the foreground
+window's process (`GetWindowThreadProcessId`) against `CoreWebView2.BrowserProcessId`. Identify
+these by process, never by window class or title.
+
+**A window only deactivates once**, so declining to dismiss is not free: nothing will raise the
+event again when the dialog closes and the user moves to a different app. Whatever declines has to
+take responsibility for finishing the job — `WebFlyoutWindow` starts a short polling timer that
+applies the deferred dismissal once the foreground is no longer its own.
+
 ## Constants & Enums
 
 - Win32 constants as `internal const int` or `internal const uint`

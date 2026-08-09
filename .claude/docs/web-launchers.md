@@ -57,7 +57,19 @@ This is the whole point of the feature, so it is the thing not to regress.
 - **Focus loss must be verified, not trusted.** The browser's HWNDs are children of the window, so
   clicking into the page raises `Deactivated` without the user having gone anywhere. The handler
   re-checks `GetForegroundWindow()` against the window and `IsChild` on the next dispatcher turn,
-  and only then dismisses. **Every dismissal condition is re-checked in that callback**, not just
+  and only then dismisses.
+- **A dialog the page raises is *owned*, not a child** — and `IsChild` misses it entirely. A file
+  picker (uploading to Discord or WhatsApp), the Windows Security passkey prompt and a print dialog
+  are all top-level windows owned by this one, in another process, so the flyout used to vanish the
+  instant the picker appeared and take the upload with it. `IsForegroundStillOurs` therefore tests
+  three relationships: child, the **owner chain** (bounded, walked with `GW_OWNER`), and the
+  foreground window's process against `CoreWebView2.BrowserProcessId` for the dialogs the browser
+  owns itself. Process identity is exact — never match on window class or title.
+- **A window deactivates once.** Declining to dismiss because a picker had focus would pin the
+  flyout open for good: the user closes the picker, clicks another app, and no second `Deactivated`
+  arrives to reconsider. `StartForegroundWatch` polls (400ms) only while such a dialog is up and
+  applies the deferred dismissal as soon as the foreground is no longer ours. It stops on
+  re-activation, on `HideFlyout`, and whenever anything else has taken over pinning the flyout. **Every dismissal condition is re-checked in that callback**, not just
   the ones read when the event fired — pin, modal and resize state can all change in the turn
   between deciding and acting, and a condition evaluated at one moment and acted on at another is
   how a pinned flyout gets dismissed anyway. There is a standing report of exactly that which

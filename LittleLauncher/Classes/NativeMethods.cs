@@ -286,6 +286,23 @@ public static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool IsChild(IntPtr hWndParent, IntPtr hWnd);
 
+    /// <summary>
+    /// Walks a window relationship — <see cref="GW_OWNER"/> is the one used here.
+    /// </summary>
+    /// <remarks>
+    /// **An owned window is not a child**, which is exactly the gap <see cref="IsChild"/> leaves.
+    /// A file picker, the Windows Security passkey prompt and a print dialog are all top-level
+    /// windows *owned by* the window that raised them — and they belong to whichever process
+    /// raised them, which for anything a hosted browser opens is not ours either. Panels that
+    /// dismiss on focus loss have to walk this chain, or opening a file picker from a page
+    /// dismisses the panel the picker belongs to.
+    /// </remarks>
+    [LibraryImport("user32.dll")]
+    internal static partial IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+
+    /// <summary>The owner of a top-level window. See <see cref="GetWindow"/>.</summary>
+    internal const uint GW_OWNER = 4;
+
     internal const int SW_HIDE = 0;
     internal const int SW_MAXIMIZE = 3;
     internal const int SW_SHOWNOACTIVATE = 4;

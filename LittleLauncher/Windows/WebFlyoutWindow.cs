@@ -111,6 +111,12 @@ public sealed partial class WebFlyoutWindow : Window
     private Window? _openModal;
 
     /// <summary>
+    /// Runs only while a dialog the flyout raised — a file picker, a passkey prompt — holds the
+    /// foreground. See <see cref="StartForegroundWatch"/>.
+    /// </summary>
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _foregroundWatchTimer;
+
+    /// <summary>
     /// In bar mode, whether the content area is showing. A dismissed flyout is always collapsed
     /// again on the next open — the bar is what a bookmark launcher opens as.
     /// </summary>
@@ -1209,6 +1215,7 @@ public sealed partial class WebFlyoutWindow : Window
         // outright still can — and the question goes with it. Refused rather than left pending:
         // nothing is written to the profile, so the page is free to ask again on the next open.
         CancelPendingPermissions();
+        StopForegroundWatch();
 
         _lastDismissed = DateTime.UtcNow;
         _animationVersion++;
@@ -2014,7 +2021,13 @@ public sealed partial class WebFlyoutWindow : Window
 
     private void WebFlyoutWindow_Activated(object sender, WindowActivatedEventArgs args)
     {
-        if (args.WindowActivationState != WindowActivationState.Deactivated) return;
+        if (args.WindowActivationState != WindowActivationState.Deactivated)
+        {
+            // Activation came back — whatever was being watched for is resolved.
+            StopForegroundWatch();
+            return;
+        }
+
         // A drag that leaves the window, and any owned window, both pin the flyout open — the
         // same rule the item flyout applies to edit mode and its editors.
         // An open question pins the flyout too: a prompt that disappears when the user clicks
@@ -2034,10 +2047,121 @@ public sealed partial class WebFlyoutWindow : Window
             if (!_isOpen || _isShowing || _isHiding) return;
             if (_launcher.WebPinFlyout || _isModalOpen || _isResizing || _isMovingWindow || _isFullScreen || IsPromptOpen) return;
 
-            var foreground = GetForegroundWindow();
-            if (foreground == _hwnd || IsChild(_hwnd, foreground)) return;
+            if (IsForegroundStillOurs())
+            {
+                // Focus is somewhere that belongs to this flyout but is not the flyout itself —
+                // a file picker, a passkey prompt. Nothing will deactivate this window a second
+                // time when that closes, so watch for it rather than waiting for an event that
+                // is not coming.
+                StartForegroundWatch();
+                return;
+            }
+
             HideFlyout();
         });
+    }
+
+    /// <summary>
+    /// True when the foreground window is this flyout, something inside it, or something it
+    /// raised — so the user has not actually gone anywhere.
+    /// </summary>
+    /// <remarks>
+    /// Three separate relationships, because a hosted browser produces all three:
+    /// <list type="bullet">
+    /// <item>the browser's own HWNDs are <b>children</b> of this window, so clicking into the page
+    /// deactivates it without the user leaving;</item>
+    /// <item>a file picker, the Windows Security passkey prompt or a print dialog is a top-level
+    /// window <b>owned by</b> this one — not a child, which is why <c>IsChild</c> alone let an
+    /// upload from Discord or WhatsApp dismiss the flyout the moment the picker appeared;</item>
+    /// <item>some of what the browser shows is owned by <b>its own</b> windows instead, so the
+    /// owner chain never reaches here. Those are matched by process against WebView2's browser
+    /// process, which is exact — no guessing from window classes or titles.</item>
+    /// </list>
+    /// </remarks>
+    private bool IsForegroundStillOurs()
+    {
+        var foreground = GetForegroundWindow();
+        if (foreground == IntPtr.Zero) return false;
+        if (foreground == _hwnd || IsChild(_hwnd, foreground)) return true;
+
+        // Bounded: an owner chain is short, and a malformed one must not spin here.
+        var owner = foreground;
+        for (int depth = 0; depth < 8; depth++)
+        {
+            owner = GetWindow(owner, GW_OWNER);
+            if (owner == IntPtr.Zero) break;
+            if (owner == _hwnd || IsChild(_hwnd, owner)) return true;
+        }
+
+        try
+        {
+            uint browserPid = _webView?.CoreWebView2?.BrowserProcessId ?? 0;
+            if (browserPid == 0) return false;
+
+            GetWindowThreadProcessId(foreground, out uint foregroundPid);
+            return foregroundPid == browserPid;
+        }
+        catch (Exception ex)
+        {
+            // Reading the browser process id throws once the core is gone, which simply means
+            // there is no browser to have raised anything.
+            Logger.Debug(ex, "Could not read the browser process id for launcher {Name}", _launcher.Name);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Polls until whatever the flyout raised has gone away, then applies the dismissal that was
+    /// deferred while it was up.
+    /// </summary>
+    /// <remarks>
+    /// A window only deactivates once. Declining to dismiss because a file picker had focus would
+    /// otherwise pin the flyout open for good — the user closes the picker, clicks another app,
+    /// and no second <c>Deactivated</c> ever arrives to reconsider. Polling is the honest way to
+    /// track a foreground window belonging to another process; it runs only while a dialog is
+    /// actually up, and stops the moment the answer is known.
+    /// </remarks>
+    private void StartForegroundWatch()
+    {
+        _foregroundWatchTimer ??= DispatcherQueue.CreateTimer();
+        if (_foregroundWatchTimer.IsRunning) return;
+
+        _foregroundWatchTimer.Interval = TimeSpan.FromMilliseconds(400);
+        _foregroundWatchTimer.IsRepeating = true;
+        _foregroundWatchTimer.Tick -= ForegroundWatchTimer_Tick;
+        _foregroundWatchTimer.Tick += ForegroundWatchTimer_Tick;
+        _foregroundWatchTimer.Start();
+    }
+
+    private void StopForegroundWatch()
+    {
+        if (_foregroundWatchTimer == null) return;
+        _foregroundWatchTimer.Stop();
+        _foregroundWatchTimer.Tick -= ForegroundWatchTimer_Tick;
+    }
+
+    private void ForegroundWatchTimer_Tick(Microsoft.UI.Dispatching.DispatcherQueueTimer sender, object args)
+    {
+        // Nothing left to watch for: the flyout has gone, or something else is now holding it open.
+        if (!_isOpen || _isHiding || _launcher.WebPinFlyout || _isModalOpen || _isResizing || _isMovingWindow || _isFullScreen || IsPromptOpen)
+        {
+            StopForegroundWatch();
+            return;
+        }
+
+        var foreground = GetForegroundWindow();
+        if (foreground == _hwnd)
+        {
+            // The dialog handed focus back to the flyout itself; a later click elsewhere will
+            // deactivate it again, which is the normal path.
+            StopForegroundWatch();
+            return;
+        }
+
+        if (IsForegroundStillOurs()) return;   // still up
+
+        StopForegroundWatch();
+        HideFlyout();
     }
 
     private IntPtr WndProc(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam, nuint uIdSubclass, nuint dwRefData)
