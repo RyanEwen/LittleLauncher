@@ -76,6 +76,7 @@ public sealed partial class WebFlyoutWindow : Window
     private readonly Grid _contentHost;
     private readonly TextBlock _headerTitle;
     private readonly Button _pinButton;
+    private readonly Button _maximizeButton;
     private readonly Button _backButton;
     private readonly Button _forwardButton;
     private readonly Grid _header;
@@ -146,6 +147,19 @@ public sealed partial class WebFlyoutWindow : Window
     /// <summary>True while the page has an element in fullscreen and the window has grown to suit.</summary>
     private bool _isFullScreen;
     private RECT _preFullScreenRect;
+
+    /// <summary>
+    /// True while the user has grown the flyout to fill its monitor's work area from the header.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately not a launcher setting: this is "let me look at the whole dashboard for a
+    /// minute", not a new size for the launcher. It is dropped when the flyout is dismissed
+    /// (<see cref="ParkOffScreen"/>), so the next open is at the configured size — which is also
+    /// why nothing on this path may write <see cref="Launcher.WebFlyoutWidth"/> /
+    /// <see cref="Launcher.WebFlyoutHeight"/>.
+    /// </remarks>
+    private bool _isMaximized;
+    private RECT _preMaximizeRect;
 
     private bool _isMovingWindow;
     private POINT _moveStartCursor;
@@ -219,11 +233,20 @@ public sealed partial class WebFlyoutWindow : Window
         // the cameras up while working in another window.
         _pinButton = BuildHeaderButton(PinGlyph(launcher.WebPinFlyout), PinTooltip(launcher.WebPinFlyout), (_, _) => TogglePin());
 
+        // Sized for the moment, not for good. A tray flyout is small because that is what it is
+        // for, but a dashboard occasionally wants the whole screen — and being able to grow it
+        // there and back beats resizing the launcher and putting it back afterwards.
+        _maximizeButton = BuildHeaderButton(MaximizeGlyph(false), MaximizeTooltip(false), (_, _) => ToggleMaximized());
+
         var headerButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
-        headerButtons.Children.Add(_pinButton);
         headerButtons.Children.Add(BuildHeaderButton("", "Launcher settings", (_, _) => _ = OpenLauncherSettingsAsync()));
         headerButtons.Children.Add(BuildHeaderButton("", "Reload", (_, _) => ReloadPage()));
         headerButtons.Children.Add(BuildHeaderButton("", "Open in browser", (_, _) => OpenInBrowser()));
+        // Pin sits beside maximize rather than at the head of the group: both decide how the
+        // flyout behaves as a window, and the three page actions between them made that read as
+        // two unrelated buttons.
+        headerButtons.Children.Add(_pinButton);
+        headerButtons.Children.Add(_maximizeButton);
         headerButtons.Children.Add(BuildHeaderButton("", "Close", (_, _) => HideFlyout()));
 
         // Back sits on the left, where every browser puts it, rather than among the window
@@ -492,7 +515,10 @@ public sealed partial class WebFlyoutWindow : Window
 
     private void Grip_PointerPressed(object sender, PointerRoutedEventArgs e)
     {
-        if (_isFullScreen) return;
+        // Neither state has an edge to drag: one is the screen, the other is the work area. A
+        // resize from here would also persist the maximized size onto the launcher, which is
+        // exactly what "temporarily" rules out.
+        if (_isFullScreen || _isMaximized) return;
         if (sender is not ResizeGrip grip || grip.Tag is not ResizeEdges edges) return;
 
         GetCursorPos(out _resizeStartCursor);
@@ -666,6 +692,88 @@ public sealed partial class WebFlyoutWindow : Window
         if (_pinButton.Content is FontIcon icon)
             icon.Glyph = PinGlyph(_launcher.WebPinFlyout);
         ToolTipService.SetToolTip(_pinButton, PinTooltip(_launcher.WebPinFlyout));
+    }
+
+    // U+E922 is Segoe Fluent's ChromeMaximize and U+E923 its ChromeRestore — the pair every
+    // window uses for this, so the button needs no explaining. Written as escapes rather than
+    // pasted, for the reason recorded on the back button.
+    private static string MaximizeGlyph(bool maximized) => maximized ? "\uE923" : "\uE922";
+
+    private static string MaximizeTooltip(bool maximized) =>
+        maximized ? "Restore size" : "Maximize";
+
+    /// <summary>Grows the flyout to fill the screen, or puts it back to the size it was.</summary>
+    private void ToggleMaximized()
+    {
+        if (_isMaximized)
+            ExitMaximized(restoreGeometry: true);
+        else
+            EnterMaximized();
+    }
+
+    /// <summary>
+    /// Fills the work area of the monitor the flyout is on, remembering the rect to come back to.
+    /// </summary>
+    /// <remarks>
+    /// The <b>work area</b>, not the whole monitor — this is still a tray flyout, and covering the
+    /// taskbar would hide the tray icon it was opened from. Page fullscreen is the other case and
+    /// deliberately does take the whole screen (<see cref="ApplyFullScreen"/>).
+    /// <para>Nothing here is persisted. The remembered rect is whatever the flyout was — its
+    /// configured size, or a position it had been dragged to — so restoring puts it back exactly,
+    /// and a dismissal while maximized simply drops the state.</para>
+    /// </remarks>
+    private void EnterMaximized()
+    {
+        if (_isMaximized || _isFullScreen) return;
+        if (_hwnd == IntPtr.Zero || !IsWindow(_hwnd)) return;
+        if (!GetWindowRect(_hwnd, out _preMaximizeRect)) return;
+
+        _isMaximized = true;
+        UpdateMaximizeButton();
+
+        // A slide still in flight would otherwise keep writing its own geometry over this one.
+        _animationVersion++;
+
+        // Releases the bar-mode root height, which is fixed to the launcher's configured size:
+        // without this the window grows around content still laid out for the old size.
+        ApplyRootAnchor();
+
+        var monitorInfo = new MONITORINFOEX { cbSize = Marshal.SizeOf<MONITORINFOEX>() };
+        GetMonitorInfo(MonitorFromWindow(_hwnd, MONITOR_DEFAULTTONEAREST), ref monitorInfo);
+        var area = monitorInfo.rcWork;
+
+        MoveResize(area.Left, area.Top, area.Right - area.Left, area.Bottom - area.Top);
+    }
+
+    /// <summary>
+    /// Leaves the maximized state, optionally putting the window back where it came from.
+    /// </summary>
+    /// <param name="restoreGeometry">
+    /// False only when the caller is about to place the window itself — <see cref="ParkOffScreen"/>
+    /// parks it at the pre-maximize size — so the rect is not written twice. Collapsing a bookmark
+    /// bar passes true: that path resizes *from* the current rect, so it needs the real one back.
+    /// </param>
+    private void ExitMaximized(bool restoreGeometry)
+    {
+        if (!_isMaximized) return;
+
+        _isMaximized = false;
+        UpdateMaximizeButton();
+        ApplyRootAnchor();
+
+        if (!restoreGeometry || _hwnd == IntPtr.Zero || !IsWindow(_hwnd)) return;
+
+        _animationVersion++;
+        MoveResize(_preMaximizeRect.Left, _preMaximizeRect.Top,
+            _preMaximizeRect.Right - _preMaximizeRect.Left,
+            _preMaximizeRect.Bottom - _preMaximizeRect.Top);
+    }
+
+    private void UpdateMaximizeButton()
+    {
+        if (_maximizeButton.Content is FontIcon icon)
+            icon.Glyph = MaximizeGlyph(_isMaximized);
+        ToolTipService.SetToolTip(_maximizeButton, MaximizeTooltip(_isMaximized));
     }
 
     private AppWindow GetAppWindow() =>
@@ -1038,6 +1146,12 @@ public sealed partial class WebFlyoutWindow : Window
     private void CollapseToBar()
     {
         if (!_isExpanded) return;
+
+        // Going back to just the bar ends the maximized state with it, geometry included: the
+        // collapse below keeps the current width and anchored edge, and a bar left the width of
+        // the whole screen is not a bar the launcher has ever had.
+        ExitMaximized(restoreGeometry: true);
+
         _isExpanded = false;
         _activeBookmark = null;
         _rememberedBookmark = null;
@@ -1066,7 +1180,10 @@ public sealed partial class WebFlyoutWindow : Window
     /// </remarks>
     private void ApplyRootAnchor()
     {
-        if (!IsBarMode)
+        // A window filling the screen has nothing to reveal: the fixed height exists to stop the
+        // layout re-flowing as the bar grows, and holding the launcher's configured height while
+        // the window is bigger than it would clip the page to the size the flyout used to be.
+        if (!IsBarMode || _isMaximized || _isFullScreen)
         {
             _root.ClearValue(FrameworkElement.HeightProperty);
             _root.VerticalAlignment = VerticalAlignment.Stretch;
@@ -1254,6 +1371,17 @@ public sealed partial class WebFlyoutWindow : Window
         if (_hwnd != IntPtr.Zero && IsWindow(_hwnd))
         {
             GetWindowRect(_hwnd, out var rect);
+
+            // Maximizing is temporary by design, and this is where it ends: the state is dropped
+            // rather than persisted, so the next open is at the launcher's own size. The window is
+            // parked at the size it had before, because a park is also what the next open's first
+            // frame is drawn at.
+            if (_isMaximized)
+            {
+                rect = _preMaximizeRect;
+                ExitMaximized(restoreGeometry: false);
+            }
+
             int width = Math.Max(1, rect.Right - rect.Left);
             int height = Math.Max(1, rect.Bottom - rect.Top);
             int left = GetSystemMetrics(SM_XVIRTUALSCREEN) - width - 64;
@@ -1722,7 +1850,9 @@ public sealed partial class WebFlyoutWindow : Window
     /// </remarks>
     private void BeginWindowMove(object sender, PointerRoutedEventArgs e)
     {
-        if (_isFullScreen) return;
+        // Nowhere to move a window that already fills the screen — and dragging one would write
+        // its position to WebFlyoutPosition, outliving the state that produced it.
+        if (_isFullScreen || _isMaximized) return;
         if (_hwnd == IntPtr.Zero || !IsWindow(_hwnd)) return;
         if (!e.GetCurrentPoint(null).Properties.IsLeftButtonPressed) return;
         if (!GetWindowRect(_hwnd, out _moveStartRect)) return;
@@ -1962,7 +2092,11 @@ public sealed partial class WebFlyoutWindow : Window
                 _navigatedUrl = "";
         }
 
-        if (_isOpen)
+        // Not while the window has deliberately been grown past its configured size. This runs
+        // whenever anything touches the launcher — including a favicon fetch completing — so
+        // without the guard a maximized flyout snapped back to its normal size with no user
+        // action at all, exactly as the navigation above once did.
+        if (_isOpen && !_isMaximized && !_isFullScreen)
             ResizeToConfiguredSize();
     }
 

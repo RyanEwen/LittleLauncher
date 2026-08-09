@@ -104,6 +104,35 @@ time it opened on a smaller screen.
 `_isResizing` pins the flyout open, exactly like `_isModalOpen` — a drag that strays outside the
 window must not read as "the user clicked elsewhere".
 
+## Maximize is temporary, and that is the whole design
+
+The header's maximize (`EnterMaximized` / `ExitMaximized`) fills the **work area** of the monitor
+the flyout is on. It is a state of the window, never of the launcher: **nothing on this path
+writes `WebFlyoutWidth`, `WebFlyoutHeight` or `WebFlyoutPosition`**, and `ParkOffScreen` drops
+`_isMaximized` on dismissal so the next open is at the configured size. A launcher that should
+always be big is resized by dragging or in its settings; this is "let me look at the whole
+dashboard for a minute".
+
+Three things follow from that, and each is a guard rather than a convention:
+
+- **The grips and the header drag are inert while maximized.** Both would otherwise persist the
+  maximized geometry — `CompleteResize` writes the size, `EndWindowMove` writes the position —
+  which is exactly the state that is meant not to outlive the dismissal.
+- **`ApplyLauncherChanges` must not resize while maximized.** It runs on *anything* touching the
+  launcher, a bookmark's favicon fetch completing included, so without the guard a maximized
+  flyout snapped back to its normal size with no user action at all. Same trap as
+  `CurrentTargetUrl` below, one field over.
+- **`ApplyRootAnchor` releases the bar-mode fixed height.** That height exists to make expansion a
+  pure reveal; held at the launcher's configured size while the window is screen-sized, it clips
+  the page to the size the flyout used to be. `CollapseToBar` exits maximize first, geometry
+  included — the collapse keeps the current width, and a bar as wide as the screen is not a bar.
+
+It is *not* the same thing as page fullscreen (`ApplyFullScreen`), which is entered by the page,
+takes the whole monitor over the taskbar, hides the chrome and squares the corners. Maximize keeps
+the header, the corners and the taskbar — the tray icon it was opened from stays reachable. The
+two compose in the obvious direction: a page going fullscreen from a maximized flyout restores to
+maximized afterwards.
+
 ## Opening launcher settings from the flyout
 
 The header's gear runs `OpenLauncherSettingsAsync`, which follows the item flyout's `RunModalAsync`
@@ -118,7 +147,8 @@ that window disposes this very flyout.
 ## The header
 
 Back (left, where a browser puts it — it acts on the page, not the flyout) and, on the right,
-pin / launcher settings / reload / open in browser / close. Back is driven by `HistoryChanged`
+launcher settings / reload / open in browser / pin / maximize / close — the page actions first,
+then the two that decide how the flyout behaves as a window. Back is driven by `HistoryChanged`
 rather than `NavigationCompleted`: a dashboard is usually a single-page app, so most of its
 navigation is history pushed by script with no document load to hang the update off.
 

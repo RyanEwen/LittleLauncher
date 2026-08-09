@@ -101,6 +101,11 @@ non-client area has no system sizing border to grab — and the dragged size is 
 launcher. Its header gear opens `LauncherSettingsWindow` under the same modal contract the item
 flyout uses (pin open, drop always-on-top, restore activation on close).
 
+The header also **maximizes the flyout to the monitor's work area, temporarily**: unlike a drag, it
+writes nothing to the launcher and is dropped when the flyout is dismissed, so the next open is at
+the configured size again. That is a different thing from page fullscreen, which the page enters,
+which takes the whole monitor over the taskbar, and which hides the chrome for the duration.
+
 Per-launcher WebView2 profiles live in `%AppData%\LittleLauncher\WebProfiles\{launcherId}`, which is
 what keeps a dashboard signed in across app restarts.
 
