@@ -104,6 +104,15 @@ flyout uses (pin open, drop always-on-top, restore activation on close).
 Per-launcher WebView2 profiles live in `%AppData%\LittleLauncher\WebProfiles\{launcherId}`, which is
 what keeps a dashboard signed in across app restarts.
 
+**Site permissions and notifications** are the host's job, not the browser's: WebView2 raises
+`PermissionRequested` and `NotificationReceived` and does nothing further, so an unhandled
+notification is dropped and an unhandled permission falls back to a prompt sized for a browser
+window. `Windows/WebFlyoutWindow.Permissions.cs` answers both — camera, microphone, location and the
+rest are asked for in a bar above the page and remembered per launcher profile, and page
+notifications become Windows toasts that reopen the launcher they came from. Notifications need a
+running page, which is exactly what the resource model above takes away, so granting them **offers**
+to move the launcher to `KeepRunning` rather than changing it silently.
+
 See [.claude/docs/web-launchers.md](.claude/docs/web-launchers.md) for the WinUI WebView2 limits
 worked around (no controller access, so zoom is CSS; focus-loss must be re-verified against
 `GetForegroundWindow` because the browser's HWNDs are children of the window).

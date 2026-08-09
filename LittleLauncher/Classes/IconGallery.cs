@@ -40,6 +40,14 @@ internal static class IconGallery
 
     private static readonly HttpClient SelfhStHttp = new() { Timeout = TimeSpan.FromSeconds(10) };
     private static readonly SemaphoreSlim SelfhStCatalogLock = new(1, 1);
+
+    /// <summary>
+    /// Caps how many icon PNGs are in flight at once. The gallery shows up to
+    /// <see cref="MaxVisibleSelfhStIcons"/> at a time, and firing that many requests at the CDN
+    /// together makes every one of them slower than fetching them a handful at a time.
+    /// </summary>
+    private static readonly SemaphoreSlim SelfhStDownloadGate = new(8, 8);
+
     private static readonly JsonSerializerOptions SelfhStJsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
@@ -912,7 +920,6 @@ internal static class IconGallery
             foreach (var icon in filtered)
             {
                 string reference = icon.Reference;
-                string imageUrl = GetSelfhStPngUrl(reference);
 
                 var btn = new Button
                 {
@@ -931,16 +938,9 @@ internal static class IconGallery
                     Spacing = 4
                 };
 
-                content.Children.Add(new Image
-                {
-                    Width = 32,
-                    Height = 32,
-                    Source = new BitmapImage
-                    {
-                        DecodePixelWidth = 32,
-                        UriSource = new Uri(imageUrl, UriKind.Absolute)
-                    }
-                });
+                var thumbnail = new Image { Width = 32, Height = 32 };
+                ShowSelfhStThumbnail(thumbnail, reference, isCurrentRequest);
+                content.Children.Add(thumbnail);
 
                 content.Children.Add(new TextBlock
                 {
@@ -1231,13 +1231,120 @@ internal static class IconGallery
     private static string GetSelfhStPngUrl(string reference) =>
         $"{SelfhStPngUrlPrefix}{Uri.EscapeDataString(reference)}.png";
 
+    /// <summary>
+    /// Where browsed selfh.st icons are kept, separate from the icons folder itself.
+    /// </summary>
+    /// <remarks>
+    /// Browsing the tab caches every icon it shows, which is a great many more than the user will
+    /// ever pick. Keeping them out of <c>icons</c> leaves that folder as what it has always been —
+    /// the icons actually in use — so nothing else has to learn to tell the two apart.
+    /// </remarks>
+    private static string GetSelfhStCacheDir()
+    {
+        string cacheDir = Path.Combine(GetItemIconCacheDir(), "selfhst");
+        Directory.CreateDirectory(cacheDir);
+        return cacheDir;
+    }
+
+    /// <summary>Reference names come from a remote index, so they are never trusted as a filename.</summary>
+    private static string SelfhStFileName(string reference)
+    {
+        var name = new System.Text.StringBuilder(reference.Length);
+        foreach (char c in reference.ToLowerInvariant())
+            name.Append(Array.IndexOf(Path.GetInvalidFileNameChars(), c) >= 0 ? '_' : c);
+        return name.ToString();
+    }
+
+    private static string GetSelfhStCachePath(string reference) =>
+        Path.Combine(GetSelfhStCacheDir(), $"{SelfhStFileName(reference)}.png");
+
+    private static string GetSelfhStCatalogPath() =>
+        Path.Combine(GetSelfhStCacheDir(), "index.json");
+
+    /// <summary>
+    /// Points a gallery tile at its icon: straight from disk when it has been seen before,
+    /// otherwise downloaded once and kept.
+    /// </summary>
+    /// <remarks>
+    /// Binding the tile to the CDN URL directly was what made this tab slow every single time it
+    /// was opened — nothing survived the process, so a hundred icons were re-fetched over the wire
+    /// on each visit. Downloading them here instead costs the same first time and nothing after.
+    /// </remarks>
+    private static void ShowSelfhStThumbnail(Image image, string reference, Func<bool>? isCurrentRequest)
+    {
+        string cachePath = GetSelfhStCachePath(reference);
+        if (File.Exists(cachePath))
+        {
+            image.Source = CreateSelfhStBitmap(cachePath);
+            return;
+        }
+
+        _ = LoadSelfhStThumbnailAsync(image, reference, cachePath, isCurrentRequest);
+    }
+
+    private static async Task LoadSelfhStThumbnailAsync(
+        Image image, string reference, string cachePath, Func<bool>? isCurrentRequest)
+    {
+        var dispatcher = image.DispatcherQueue;
+
+        await SelfhStDownloadGate.WaitAsync();
+        try
+        {
+            // The user has typed on since this tile was built; the panel it lives in is gone.
+            if (isCurrentRequest?.Invoke() == false)
+                return;
+
+            byte[] bytes = await SelfhStHttp.GetByteArrayAsync(GetSelfhStPngUrl(reference));
+            await WriteSelfhStCacheFileAsync(cachePath, bytes);
+        }
+        catch
+        {
+            return;   // a tile without an icon, rather than an error over the whole tab
+        }
+        finally
+        {
+            SelfhStDownloadGate.Release();
+        }
+
+        dispatcher?.TryEnqueue(() => image.Source = CreateSelfhStBitmap(cachePath));
+    }
+
+    private static BitmapImage CreateSelfhStBitmap(string path) => new()
+    {
+        DecodePixelWidth = 32,
+        UriSource = new Uri(path),
+    };
+
+    /// <summary>
+    /// Writes a cache file whole or not at all.
+    /// </summary>
+    /// <remarks>
+    /// A cached file is never re-downloaded, so a half-written one is permanent: an interrupted
+    /// write would leave a tile that renders blank for good. Writing beside it and moving into
+    /// place also settles the race between two galleries caching the same icon at once.
+    /// </remarks>
+    private static async Task WriteSelfhStCacheFileAsync(string path, byte[] bytes)
+    {
+        string tempPath = $"{path}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            await File.WriteAllBytesAsync(tempPath, bytes);
+            File.Move(tempPath, path, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(tempPath); } catch { /* nothing further to do */ }
+            throw;
+        }
+    }
+
     private static bool IsSelfhStImagePath(string? path) =>
         !string.IsNullOrEmpty(path) &&
         Path.GetFileName(path).StartsWith("selfhst-", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsMatchingSelfhStImagePath(string? path, string reference) =>
         !string.IsNullOrEmpty(path) &&
-        Path.GetFileName(path).Equals($"selfhst-{reference.ToLowerInvariant()}.png", StringComparison.OrdinalIgnoreCase);
+        Path.GetFileName(path).Equals($"selfhst-{SelfhStFileName(reference)}.png", StringComparison.OrdinalIgnoreCase);
 
     private static IEnumerable<SelfhStIconEntry> FilterSelfhStIcons(IEnumerable<SelfhStIconEntry> icons, string query)
     {
@@ -1251,6 +1358,16 @@ internal static class IconGallery
             (!string.IsNullOrEmpty(icon.Category) && icon.Category.Contains(query, StringComparison.OrdinalIgnoreCase)));
     }
 
+    /// <summary>
+    /// The icon index, from memory, then disk, then the network.
+    /// </summary>
+    /// <remarks>
+    /// The disk copy is what makes the tab open instantly rather than on a spinner: the in-memory
+    /// copy dies with the process, and the index is a megabyte of JSON fetched before a single icon
+    /// can be drawn. A stale copy is also better than none — if the fetch fails, whatever was last
+    /// written is served rather than failing the whole tab, and it is treated as current for the
+    /// rest of the session so every keystroke does not re-attempt a download that just timed out.
+    /// </remarks>
     private static async Task<IReadOnlyList<SelfhStIconEntry>> GetSelfhStCatalogAsync()
     {
         if (_selfhStCatalog != null && DateTimeOffset.UtcNow - _selfhStCatalogFetchedAt < SelfhStCatalogTtl)
@@ -1262,15 +1379,31 @@ internal static class IconGallery
             if (_selfhStCatalog != null && DateTimeOffset.UtcNow - _selfhStCatalogFetchedAt < SelfhStCatalogTtl)
                 return _selfhStCatalog;
 
-            string json = await SelfhStHttp.GetStringAsync(SelfhStIndexUrl);
-            var icons = JsonSerializer.Deserialize<List<SelfhStIconEntry>>(json, SelfhStJsonOptions)?
-                .Where(icon => !string.IsNullOrWhiteSpace(icon.Name) && !string.IsNullOrWhiteSpace(icon.Reference))
-                .OrderBy(icon => icon.Name, StringComparer.CurrentCultureIgnoreCase)
-                .ToArray() ?? [];
+            string catalogPath = GetSelfhStCatalogPath();
+            var cached = ReadSelfhStCatalogFile(catalogPath);
+            if (cached != null &&
+                DateTime.UtcNow - File.GetLastWriteTimeUtc(catalogPath) < SelfhStCatalogTtl)
+            {
+                return CacheSelfhStCatalog(cached);
+            }
 
-            _selfhStCatalog = icons;
-            _selfhStCatalogFetchedAt = DateTimeOffset.UtcNow;
-            return icons;
+            try
+            {
+                string json = await SelfhStHttp.GetStringAsync(SelfhStIndexUrl);
+                var icons = ParseSelfhStCatalog(json);
+
+                try
+                {
+                    await WriteSelfhStCacheFileAsync(catalogPath, System.Text.Encoding.UTF8.GetBytes(json));
+                }
+                catch { /* the index still works this session; it just re-fetches next time */ }
+
+                return CacheSelfhStCatalog(icons);
+            }
+            catch when (cached != null)
+            {
+                return CacheSelfhStCatalog(cached);
+            }
         }
         finally
         {
@@ -1278,14 +1411,54 @@ internal static class IconGallery
         }
     }
 
+    private static IReadOnlyList<SelfhStIconEntry> CacheSelfhStCatalog(IReadOnlyList<SelfhStIconEntry> icons)
+    {
+        _selfhStCatalog = icons;
+        _selfhStCatalogFetchedAt = DateTimeOffset.UtcNow;
+        return icons;
+    }
+
+    private static IReadOnlyList<SelfhStIconEntry> ParseSelfhStCatalog(string json) =>
+        JsonSerializer.Deserialize<List<SelfhStIconEntry>>(json, SelfhStJsonOptions)?
+            .Where(icon => !string.IsNullOrWhiteSpace(icon.Name) && !string.IsNullOrWhiteSpace(icon.Reference))
+            .OrderBy(icon => icon.Name, StringComparer.CurrentCultureIgnoreCase)
+            .ToArray() ?? [];
+
+    private static IReadOnlyList<SelfhStIconEntry>? ReadSelfhStCatalogFile(string path)
+    {
+        try
+        {
+            if (!File.Exists(path))
+                return null;
+
+            var icons = ParseSelfhStCatalog(File.ReadAllText(path));
+            return icons.Count > 0 ? icons : null;
+        }
+        catch
+        {
+            return null;   // truncated or half-written: treat it as absent and re-fetch
+        }
+    }
+
+    /// <summary>
+    /// Puts the chosen icon at its permanent path in the icons folder, taking it from the
+    /// browsing cache when it is already there rather than fetching it a second time.
+    /// </summary>
     private static async Task<string?> CacheSelfhStIconAsync(SelfhStIconEntry icon)
     {
-        string cachePath = Path.Combine(GetItemIconCacheDir(), $"selfhst-{icon.Reference.ToLowerInvariant()}.png");
+        string cachePath = Path.Combine(GetItemIconCacheDir(), $"selfhst-{SelfhStFileName(icon.Reference)}.png");
         if (File.Exists(cachePath))
             return cachePath;
 
         try
         {
+            string browsePath = GetSelfhStCachePath(icon.Reference);
+            if (File.Exists(browsePath))
+            {
+                File.Copy(browsePath, cachePath, overwrite: true);
+                return cachePath;
+            }
+
             byte[] bytes = await SelfhStHttp.GetByteArrayAsync(GetSelfhStPngUrl(icon.Reference));
             await File.WriteAllBytesAsync(cachePath, bytes);
             return cachePath;

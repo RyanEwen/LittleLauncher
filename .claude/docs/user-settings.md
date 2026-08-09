@@ -123,6 +123,11 @@ model default, which would have flipped it on for every existing launcher.
   so with `WebRememberPosition` on it decides only the first open; changing it clears
   `WebFlyoutPosition` so the new choice actually takes effect
 - `WebPinFlyout` (`bool`) — stay open when focus is lost
+- `WebAllowAllPermissions` (`bool`) — grant camera, microphone, location and notifications without
+  asking. Defaults `false` (ask), which is both the safe direction and the only one that survives
+  `WhenWritingDefault`. A request answered by this toggle is **not** saved into the WebView2
+  profile, so turning it off returns the launcher to asking — see
+  [web-launchers.md](web-launchers.md)
 - `WebUseBookmarks` (`bool`) — bar of bookmarks instead of a single address. Defaults `false`, so
   the safe direction under `WhenWritingDefault`
 - `WebDefaultBookmarkUrl` (`string`) — which bookmark opens with the flyout; empty means none, and

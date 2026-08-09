@@ -31,6 +31,8 @@ Little Launcher uses a flat upright rocket as its identity icon. The **app ident
 - **`<AppDataDir>/settings-icon.ico`** — Runtime-generated icon: the current app icon composited with a gear glyph overlay (dark circle + white gear in bottom-right corner). Written by `SaveSettingsIconToAppData()`. Used by the Settings window.
 - **`<AppDataDir>/LittleLauncherFlyout.exe`** — Copy of the companion exe deployed by `EnsureFlyoutShortcut()` for all build types. Pinning uses this copy.
 - **`<AppDataDir>/main-exe-path.txt`** — Breadcrumb file containing the main exe path. Read by the companion exe as a fallback when `FindWindow` fails.
+- **`%AppData%\LittleLauncher\icons\`** — User-chosen gallery images (`custom-*`, `selfhst-*`). The path stored on the item/launcher points here.
+- **`%AppData%\LittleLauncher\icons\selfhst\`** — The selfh.st **browsing** cache: `index.json` plus one `{reference}.png` per icon the gallery has drawn. Never referenced by settings — see [The selfh.st tab](#the-selfhst-tab).
 
 > **`<AppDataDir>`** = the path returned by `MainWindow.GetPhysicalAppDataDir()`. See [MSIX VFS Redirection](#msix-vfs-redirection) below.
 
@@ -126,12 +128,22 @@ Pin identity comes **solely from relaunch properties** set on the companion exe'
 - `PKEY_AppUserModel_RelaunchDisplayNameResource` = `"Little Launcher - {name}"`
 - CBT hook also calls `SetWindowTextW()` to set the MessageBox title (taskbar reads this for the button tooltip)
 
-The pin flow (in `LaunchersPage.PinToTaskbar_Click`):
-1. `EnsureLauncherIconSaved(launcher)` — ensures `app-icon-{id}.ico` exists
-2. Creates a timestamped copy `app-icon-{id}-pin{tick}.ico`
-3. Minimizes the Settings window (prevents focus stealing that dismisses taskbar context menu)
-4. Launches companion exe with `--pin --launcher {guid} --name "{name}" --icon "{pinnedPath}"`
-5. Restores Settings window + `SetForegroundWindow` after companion exe exits
+The pin flow (in `LauncherSettingsWindow.PinToTaskbar_Click`):
+1. `CommitName()` + `CommitWebUrl()` — flushes the two fields the window defers to close
+2. `WaitForIconAdoptionAsync()` — waits out a site-icon fetch the address just started
+3. `EnsureLauncherIconSaved(launcher)` — ensures `app-icon-{id}.ico` exists
+4. Creates a timestamped copy `app-icon-{id}-pin{tick}.ico`
+5. Minimizes the Settings window (prevents focus stealing that dismisses taskbar context menu)
+6. Launches companion exe with `--pin --launcher {guid} --name "{name}" --icon "{pinnedPath}"`
+7. Restores Settings window + `SetForegroundWindow` after companion exe exits
+
+> **Pinning bakes whatever the launcher looks like at that instant**, and Windows never re-reads it
+> (see the warning below), so steps 1–2 exist because the window's *own* pending state used to be
+> excluded from it. A web launcher pins the generic app icon if it is pinned before its favicon has
+> been fetched — and since the address only committed on close, that was every launcher created and
+> pinned in one sitting. Both text fields now also commit on Enter and on losing focus, so the icon
+> arrives while the window is still open and is visible in the icon row before the user pins.
+> `IconAdoptionWait` (8s) bounds the wait: an unreachable host must not leave the button dead.
 
 > **`RelaunchIconResource` must carry a resource index.** It is an icon *resource* string
 > (`"C:\...\app-icon-{id}-pin{tick}.ico,0"`), the same format the Start Menu shortcut's
@@ -186,6 +198,34 @@ prefer a Release build when validating anything about pinning.
 3. Add a `ComboBoxItem` with colored `Ellipse` + `TextBlock` in `LaunchersPage.xaml.cs` (`BuildIconModeCombo`)
 4. Bump the Custom mode number in: `ResolveBaseIconBitmap()` and `BuildCustomIconRow` in `LaunchersPage.xaml.cs`
 5. Add `<Content Include="Resources/AppIcons/NewColor.png">` to `.csproj` (or use the existing `*.png` glob)
+
+## The selfh.st tab
+
+`IconGallery`'s fourth tab lists the [selfh.st](https://selfh.st/icons/) icon set, fetched from
+GitHub (`index.json`) and jsDelivr (the PNGs). **Everything it touches is cached on disk**, in
+`icons\selfhst\` — a folder of its own so that `icons\` stays what it has always been, the icons
+actually in use.
+
+- **The index** resolves memory → disk → network, with `SelfhStCatalogTtl` (6h) measured on the
+  cached file's write time. The in-memory copy dies with the process, and the tab cannot draw
+  anything until the whole index has arrived, so without the disk copy every first visit after a
+  restart sat on a spinner. If the fetch fails, a **stale** disk copy is served rather than failing
+  the tab, and is treated as current for the rest of the session — otherwise every keystroke in the
+  search box re-attempts a download that has just timed out.
+- **The icons** are downloaded by `LoadSelfhStThumbnailAsync` and written to
+  `icons\selfhst\{reference}.png`, at most `SelfhStDownloadGate` (8) at a time. Binding
+  `BitmapImage.UriSource` straight to the CDN URL — which is what this replaced — kept nothing
+  between visits, so the same hundred icons came over the wire again on every open.
+- **Selecting an icon copies** the browse-cache file to `icons\selfhst-{reference}.png` rather than
+  downloading it again. That path is what gets stored, and its `selfhst-` prefix is what
+  `IsSelfhStImagePath` / `IsMatchingSelfhStImagePath` (pre-selecting the current icon) and
+  `IsAutoFetchedIconPath` (leaving user-chosen icons alone) both key off — do not change the shape
+  of that filename without those three.
+- Reference names come from a remote index, so they go through `SelfhStFileName` before being used
+  as a filename.
+- Nothing prunes the browse cache. It only grows by what the user has actually looked at (≤120
+  icons per view, a few KB each), which is why that is acceptable and a stored icon is kept
+  outside it.
 
 ## Regenerating `LittleLauncher.ico`
 

@@ -53,6 +53,18 @@ public sealed class LauncherSettingsWindow : Window
     private Button? _doneButton;
     private bool _isNewLauncher;
 
+    /// <summary>Re-reads the launcher into the icon button, so an icon that arrives is shown.</summary>
+    private Action? _refreshIconPreview;
+
+    /// <summary>
+    /// The site-icon fetch started by the last address change, if it has not finished.
+    /// Pinning waits on it — see <see cref="PinToTaskbar_Click"/>.
+    /// </summary>
+    private Task _iconAdoption = Task.CompletedTask;
+
+    /// <summary>How long pinning will wait for a site icon before going ahead without it.</summary>
+    private static readonly TimeSpan IconAdoptionWait = TimeSpan.FromSeconds(8);
+
 
     /// <summary>
     /// Opens launcher settings. Completes when the window closes.
@@ -200,11 +212,15 @@ public sealed class LauncherSettingsWindow : Window
     /// the generic app icon.
     /// </summary>
     /// <remarks>
-    /// This is the *provisional* icon: an unauthenticated favicon fetch, which gives the launcher
-    /// something immediately but comes back empty-handed for a page behind a login. The real one
-    /// is whatever the page declares once it loads in the flyout
+    /// <para>This is the *provisional* icon: an unauthenticated favicon fetch, which gives the
+    /// launcher something immediately but comes back empty-handed for a page behind a login. The
+    /// real one is whatever the page declares once it loads in the flyout
     /// (<see cref="WebFlyoutWindow.AdoptPageIconAsync"/>). Both write the same managed path, so
-    /// the page icon can replace this one — and neither touches an icon the user picked.
+    /// the page icon can replace this one — and neither touches an icon the user picked.</para>
+    /// <para>Called as soon as the address is entered — on Enter or when the field is left — and
+    /// not only when the window closes. The icon is derived from the address, so anything the user
+    /// might do next in this window (look at the icon, pin to the taskbar) is wrong until the
+    /// fetch has run.</para>
     /// </remarks>
     private void CommitWebUrl()
     {
@@ -217,7 +233,16 @@ public sealed class LauncherSettingsWindow : Window
         WebFlyoutWindow.ApplyLauncherChanges(_launcher.Id);
 
         if (WebFlyoutWindow.MayAdoptPageIcon(_launcher) && !string.IsNullOrEmpty(url))
-            _ = AdoptSiteIconAsync(_launcher, WebFlyoutWindow.NormalizeUrl(url));
+            _iconAdoption = AdoptAndShowSiteIconAsync(_launcher, WebFlyoutWindow.NormalizeUrl(url));
+    }
+
+    /// <summary>Fetches the site icon and shows it in this window's icon row once it lands.</summary>
+    private async Task AdoptAndShowSiteIconAsync(Launcher launcher, string url)
+    {
+        await AdoptSiteIconAsync(launcher, url);
+
+        // The window may have been closed while the fetch was in flight.
+        DispatcherQueue?.TryEnqueue(() => _refreshIconPreview?.Invoke());
     }
 
     private static async Task AdoptSiteIconAsync(Launcher launcher, string url)
@@ -331,6 +356,18 @@ public sealed class LauncherSettingsWindow : Window
         };
         _nameBox = nameBox;
 
+        // Committed as soon as the field is finished with, like the address below it. Both used to
+        // wait for the window to close, which meant every other button in the window — Pin to
+        // Taskbar above all, since a pinned name and icon are baked once and never re-read — acted
+        // on the name the user had just replaced.
+        nameBox.LostFocus += (_, _) => CommitName();
+        nameBox.KeyDown += (_, e) =>
+        {
+            if (e.Key != global::Windows.System.VirtualKey.Enter) return;
+            e.Handled = true;
+            CommitName();
+        };
+
         var nameRow = new Grid();
         nameRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         nameRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -345,6 +382,7 @@ public sealed class LauncherSettingsWindow : Window
 
         // ── Icon chooser ─────────────────────────────────────────
         var (iconButton, customIconRow, refreshIconPreview) = BuildIconChooser(launcher);
+        _refreshIconPreview = refreshIconPreview;
 
         var iconRow = new Grid();
         iconRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -937,6 +975,18 @@ public sealed class LauncherSettingsWindow : Window
         };
         _urlBox = urlBox;
 
+        // Committed as soon as the address is finished with, rather than only on close: the icon
+        // is fetched from it, and until that has happened the launcher is still wearing a globe —
+        // which is what a user who pins to the taskbar from this window would get stuck with,
+        // since Windows never re-reads a pinned icon.
+        urlBox.LostFocus += (_, _) => CommitWebUrl();
+        urlBox.KeyDown += (_, e) =>
+        {
+            if (e.Key != global::Windows.System.VirtualKey.Enter) return;
+            e.Handled = true;
+            CommitWebUrl();
+        };
+
         // Typing a dashboard URL from memory is the worst way to enter one; it is already a
         // bookmark in the browser the user set it up in.
         var bookmarkButton = new Button
@@ -1249,9 +1299,55 @@ public sealed class LauncherSettingsWindow : Window
         UpdateProfileText();
         var clearRow = BuildRow("Browsing Data", clearSubtitle, clearButton);
 
+        // ── Site permissions ────────────────────────────────────
+        // The flyout asks by default, the same as a browser. This is for the launcher whose page
+        // asks constantly and is trusted anyway — a dashboard that wants the camera on every load.
+        var trustToggle = new ToggleSwitch { IsOn = launcher.WebAllowAllPermissions, OnContent = "", OffContent = "", MinWidth = 0 };
+        trustToggle.Toggled += (_, _) =>
+        {
+            launcher.WebAllowAllPermissions = trustToggle.IsOn;
+            SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
+        };
+        var trustRow = BuildRow("Trust This Site",
+            "Give this launcher's pages the camera, microphone, location and notifications without asking",
+            trustToggle);
+
+        // ── Reset stored answers ────────────────────────────────
+        // Without this, an accidental Block could only be undone by clearing the whole profile,
+        // which also signs the launcher out.
+        var permissionsSubtitle = new TextBlock
+        {
+            Text = "Forget what you have allowed and blocked, so this launcher's pages ask again",
+            FontSize = 12,
+            Opacity = 0.5,
+            TextWrapping = TextWrapping.Wrap,
+        };
+        var resetPermissionsButton = new Button { Content = "Reset" };
+        resetPermissionsButton.Click += async (_, _) =>
+        {
+            resetPermissionsButton.IsEnabled = false;
+            try
+            {
+                // The stored answers live in the WebView2 profile, which is only reachable through
+                // a running browser — so a launcher that is not loaded has this applied when it
+                // next opens, and is told so rather than being shown a false "Reset".
+                bool applied = await WebFlyoutWindow.ResetSitePermissionsAsync(launcher.Id);
+                resetPermissionsButton.Content = "Reset";
+                permissionsSubtitle.Text = applied
+                    ? "Cleared. This launcher's pages will ask again."
+                    : "Will be cleared the next time this launcher opens.";
+            }
+            finally
+            {
+                resetPermissionsButton.IsEnabled = true;
+            }
+        };
+        var resetPermissionsRow = BuildRow("Site Permissions", permissionsSubtitle, resetPermissionsButton);
+
         // ── Advanced ────────────────────────────────────────────
         var advancedPanel = new StackPanel { Spacing = 12 };
-        foreach (var row in new[] { zoomRow, policyRow, idleRow, reloadRow, pinRow, anchorRow, rememberRow, profileRow, clearRow })
+        foreach (var row in new[] { zoomRow, policyRow, idleRow, reloadRow, pinRow, anchorRow, rememberRow, trustRow, resetPermissionsRow, profileRow, clearRow })
             advancedPanel.Children.Add(row);
 
         var advanced = new Expander
@@ -1539,9 +1635,19 @@ public sealed class LauncherSettingsWindow : Window
         return row;
     }
 
+    /// <remarks>
+    /// A pinned icon is baked once: Windows never re-reads it, so anything not resolved by the
+    /// time this runs stays wrong until the user unpins and pins again. The two deferred fields
+    /// are therefore committed first, and a site-icon fetch they start is waited for — a web
+    /// launcher pinned the moment its address was typed used to pin the generic app icon.
+    /// </remarks>
     private async void PinToTaskbar_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not FrameworkElement fe || fe.Tag is not Launcher launcher) return;
+
+        CommitName();
+        CommitWebUrl();
+        await WaitForIconAdoptionAsync(sender as Button);
 
         // Ensure the per-launcher icon .ico exists so the companion exe's
         // RelaunchIconResource can reference it.
@@ -1600,6 +1706,39 @@ public sealed class LauncherSettingsWindow : Window
                     NativeMethods.SetForegroundWindow(settingsHwnd);
                 });
             });
+        }
+    }
+
+    /// <summary>
+    /// Waits out an in-flight site-icon fetch, saying so on the button that is waiting.
+    /// </summary>
+    /// <remarks>
+    /// Bounded by <see cref="IconAdoptionWait"/>: a host that does not answer must not leave the
+    /// button dead. Pinning then goes ahead with whatever icon the launcher has, which is the
+    /// behaviour this had before it waited at all.
+    /// </remarks>
+    private async Task WaitForIconAdoptionAsync(Button? pinButton)
+    {
+        if (_iconAdoption.IsCompleted) return;
+
+        object? content = pinButton?.Content;
+        if (pinButton != null)
+        {
+            pinButton.IsEnabled = false;
+            pinButton.Content = "Fetching icon…";
+        }
+
+        try
+        {
+            await Task.WhenAny(_iconAdoption, Task.Delay(IconAdoptionWait));
+        }
+        finally
+        {
+            if (pinButton != null)
+            {
+                pinButton.Content = content;
+                pinButton.IsEnabled = true;
+            }
         }
     }
 }

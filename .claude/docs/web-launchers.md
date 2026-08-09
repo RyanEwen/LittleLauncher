@@ -241,6 +241,14 @@ Both that provisional fetch and the page icon write the same managed path
 (`web-favicon-{launcherId}.png`), which is what lets `MayAdoptPageIcon` tell an icon *we* adopted
 from one the user chose: the former is upgraded freely, the latter is never touched.
 
+**The address commits as soon as it is entered** — on Enter and on losing focus, not only when the
+window closes — because the icon is fetched from it and everything else in the window is downstream
+of that. Committing only on close meant the icon row still showed a globe for the whole time the
+launcher was being set up, and **Pin to Taskbar pinned that globe**: a pinned icon is baked once and
+Windows never re-reads it, so the launcher stayed wrong until the user unpinned and pinned again.
+Pinning additionally waits out an in-flight fetch (`WaitForIconAdoptionAsync`, bounded by
+`IconAdoptionWait`), and the icon row refreshes itself when one lands.
+
 **That has to be visible in the form, or it reads as the opposite.** The address rows are laid out
 *before* the icon row for exactly this reason — asked the other way round, the form made the user
 choose an icon for a page it had not been told about yet, which presents an automatic behaviour as
@@ -258,6 +266,77 @@ with the multi-select import flow (`BookmarkImport.ReadBookmarks` / `.Flatten`,
 answers "which single page?" for a user who already knows and just needs to find it. Search is
 term-wise across name, URL *and* folder path, because titles and URLs rarely order the words the
 way the user remembers them.
+
+## Site permissions and page notifications
+
+`WebFlyoutWindow.Permissions.cs` holds both. They are one topic: WebView2 raises
+`PermissionRequested` and `NotificationReceived` and leaves each to the host, so **what the host
+does not handle does not happen** — an unhandled notification is simply dropped, and an unhandled
+permission request falls back to WebView2's own prompt, which is drawn for a browser window rather
+than a 400px tray flyout.
+
+### Asking
+
+Requests are answered in a **prompt bar in row 0 of the content host** — camera, microphone,
+location, notifications, clipboard, sensors, and the rest of `CoreWebView2PermissionKind`, each
+worded in `DescribePermission`.
+
+- **A row, not an overlay.** Buttons floating over a hosted browser depend on how WebView2 routes
+  input — the same uncertainty that made the resize grips physically disjoint from the browser
+  (above). A permission prompt that cannot be clicked is worse than one that costs a little height,
+  and this is what a browser does with an infobar anyway. The `Auto` row costs nothing while the bar
+  is collapsed. The WebView2 is inserted into row 1 for this reason; anything else added to
+  `_contentHost` must set its row too.
+- **The request is held open by a deferral**, not by the handler returning. Two consequences:
+  several requests queue (`_prompts`), because a page asking for camera *and* microphone raises two;
+  and **every deferral must be completed**, which is why `CancelPendingPermissions` runs from both
+  `HideFlyout` and `UnloadWebView`. A deferral that is never completed leaves the page waiting
+  forever. Cancelling denies without saving, so the page may ask again.
+- **An open question pins the flyout**, exactly like an owned window (`IsPromptOpen` sits alongside
+  `_isModalOpen` in both dismissal checks). A prompt that vanishes on focus loss is a request the
+  page never gets an answer to.
+- **Answers are saved into the launcher's WebView2 profile** (`SavesInProfile`), so they are per
+  launcher like its cookies, and launchers on the shared profile answer once between them.
+
+`Launcher.WebAllowAllPermissions` ("Trust This Site" in Advanced) grants everything without asking.
+It deliberately sets `SavesInProfile = false`: the toggle *is* the decision, so turning it off must
+return the launcher to asking rather than leave a profile full of silent grants behind.
+
+**Reset Site Permissions** undoes stored answers — without it, a mistaken Block could only be
+cleared by wiping the whole profile, which also signs the launcher out.
+`CoreWebView2Profile` is only reachable through a live browser, so a reset asked for while the
+launcher is unloaded is queued (`_pendingPermissionResets`) and applied by `ConfigureCore` on the
+next create. The button says which of the two happened rather than reporting a success that has not
+occurred yet.
+
+### Notifications
+
+`NotificationReceived` is marked handled and the notification is shown as a Windows toast through
+`AppNotificationManager`, the same channel the app's own notices use. The page's callbacks are
+driven from it — `ReportShown` when Windows accepts the toast, `ReportClicked` when it is activated
+— or the page believes its notification never appeared.
+
+- **The toast carries its launcher** (`AddArgument("launcher", id)`), and
+  `MainWindow.OnNotificationInvoked` routes a click to `WebFlyoutWindow.HandleNotificationActivation`
+  before falling back to opening the Home page. That opens the flyout via
+  `MainWindow.OpenLauncherPanel`, which anchors on the taskbar button if there is one and the cursor
+  otherwise.
+- **The launcher's adopted page icon is used, not `notification.IconUri`** — the latter is a page URL
+  Windows would have to fetch itself, and for a dashboard behind a login it would fetch a redirect.
+- `_liveNotifications` is **capped**, not trusted to drain: a toast the user simply ignores reports
+  nothing back, so entries would otherwise accumulate for the life of the app.
+
+### Notifications need the browser alive — which the resource contract does not
+
+This is the tension worth understanding before changing either side. A dismissed flyout suspends its
+browser and then unloads it, and a page that is not running raises nothing, so **notifications only
+work under `WebHiddenPolicies.KeepRunning`**. There is no push channel to fall back on: this
+WebView2 SDK exposes no Push API, only page-raised notifications.
+
+Granting the Notifications permission therefore **offers** the switch (`OnPermissionGranted`) rather
+than making it. The policy is what decides whether a hidden launcher costs anything at all, so
+changing it silently would undo the promise the feature is built on. Declined once, it is not asked
+again that session (`_keepRunningOffered`).
 
 ## Profiles
 

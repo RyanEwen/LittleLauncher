@@ -40,8 +40,10 @@ namespace LittleLauncher.Windows;
 /// sat unused. See <see cref="ApplyHiddenPolicy"/>.</para>
 /// <para>The window itself outlives a dismissal (parked off the virtual screen, as the flyout
 /// does) since an empty WinUI window costs nothing and reopening is then a pure move.</para>
+/// <para>Site permissions (camera, microphone, location) and page notifications live in the
+/// partial <c>WebFlyoutWindow.Permissions.cs</c>.</para>
 /// </remarks>
-public sealed class WebFlyoutWindow : Window
+public sealed partial class WebFlyoutWindow : Window
 {
     private static readonly NLog.Logger Logger = NLog.LogManager.GetCurrentClassLogger();
 
@@ -300,7 +302,21 @@ public sealed class WebFlyoutWindow : Window
             // grabbable no matter how WebView2 routes its own input.
             Margin = new Thickness(GripThickness, 0, GripThickness, GripThickness),
         };
+
+        // Row 0 is the prompt bar; the browser and the status overlay share row 1. A row of its
+        // own, not an overlay: the same reasoning as the resize grips above — buttons floating
+        // over a hosted browser depend on how WebView2 routes input, and a permission prompt the
+        // user cannot click is worse than one that costs a little height. This is also what a
+        // browser does with an infobar.
+        _contentHost.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        _contentHost.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+        Grid.SetRow(_statusPanel, 1);
         _contentHost.Children.Add(_statusPanel);
+
+        // The bar the flyout asks its questions in — camera, microphone, notifications. Built up
+        // front and left collapsed; it takes no height until something is asked.
+        BuildPromptBar();
 
         // ── Bookmark bar (bar-mode launchers only) ──────────────────
         // Centred, not packed left. Once there are more bookmarks than fit, the scroller takes
@@ -387,6 +403,8 @@ public sealed class WebFlyoutWindow : Window
 
     private static Button BuildHeaderButton(string glyph, string tooltip, RoutedEventHandler onClick)
     {
+        var transparent = (Brush)Application.Current.Resources["SubtleFillColorTransparentBrush"];
+
         var button = new Button
         {
             Content = new FontIcon { Glyph = glyph, FontSize = 12 },
@@ -394,9 +412,18 @@ public sealed class WebFlyoutWindow : Window
             MinWidth = 0,
             MinHeight = 0,
             VerticalAlignment = VerticalAlignment.Center,
-            Background = (Brush)Application.Current.Resources["SubtleFillColorTransparentBrush"],
+            Background = transparent,
             BorderThickness = new Thickness(0),
         };
+
+        // A disabled button has to read as *less* than an enabled one. The default template paints
+        // the disabled state with ControlFillColorDisabled, and against buttons that are otherwise
+        // flat and transparent that fill was the only visible box in the header — so Forward, which
+        // cannot be pressed, looked raised while Back, which can, looked like part of the
+        // background. Dimming is left to ButtonForegroundDisabled, which is the whole signal.
+        button.Resources["ButtonBackgroundDisabled"] = transparent;
+        button.Resources["ButtonBorderBrushDisabled"] = transparent;
+
         ToolTipService.SetToolTip(button, tooltip);
         button.Click += onClick;
         return button;
@@ -1178,6 +1205,11 @@ public sealed class WebFlyoutWindow : Window
         if (_hwnd == IntPtr.Zero || !IsWindow(_hwnd) || !_isOpen)
             return;
 
+        // Focus loss cannot dismiss the flyout while it is asking something, but closing it
+        // outright still can — and the question goes with it. Refused rather than left pending:
+        // nothing is written to the profile, so the page is free to ask again on the next open.
+        CancelPendingPermissions();
+
         _lastDismissed = DateTime.UtcNow;
         _animationVersion++;
 
@@ -1329,6 +1361,10 @@ public sealed class WebFlyoutWindow : Window
         _navigatedUrl = "";
         _revealOnNavigationCompleted = false;
 
+        // A permission request whose deferral is never completed leaves the page waiting for an
+        // answer that can no longer be given.
+        CancelPendingPermissions();
+
         try
         {
             _contentHost.Children.Remove(webView);
@@ -1398,6 +1434,7 @@ public sealed class WebFlyoutWindow : Window
         SetStatus("Loading…", busy: true, showRetry: false);
 
         var webView = new WebView2 { Visibility = Visibility.Visible };
+        Grid.SetRow(webView, 1);   // row 0 belongs to the prompt bar
         _contentHost.Children.Insert(0, webView);
         _webView = webView;
 
@@ -1504,6 +1541,14 @@ public sealed class WebFlyoutWindow : Window
         // self-hosted dashboard behind a login hands it a redirect instead of an icon. The
         // browser here is signed in and reads whatever the page actually declares.
         core.FaviconChanged += (_, _) => _ = AdoptPageIconAsync(core);
+
+        // Camera, microphone, location, notifications: asked for in the flyout's own bar, since an
+        // unhandled request falls back to WebView2's browser-sized prompt. See
+        // WebFlyoutWindow.Permissions.cs.
+        core.PermissionRequested += OnPermissionRequested;
+        core.NotificationReceived += OnNotificationReceived;
+
+        ApplyPendingPermissionReset(core);
     }
 
     /// <summary>
@@ -1972,7 +2017,9 @@ public sealed class WebFlyoutWindow : Window
         if (args.WindowActivationState != WindowActivationState.Deactivated) return;
         // A drag that leaves the window, and any owned window, both pin the flyout open — the
         // same rule the item flyout applies to edit mode and its editors.
-        if (_isShowing || !_isOpen || _launcher.WebPinFlyout || _isModalOpen || _isResizing || _isMovingWindow || _isFullScreen) return;
+        // An open question pins the flyout too: a prompt that disappears when the user clicks
+        // elsewhere is a request the page never gets an answer to.
+        if (_isShowing || !_isOpen || _launcher.WebPinFlyout || _isModalOpen || _isResizing || _isMovingWindow || _isFullScreen || IsPromptOpen) return;
 
         // The browser's own HWNDs are children of this window, so clicking into the page
         // deactivates the XAML window without the user having gone anywhere. Read the
@@ -1985,7 +2032,7 @@ public sealed class WebFlyoutWindow : Window
             // at one moment and acting on it at another is exactly how a pinned flyout ends up
             // dismissed anyway.
             if (!_isOpen || _isShowing || _isHiding) return;
-            if (_launcher.WebPinFlyout || _isModalOpen || _isResizing || _isMovingWindow || _isFullScreen) return;
+            if (_launcher.WebPinFlyout || _isModalOpen || _isResizing || _isMovingWindow || _isFullScreen || IsPromptOpen) return;
 
             var foreground = GetForegroundWindow();
             if (foreground == _hwnd || IsChild(_hwnd, foreground)) return;

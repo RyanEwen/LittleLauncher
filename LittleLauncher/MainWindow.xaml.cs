@@ -265,15 +265,40 @@ public sealed partial class MainWindow : Window
     /// Opens the app when a notification is clicked.
     /// </summary>
     /// <remarks>
-    /// Deliberately not routed per-notification. The upgrade notice is also showing as a banner
-    /// on the Home page — which is where this lands — so the click arrives at the same
-    /// "Set one up" action the toast was offering, with no extra plumbing to keep in sync.
+    /// A toast raised by a web launcher's page carries the launcher it came from and is routed
+    /// back to that flyout, which is the only place the click means anything —
+    /// <see cref="WebFlyoutWindow.HandleNotificationActivation"/> also tells the page it was
+    /// clicked, so its <c>onclick</c> handler runs as it would in a browser.
+    /// <para>Everything else lands on the Home page, deliberately unrouted: the app's own notices
+    /// are also showing there as a banner, so the click arrives at the same action the toast was
+    /// offering with no extra plumbing to keep in sync.</para>
     /// </remarks>
     private void OnNotificationInvoked(
         Microsoft.Windows.AppNotifications.AppNotificationManager sender,
         Microsoft.Windows.AppNotifications.AppNotificationActivatedEventArgs args)
     {
-        DispatcherQueue.TryEnqueue(() => SettingsWindow.ShowInstance(this));
+        var arguments = args.Arguments;
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (WebFlyoutWindow.HandleNotificationActivation(arguments)) return;
+            SettingsWindow.ShowInstance(this);
+        });
+    }
+
+    /// <summary>
+    /// Opens a launcher's panel from a context with no pointer position — a clicked toast.
+    /// </summary>
+    /// <remarks>
+    /// Anchored the same way a pinned shortcut's signal is: on the taskbar button if the launcher
+    /// has one, otherwise on the cursor, which on a toast click is the corner the tray lives in
+    /// anyway. Web launchers with an anchor or a remembered position ignore both and place
+    /// themselves — see <c>CalculatePlacement</c>.
+    /// </remarks>
+    internal void OpenLauncherPanel(string launcherId)
+    {
+        GetCursorPos(out var pt);
+        TryResolveLauncherAnchorPoint(launcherId, pt.X, pt.Y, out int anchorX, out int anchorY);
+        DispatcherQueue.TryEnqueue(() => LauncherPanels.Toggle(this, anchorX, anchorY, launcherId));
     }
 
     /// <summary>
