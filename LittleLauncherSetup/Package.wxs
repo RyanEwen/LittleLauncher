@@ -4,7 +4,7 @@
 
   <!-- Version is injected by the build: -d ProductVersion=1.0.0.0 -->
   <?ifndef ProductVersion ?>
-    <?define ProductVersion = "1.29.1.0" ?>
+    <?define ProductVersion = "1.30.0.0" ?>
   <?endif ?>
 
   <Package Name="Little Launcher"
