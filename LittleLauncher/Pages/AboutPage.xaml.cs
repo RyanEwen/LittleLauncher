@@ -32,15 +32,35 @@ public partial class AboutPage : Page
             else if (result.UpdateAvailable)
             {
                 _updateResult = result;
-                UpdateStatusText.Text = result.IsStoreManaged
-                    ? $"Version {result.LatestVersion} is available in the Microsoft Store (you have {result.CurrentVersion})"
-                    : $"Version {result.LatestVersion} is available (you have {result.CurrentVersion})";
+                // The Store path can know an update exists without knowing its version number.
+                UpdateStatusText.Text = (result.IsStoreManaged, string.IsNullOrEmpty(result.LatestVersion)) switch
+                {
+                    (true, true) => $"A new version is available in the Microsoft Store (you have {result.CurrentVersion})",
+                    (true, false) => $"Version {result.LatestVersion} is available in the Microsoft Store (you have {result.CurrentVersion})",
+                    _ => $"Version {result.LatestVersion} is available (you have {result.CurrentVersion})",
+                };
                 CheckUpdateButton.Content = !result.IsStoreManaged && string.IsNullOrEmpty(result.MsiDownloadUrl)
                     ? "View Release"
                     : "Download & Install";
                 CheckUpdateButton.IsEnabled = true;
                 CheckUpdateButton.Click -= CheckForUpdates_Click;
                 CheckUpdateButton.Click += DownloadUpdate_Click;
+                return;
+            }
+            else if (result.IsStoreManaged)
+            {
+                // "Nothing to download" and "already staged, waiting for us to exit" look
+                // identical from the Store APIs, and Little Launcher lives in the tray and never
+                // exits on its own — so it is the app most likely to be sitting on a staged
+                // update indefinitely. Offer the restart rather than claiming everything is
+                // settled.
+                UpdateStatusText.Text =
+                    $"You're up to date ({result.CurrentVersion}). If the Store downloaded an "
+                    + "update in the background, restart to finish installing it.";
+                CheckUpdateButton.Content = "Restart Now";
+                CheckUpdateButton.Click -= CheckForUpdates_Click;
+                CheckUpdateButton.Click += RestartForUpdate_Click;
+                CheckUpdateButton.IsEnabled = true;
                 return;
             }
             else
@@ -95,6 +115,15 @@ public partial class AboutPage : Page
         {
             Process.Start(new ProcessStartInfo(_updateResult.ReleaseUrl) { UseShellExecute = true });
         }
+    }
+
+    private async void RestartForUpdate_Click(object sender, RoutedEventArgs e)
+    {
+        UpdateStatusText.Text = "Restarting...";
+        CheckUpdateButton.IsEnabled = false;
+        UpdateService.RestartToApplyPackagedUpdate();
+        await Task.Delay(500);
+        Environment.Exit(0);
     }
 
     private static nint GetOwnerWindowHandle()

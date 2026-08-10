@@ -53,14 +53,64 @@ A `CustomAction` in `Package.wxs` launches `LittleLauncher.exe` after `InstallFi
 
 For packaged installs, `UpdateService` takes a separate path through `Windows.Services.Store.StoreContext` instead of GitHub Releases:
 
-1. `CheckForUpdateAsync()` calls `GetAppAndOptionalStorePackageUpdatesAsync()` to detect Store updates. That list also contains framework/dependency packages and can transiently list the app's own package at the *same* version right after a submission is published, so `CheckForStoreUpdateAsync` filters to the main app package (by `FamilyName`) and only reports `UpdateAvailable` when that package is **strictly newer** than what's installed — never treat a non-empty list as an update on its own, or the UI offers an "update" to the version already running.
-2. Home/About pages reuse the same cached result shape as the MSI path and keep the same single-action UI
-3. Clicking `Download & Install` calls `RequestDownloadAndInstallStorePackageUpdatesAsync()` on the UI thread
-4. The `StoreContext` is associated with the Settings window handle via `InitializeWithWindow.Initialize(...)` so Store consent dialogs are correctly owned in the desktop app
-5. After the Store API reports success, `UpdateService` writes a small `.cmd` helper that waits for the current process to exit and then launches `explorer.exe shell:AppsFolder\<PackageFamilyName>!App`
-6. The app exits, the helper relaunches the packaged app, and the normal default launch path reopens Settings
+1. `CheckForUpdateAsync()` calls `GetAppAndOptionalStorePackageUpdatesAsync()` to detect Store updates. That list also contains framework/dependency packages, so `CheckForStoreUpdateAsync` filters to the main app package by `FamilyName` — and the presence of that entry **is** the update signal (see the trap below).
+2. The version number to display comes from the Store's public display-catalog endpoint (`TryGetPublishedVersionAsync`), not from the update list. It is best-effort: `null` means "cannot say", and the Store's list is then trusted on its own rather than vetoed by a failed lookup. When it *does* answer and the published version is not newer than what's installed, the update is suppressed — that is the guard against a stale list offering an update to the running version. `LatestVersion` is left **empty** when an update exists but its number is unknown, and Home/About word that case without a version rather than inventing one.
+3. Home/About pages reuse the same cached result shape as the MSI path and keep the same single-action UI
+4. Clicking `Download & Install` calls `RequestDownloadAndInstallStorePackageUpdatesAsync()` on the UI thread
+5. The `StoreContext` is associated with the Settings window handle via `InitializeWithWindow.Initialize(...)` so Store consent dialogs are correctly owned in the desktop app
+6. After the Store API reports success, `UpdateService` writes a small `.cmd` helper that waits for the current process to exit and then launches `explorer.exe shell:AppsFolder\<PackageFamilyName>!App`
+7. The app exits, the helper relaunches the packaged app, and the normal default launch path reopens Settings
 
 Only unpackaged installs show the custom update toast on startup. Packaged installs still prefetch update state at startup so Home/About can immediately surface available Store updates.
+
+When a packaged copy reports **no** update, About offers **Restart Now** rather than a bare "up to date". "Nothing to download" and "already staged, waiting for every process in the package to exit" are indistinguishable from the Store APIs, and Little Launcher lives in the tray and starts with Windows — so it is the app most likely to sit on a staged update indefinitely while the Store reports it as current. `RestartToApplyPackagedUpdate()` sets up the return trip (`RegisterApplicationRestart` + the relaunch helper) and the caller exits; applying a staged update needs no update API and no way to detect one, which is just as well since `Package.CheckUpdateAvailabilityAsync` only covers `.appinstaller` installs. The sibling apps (Drive for Immich, Repilot) do the same thing through their own `RestartToApplyUpdates()`.
+
+### The trap: a pending update reports the version you already have
+
+**`StorePackageUpdate.Package` describes the package as *installed*, so `Package.Id.Version` is the
+version already on the machine — never the version being offered.** There is no WinRT API that
+reports a pending update's version.
+
+Measured against a live Store update: installed 1.27.1.0, published 1.28.0.0, and
+`GetAppAndOptionalStorePackageUpdatesAsync` returned exactly one entry — the app's own family —
+reporting **1.27.1.0**.
+
+This bit once already. An earlier version required the listed version to be *strictly newer* than
+the installed one, meaning to stop the UI offering an update to the running version. Because that
+comparison can never be true, the Store path reported "You're up to date" permanently while the
+Store itself showed the update sitting there ready to install, and it did so **silently** — the
+check succeeded, so nothing was logged. `CheckForStoreUpdateAsync` now logs the list contents,
+the installed version and the published version on every check, so a repeat is visible in
+`logs.*.txt` rather than needing to be re-derived.
+
+**Do not reintroduce that comparison.** Presence in the list is the signal; the catalog supplies
+the number.
+
+### Verifying Store update behaviour without shipping a build
+
+Two things make this testable in minutes instead of via a Store submission round-trip:
+
+- **What is actually published**, from the same public endpoint the Store client reads:
+
+  ```bash
+  curl -s "https://displaycatalog.mp.microsoft.com/v7.0/products/9P3ZZBDQ6PJF?market=US&languages=en-us&fieldsTemplate=Details"
+  ```
+
+  The human-readable version is in each `PackageFullName` (`…_1.28.0.0_arm64__hash`) — the
+  numeric `Version` field beside it is a packed 64-bit value, not a version string.
+
+- **What the WinRT API reports for the real install**, by running any process under the installed
+  package's identity (`StoreContext` and `Package.Current` need it, so a plain script cannot call
+  them):
+
+  ```powershell
+  Invoke-CommandInDesktopPackage -PackageFamilyName '27766TechnicallyReal.LittleLauncher_gfb69tsnc4jnp' -AppId 'App' -Command 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' -Args '-NoProfile -ExecutionPolicy Bypass -File <script>'
+  ```
+
+  Use Windows PowerShell 5.1, not `pwsh` — the WinRT projection needed to call
+  `GetAppAndOptionalStorePackageUpdatesAsync` is only there. The launched process is detached, so
+  have the script write its output to a file outside the package's redirected AppData
+  (e.g. `C:\Users\Public\`).
 
 ## Uninstall cleanup
 

@@ -97,9 +97,13 @@ public partial class HomePage : Page
             if (result is { UpdateAvailable: true })
             {
                 _updateResult = result;
-                UpdateInfoBar.Message = result.IsStoreManaged
-                    ? $"A new version ({result.LatestVersion}) is available in the Microsoft Store. You are running {result.CurrentVersion}."
-                    : $"A new version ({result.LatestVersion}) is available. You are running {result.CurrentVersion}.";
+                // The Store path can know an update exists without knowing its version number.
+                UpdateInfoBar.Message = (result.IsStoreManaged, string.IsNullOrEmpty(result.LatestVersion)) switch
+                {
+                    (true, true) => $"A new version is available in the Microsoft Store. You are running {result.CurrentVersion}.",
+                    (true, false) => $"A new version ({result.LatestVersion}) is available in the Microsoft Store. You are running {result.CurrentVersion}.",
+                    _ => $"A new version ({result.LatestVersion}) is available. You are running {result.CurrentVersion}.",
+                };
                 UpdateInfoBar.IsOpen = true;
 
                 if (!result.IsStoreManaged && string.IsNullOrEmpty(result.MsiDownloadUrl))

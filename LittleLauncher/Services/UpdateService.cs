@@ -22,6 +22,9 @@ public static class UpdateService
     private static readonly NLog.Logger Logger = NLog.LogManager.GetCurrentClassLogger();
     private const string PackagedApplicationId = "App";
 
+    /// <summary>Store product ID for Little Launcher (the ID in its Store listing URL).</summary>
+    private const string StoreProductId = "9P3ZZBDQ6PJF";
+
     public enum UpdateSource
     {
         GitHubRelease,
@@ -150,30 +153,115 @@ public static class UpdateService
         string currentVersion = FormatPackageVersion(Package.Current.Id.Version);
         string currentPackageName = Package.Current.Id.FamilyName;
 
-        // GetAppAndOptionalStorePackageUpdatesAsync lists every package the Store can
-        // update — including framework dependencies — and can list a package at the same
-        // version we already have (e.g. right after a submission is published, before the
-        // update graph settles). Only look at the main app package, and only report an
-        // update when it is strictly newer than what's installed; otherwise the UI would
-        // offer an "update" to the same version the user is already running.
-        var latestVersion = updates
-            .Where(update => update.Package != null && string.Equals(
-                update.Package.Id.FamilyName, currentPackageName, StringComparison.OrdinalIgnoreCase))
-            .Select(update => PackageVersionToVersion(update.Package!.Id.Version))
-            .DefaultIfEmpty(currentPackageVersion)
-            .Max() ?? currentPackageVersion;
+        // GetAppAndOptionalStorePackageUpdatesAsync lists every package the Store can update —
+        // including framework dependencies — so the app's own package has to be picked out by
+        // family name. Its presence in that list *is* the "an update is waiting for you" signal.
+        //
+        // What it is NOT is a source of the new version number: StorePackageUpdate.Package
+        // describes the package as installed, so Id.Version reports the version already on the
+        // machine. Verified against a live Store update (installed 1.27.1.0, published 1.28.0.0):
+        // the list held exactly one entry, ours, reporting 1.27.1.0. Requiring the listed version
+        // to be strictly newer — an earlier attempt to stop the UI offering an update to the
+        // running version — therefore never matched, and the Store path silently reported "up to
+        // date" forever. Do not reintroduce that comparison.
+        bool ourPackageListed = updates.Any(update => update.Package != null && string.Equals(
+            update.Package.Id.FamilyName, currentPackageName, StringComparison.OrdinalIgnoreCase));
 
-        bool updateAvailable = latestVersion > currentPackageVersion;
+        // The version to show, and the guard against the stale-list case the old comparison was
+        // reaching for, both come from the Store catalog instead — the only place that knows what
+        // is actually published. It is best-effort: a null answer means "cannot say", and the
+        // Store's own list is then trusted on its own rather than being vetoed by a failed
+        // lookup. Only a catalog version that is genuinely newer is ever displayed.
+        Version? publishedVersion = ourPackageListed ? await TryGetPublishedVersionAsync() : null;
+        bool publishedIsNewer = publishedVersion != null && publishedVersion > currentPackageVersion;
+        bool updateAvailable = ourPackageListed && (publishedVersion == null || publishedIsNewer);
+
+        // Logged on every check because the failure this replaced was invisible: the check
+        // succeeded, so nothing was written, and "up to date" was indistinguishable from a bug.
+        Logger.Info(
+            "Store update check: {Count} package update(s) listed, ours present: {Ours}, "
+            + "installed {Current}, published {Published}, update available: {Available}",
+            updates.Count, ourPackageListed, currentPackageVersion,
+            publishedVersion?.ToString() ?? "unknown", updateAvailable);
 
         return new UpdateCheckResult
         {
             Source = UpdateSource.MicrosoftStore,
             UpdateAvailable = updateAvailable,
             CurrentVersion = currentVersion,
-            LatestVersion = updateAvailable
-                ? $"v{latestVersion.Major}.{latestVersion.Minor}.{latestVersion.Build}"
-                : currentVersion,
+
+            // Empty means "there is a newer version but its number is not known" — the UI words
+            // that case without a version rather than inventing one.
+            LatestVersion = updateAvailable && publishedIsNewer
+                ? $"v{publishedVersion!.Major}.{publishedVersion.Minor}.{publishedVersion.Build}"
+                : updateAvailable ? "" : currentVersion,
         };
+    }
+
+    /// <summary>
+    /// Reads the version currently published to the Store for this product, or null if it cannot
+    /// be determined. Uses the Store's public display-catalog endpoint, which is what the Store
+    /// client itself reads; there is no WinRT API that reports a pending update's version.
+    /// </summary>
+    private static async Task<Version?> TryGetPublishedVersionAsync()
+    {
+        try
+        {
+            var uri = new Uri(
+                $"https://displaycatalog.mp.microsoft.com/v7.0/products/{StoreProductId}"
+                + "?market=US&languages=en-us&fieldsTemplate=Details");
+
+            using var stream = await Http.GetStreamAsync(uri);
+            using var doc = await System.Text.Json.JsonDocument.ParseAsync(stream);
+
+            string arch = Package.Current.Id.Architecture switch
+            {
+                global::Windows.System.ProcessorArchitecture.Arm64 => "arm64",
+                global::Windows.System.ProcessorArchitecture.X86 => "x86",
+                _ => "x64",
+            };
+
+            Version? best = null;
+
+            if (!doc.RootElement.TryGetProperty("Product", out var product)
+                || !product.TryGetProperty("DisplaySkuAvailabilities", out var skus))
+            {
+                return null;
+            }
+
+            foreach (var sku in skus.EnumerateArray())
+            {
+                if (!sku.TryGetProperty("Sku", out var skuInfo)
+                    || !skuInfo.TryGetProperty("Properties", out var props)
+                    || !props.TryGetProperty("Packages", out var packages))
+                {
+                    continue;
+                }
+
+                foreach (var package in packages.EnumerateArray())
+                {
+                    // The catalog's numeric "Version" is a packed 64-bit value; the version in
+                    // human form only appears inside the package full name
+                    // (Name_1.28.0.0_arm64__hash), which is also where the architecture is.
+                    if (package.TryGetProperty("PackageFullName", out var fullNameElement)
+                        && fullNameElement.GetString() is { } fullName)
+                    {
+                        var parts = fullName.Split('_');
+                        if (parts.Length < 3) continue;
+                        if (!parts[2].Equals(arch, StringComparison.OrdinalIgnoreCase)) continue;
+                        if (!Version.TryParse(parts[1], out var parsed)) continue;
+                        if (best == null || parsed > best) best = parsed;
+                    }
+                }
+            }
+
+            return best;
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn(ex, "Failed to read the published Store version");
+            return null;
+        }
     }
 
     private static async Task<(bool Success, string Message)> DownloadAndInstallMsiAsync(
@@ -408,6 +496,24 @@ public static class UpdateService
         }
 
         return "The Microsoft Store could not install the update. Try again later.";
+    }
+
+    /// <summary>
+    /// Arranges for the app to come back after it exits, so Windows can apply an update that is
+    /// already staged. The caller exits; this only sets the return trip up.
+    /// </summary>
+    /// <remarks>
+    /// An MSIX package cannot be installed while any of its processes are running, and Little
+    /// Launcher lives in the tray and starts with Windows — so a staged update can sit unapplied
+    /// indefinitely while the Store reports the app as up to date. Restarting applies anything
+    /// staged without needing to detect it, which matters because there is no reliable way to
+    /// ask: <c>Package.CheckUpdateAvailabilityAsync</c> only covers .appinstaller installs, not
+    /// Store-distributed packages.
+    /// </remarks>
+    public static void RestartToApplyPackagedUpdate()
+    {
+        RegisterApplicationRestart("--silent", 0);
+        SchedulePackagedRelaunchAfterExit();
     }
 
     private static string SchedulePackagedRelaunchAfterExit()
