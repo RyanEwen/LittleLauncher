@@ -180,6 +180,13 @@ internal static partial class FaviconService
                 int size = 0;
                 if (sizeMatch.Success && int.TryParse(sizeMatch.Groups[1].Value, out var w))
                     size = w;
+                else if (tag.Contains("apple-touch-icon", StringComparison.OrdinalIgnoreCase))
+                {
+                    // An apple-touch-icon rarely declares its size and is 180px by convention.
+                    // Scoring it 0 let a 16px shortcut icon that merely came first win, which is
+                    // one way a site with a perfectly good large icon still produced a soft one.
+                    size = 180;
+                }
 
                 // Prefer the largest icon, or the first one found
                 if (size > bestSize || bestHref == null)

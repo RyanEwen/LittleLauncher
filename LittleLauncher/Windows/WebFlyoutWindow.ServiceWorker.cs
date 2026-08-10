@@ -194,6 +194,71 @@ public sealed partial class WebFlyoutWindow
                 });
             }).catch(function () { });
 
+            // ── The page's best icon ────────────────────────────────
+            // Chromium's favicon is whatever the page declared for a browser tab — 32 or 64px, and
+            // upscaling that into a tray icon or a taskbar pin is why web launchers looked soft
+            // enough that picking a replacement by hand was the obvious workaround. A site that
+            // can be installed almost always declares something far better in its web app
+            // manifest, or as an apple-touch-icon, and fetching it *here* is what makes it
+            // reachable: these live behind the same login as the page.
+            function bestIconUrl() {
+                var best = { url: '', size: 0 };
+
+                function consider(url, size) {
+                    if (!url || size <= best.size) return;
+                    try { best = { url: new URL(url, location.href).href, size: size }; } catch (e) { }
+                }
+
+                function sizeOf(attr) {
+                    if (!attr) return 0;
+                    var m = /(\d+)\s*x\s*(\d+)/i.exec(attr);
+                    return m ? parseInt(m[1], 10) : 0;
+                }
+
+                document.querySelectorAll('link[rel~="icon"]').forEach(function (l) {
+                    consider(l.getAttribute('href'), sizeOf(l.getAttribute('sizes')) || 32);
+                });
+                document.querySelectorAll('link[rel~="apple-touch-icon"], link[rel~="apple-touch-icon-precomposed"]').forEach(function (l) {
+                    consider(l.getAttribute('href'), sizeOf(l.getAttribute('sizes')) || 180);
+                });
+
+                var manifest = document.querySelector('link[rel~="manifest"]');
+                if (!manifest || !manifest.getAttribute('href')) return Promise.resolve(best);
+
+                return fetch(new URL(manifest.getAttribute('href'), location.href).href, { credentials: 'include' })
+                    .then(function (r) { return r.ok ? r.json() : null; })
+                    .then(function (j) {
+                        (j && j.icons ? j.icons : []).forEach(function (i) {
+                            consider(i.src, sizeOf(i.sizes));
+                        });
+                        return best;
+                    })
+                    .catch(function () { return best; });
+            }
+
+            function reportBestIcon() {
+                bestIconUrl().then(function (best) {
+                    // Not worth replacing Chromium's own favicon with something no larger.
+                    if (!best.url || best.size < 96) return;
+
+                    return fetch(best.url, { credentials: 'include' })
+                        .then(function (r) { return r.ok ? r.blob() : null; })
+                        .then(function (b) {
+                            // Rasters only: a manifest icon is often an SVG, which nothing
+                            // downstream of here can decode.
+                            if (!b || b.size > 512 * 1024 || b.type.indexOf('svg') >= 0) return;
+                            var fr = new FileReader();
+                            fr.onload = function () {
+                                post({ __ll: 'pageIcon', icon: fr.result, size: best.size });
+                            };
+                            fr.readAsDataURL(b);
+                        });
+                }).catch(function () { });
+            }
+
+            if (document.readyState === 'complete') setTimeout(reportBestIcon, 0);
+            else window.addEventListener('load', function () { setTimeout(reportBestIcon, 0); });
+
             // The worker cannot construct a Notification, so it asks the page to.
             navigator.serviceWorker.addEventListener('message', function (ev) {
                 var d = ev.data;
@@ -280,6 +345,10 @@ public sealed partial class WebFlyoutWindow
         {
             string? url = message?["url"]?.GetValue<string>();
             if (!string.IsNullOrEmpty(url)) WatchServiceWorkerScript(sender, url);
+        }
+        else if (kind == "pageIcon")
+        {
+            AdoptHighResPageIcon(message);
         }
         else if (kind == "notify")
         {

@@ -71,6 +71,11 @@ public static class SyncProviders
     /// The destinations offered in the UI, in display order.
     /// </summary>
     /// <remarks>
+    /// <para>SFTP is last because it is the one that asks most of the user — a host, a key and a
+    /// server they already run — while the rest are a sign-in or a folder picker. It was first only
+    /// because it was built first.</para>
+    /// </remarks>
+    /// <remarks>
     /// <see cref="NetworkShare"/> is absent on purpose. It and <see cref="Folder"/> are the same
     /// transport reading the same <c>SyncFolderPath</c> setting, so once several destinations can
     /// be enabled at once, offering both would let a user switch on two that silently fight over
@@ -78,7 +83,7 @@ public static class SyncProviders
     /// </remarks>
     public static readonly int[] Selectable =
     [
-        Sftp, OneDrive, GoogleDrive, WebDav, Folder,
+        OneDrive, GoogleDrive, WebDav, Folder, Sftp,
     ];
 
     /// <summary>

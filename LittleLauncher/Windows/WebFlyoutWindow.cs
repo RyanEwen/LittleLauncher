@@ -17,6 +17,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using WinRT.Interop;
 using static LittleLauncher.Classes.NativeMethods;
@@ -2261,6 +2262,63 @@ public sealed partial class WebFlyoutWindow : Window
         catch (Exception ex)
         {
             Logger.Debug(ex, "Adopting the page icon failed for launcher {Name}", _launcher.Name);
+        }
+    }
+
+    /// <summary>
+    /// Takes the high-resolution icon the page reported and adopts it as the launcher's.
+    /// </summary>
+    /// <remarks>
+    /// <para><c>CoreWebView2.GetFaviconAsync</c> returns what the page declared for a browser tab —
+    /// commonly 32 or 64px — and a tray icon, and worse a taskbar pin, are rendered far larger than
+    /// that. Upscaling is why a freshly created web launcher looked soft enough that choosing a
+    /// replacement icon by hand was the obvious thing to do.</para>
+    /// <para>A site that can be installed almost always declares something much better in its web
+    /// app manifest or as an <c>apple-touch-icon</c>. Those are found and fetched **in the page**,
+    /// for the same reason the notification avatar is: they sit behind the same login, so a
+    /// host-side fetch gets a redirect where the page gets the image.</para>
+    /// <para>Only ever replaces an icon that is still ours to replace (<see cref="MayAdoptPageIcon"/>)
+    /// — a user who has chosen an icon has made a decision, and a better favicon is not a reason to
+    /// undo it. In bar mode nothing is adopted at all: the tray icon stands for the launcher, which
+    /// is several sites rather than one.
+    /// </para>
+    /// </remarks>
+    private void AdoptHighResPageIcon(JsonNode? message)
+    {
+        if (IsBarMode || !MayAdoptPageIcon(_launcher)) return;
+
+        string dataUrl = message?["icon"]?.GetValue<string>() ?? "";
+        int comma = dataUrl.IndexOf(',', StringComparison.Ordinal);
+        if (comma < 0 || !dataUrl.StartsWith("data:", StringComparison.Ordinal)) return;
+
+        try
+        {
+            byte[] bytes = Convert.FromBase64String(dataUrl[(comma + 1)..]);
+            if (bytes.Length == 0) return;
+
+            string path = GetPageIconPath(_launcher.Id);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+
+            // Written aside first, as the favicon path does: the tray pipeline reads this file, and
+            // a half-written PNG reads as corrupt rather than merely stale.
+            string temp = path + ".tmp";
+            File.WriteAllBytes(temp, bytes);
+            File.Move(temp, path, overwrite: true);
+
+            _launcher.CustomTrayIconPath = path;
+            _launcher.TrayIconMode = TrayIconModes.Custom;
+            SettingsManager.SaveSettings();
+
+            Logger.Info("Adopted a {Size}px page icon for launcher {Name}",
+                message?["size"]?.GetValue<int>() ?? 0, _launcher.Name);
+
+            // Re-renders the tray icon, rewrites app-icon-{id}.ico for the pin flow, and refreshes
+            // the notification icon alongside it.
+            MainWindow.Current?.UpdateTrayIcon(_launcher);
+        }
+        catch (Exception ex)
+        {
+            Logger.Debug(ex, "Adopting a high-resolution page icon failed for {Name}", _launcher.Name);
         }
     }
 

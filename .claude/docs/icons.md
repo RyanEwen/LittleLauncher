@@ -255,6 +255,26 @@ Entry points that call the pipeline:
 - **Manual add/edit**: calls `FaviconService.FetchAndCacheAsync()` / `GetApplicationIcon()` directly for the single item in the dialog.
 - **Drag-and-drop into the flyout**: `DroppedItemFactory.EnrichAsync()` — runs *after* the items are inserted and visible, so the drop itself never waits on the network. Dropped items carry a Segoe Fluent placeholder glyph (open / globe / folder / page) until the fetch lands.
 
+### Getting a *good* icon, not just an icon
+
+Two paths fetch a site's icon, and both must aim higher than the browser favicon:
+
+- **Launcher items and bookmarks** — `FaviconService` reads the page HTML, prefers the **web app
+  manifest**'s largest icon, then `<link rel="icon|apple-touch-icon">` picking the largest declared
+  `sizes`, then the Google favicon service, then `/favicon.ico`. An `apple-touch-icon` with no
+  `sizes` attribute is scored **180** rather than 0 — it is 180px by convention, and scoring it zero
+  let a 16px shortcut icon that merely appeared first in the HTML win.
+- **Web launchers** — `CoreWebView2.GetFaviconAsync` returns what the page declared for a *browser
+  tab*, commonly 32 or 64px, and a tray icon (and far worse, a taskbar pin) is drawn much larger
+  than that. Upscaling it is why a freshly created web launcher looked soft enough that picking a
+  replacement by hand was the obvious workaround. `AdoptHighResPageIcon` takes a better one instead:
+  the page bridge finds the best icon the site declares — manifest, then apple-touch-icon, then
+  sized link icons — and **fetches it in the page**, because those assets sit behind the same login
+  as the page and a host-side fetch gets a redirect. Anything under 96px is ignored, since it is not
+  worth replacing Chromium's favicon with something no bigger. It still only ever replaces an icon
+  that is ours to replace (`MayAdoptPageIcon`), and never in bar mode, where the tray icon stands
+  for several sites rather than one.
+
 ### Stale icon refresh
 
 `FaviconService.RefreshStaleItemIconsAsync()` re-fetches **auto-fetched** item icons whose cached file is older than `FaviconService.IconMaxAge` (7 days), so favicons, extracted app icons, and PWA icons don't rot as sites and apps update. Rules:
