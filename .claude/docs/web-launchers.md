@@ -333,6 +333,13 @@ Two things make the snap look deliberate:
   a top taskbar) and gives it a **fixed height equal to the expanded size**. The layout is then
   computed once and never reflows; the window simply uncovers more of it. Re-applied after a
   manual resize, which changes that height.
+- **A manual resize is the exception, and must track the drag.** That fixed height used to be
+  recomputed only when the pointer was released, so dragging an expanded bar-mode flyout grew the
+  window while the page stayed the size it started at — the drag revealed empty space and the new
+  size could not be judged until letting go. `StretchRootDuringResize` keeps the root height in
+  step with each move. There is no reveal to protect during a drag: the reveal that height exists
+  for is *expansion*, which is a different gesture. Both endings still agree with it — a normal
+  resize recomputes to the size just written, and a locked size keeps the dragged height.
 - The anchored edge never moves, so the bar stays exactly under the pointer that clicked it.
 
 The open/close slide is untouched — that moves a fixed-size window, which has none of this
