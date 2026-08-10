@@ -51,6 +51,18 @@ This is the whole point of the feature, so it is the thing not to regress.
 - **`WarmUp` deliberately skips web launchers.** The flyout is pre-rendered at startup because its
   content is expensive to re-rasterise; doing that for a browser would boot a renderer for a page
   the user may never open, which is exactly the cost this feature exists to avoid.
+- **`KeepRunning` launchers are the exception, and are preloaded at startup**
+  (`PreloadKeepRunning`). The rule above is about pages the user may never open; this policy is the
+  user saying the opposite outright, and the only reason to say it is notifications. Without the
+  preload the promise held only for launchers that happened to have been opened by hand since the
+  last restart, so every reboot silently switched notifications off until the user remembered to
+  click each tray icon in turn. A preload is exactly what opening and dismissing one by hand does:
+  parked off the virtual screen, loaded normally — *visible*, so the page defers nothing a
+  background tab would — then put through `ParkOffScreen` once it settles. It is **staggered**
+  (10s, then one every 6s) because this runs at sign-in, and a settle timeout collapses a page that
+  never finishes loading. Bar-mode launchers are skipped: until a bookmark is picked there is no
+  page to keep running. `NeedsPreload` also skips anything already loaded, because warm-up runs
+  again on every launcher change — including every auto-sync.
 - The **window** does outlive a dismissal, parked off the virtual screen like the flyout. An empty
   WinUI window costs nothing, and it keeps the reopen a pure move.
 

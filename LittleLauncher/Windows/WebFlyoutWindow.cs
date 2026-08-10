@@ -879,6 +879,162 @@ public sealed partial class WebFlyoutWindow : Window
         }
     }
 
+    /// <summary>
+    /// Opens the launchers that are set to keep running, off screen, at startup.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>This is the deliberate exception to "warm-up skips web launchers".</b> That rule
+    /// exists so nothing boots a renderer for a page the user may never look at — but
+    /// <see cref="WebHiddenPolicies.KeepRunning"/> is the user saying the opposite outright, and
+    /// the only reason to say it is notifications. Without this the promise only held for launchers
+    /// that happened to have been opened by hand since the last restart, so every reboot silently
+    /// switched notifications off until the user remembered to click each tray icon in turn — the
+    /// one thing a tray launcher should never ask of anyone.</para>
+    /// <para>A preload is exactly what opening and dismissing one by hand does: the window is
+    /// parked off the virtual screen, the page loads normally — visible, so nothing defers work
+    /// that a background tab would — and the hidden policy is applied once it has settled, leaving
+    /// it collapsed but connected. Nothing appears on screen and nothing takes focus.</para>
+    /// <para>Staggered rather than fired at once: this runs at sign-in, when the machine is at its
+    /// busiest, and starting several browsers in the same instant is how a launcher earns a
+    /// reputation for slowing boot. Bar-mode launchers are skipped — until a bookmark is picked
+    /// there is no page to keep running.</para>
+    /// </remarks>
+    public static void PreloadKeepRunning(MainWindow owner, IEnumerable<Launcher> launchers)
+    {
+        // NeedsPreload, not ShouldPreload: warm-up runs again on every launcher change, so once
+        // these are loaded this has to cost nothing rather than schedule a timer per sync.
+        var queue = new Queue<Launcher>(launchers.Where(NeedsPreload));
+        if (queue.Count == 0) return;
+
+        var timer = owner.DispatcherQueue.CreateTimer();
+        timer.Interval = TimeSpan.FromSeconds(PreloadFirstDelaySeconds);
+        timer.IsRepeating = false;
+
+        void Next(Microsoft.UI.Dispatching.DispatcherQueueTimer sender, object args)
+        {
+            sender.Tick -= Next;
+
+            if (queue.Count == 0) return;
+            var launcher = queue.Dequeue();
+
+            // Re-read the launcher rather than trusting the snapshot: sync or the settings window
+            // may have changed the policy in the seconds since this was scheduled.
+            var current = SettingsManager.Current.Launchers.FirstOrDefault(l => l.Id == launcher.Id);
+            if (current != null && NeedsPreload(current))
+            {
+                if (!Instances.TryGetValue(current.Id, out var panel))
+                {
+                    panel = new WebFlyoutWindow(owner, current);
+                    Instances[current.Id] = panel;
+                }
+
+                panel._owner = owner;
+                panel.BeginPreload();
+            }
+
+            if (queue.Count == 0) return;
+            sender.Interval = TimeSpan.FromSeconds(PreloadStaggerSeconds);
+            sender.Tick += Next;
+            sender.Start();
+        }
+
+        timer.Tick += Next;
+        timer.Start();
+    }
+
+    private const int PreloadFirstDelaySeconds = 10;
+    private const int PreloadStaggerSeconds = 6;
+
+    /// <summary>How long a page gets to finish loading before it is collapsed regardless.</summary>
+    private const int PreloadSettleSeconds = 45;
+
+    private static bool ShouldPreload(Launcher launcher) =>
+        launcher.IsWebLauncher &&
+        !launcher.HasWebBookmarkBar &&
+        WebHiddenPolicies.Normalize(launcher.WebHiddenPolicy) == WebHiddenPolicies.KeepRunning &&
+        !string.IsNullOrWhiteSpace(launcher.ResolvedSingleWebUrl);
+
+    /// <summary>
+    /// True when this launcher wants preloading and has no browser yet.
+    /// </summary>
+    /// <remarks>
+    /// A launcher whose page failed to load still counts as loaded — the browser exists, showing
+    /// its error — so a site that is down does not get retried on a loop for the life of the app.
+    /// Opening it offers Retry, which is where a second attempt belongs.
+    /// </remarks>
+    private static bool NeedsPreload(Launcher launcher) =>
+        ShouldPreload(launcher) &&
+        !(Instances.TryGetValue(launcher.Id, out var panel) && panel._webView != null);
+
+    private bool _preloadPending;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _preloadTimer;
+
+    /// <summary>Loads this launcher's page off screen and then leaves it in its hidden state.</summary>
+    private void BeginPreload()
+    {
+        if (_webView != null || _isOpen || _preloadPending) return;
+
+        Logger.Info("Preloading web launcher {Name} so its connection is live before it is opened", _launcher.Name);
+
+        _preloadPending = true;
+        PreRenderOffScreen();
+        _ = CreateWebViewAsync();
+
+        // A page that never finishes loading must not be left rendering for the session. The
+        // navigation is not cancelled — only the "it has settled" decision is forced.
+        _preloadTimer ??= DispatcherQueue.CreateTimer();
+        _preloadTimer.Stop();
+        _preloadTimer.IsRepeating = false;
+        _preloadTimer.Interval = TimeSpan.FromSeconds(PreloadSettleSeconds);
+        _preloadTimer.Tick += PreloadSettleTimer_Tick;
+        _preloadTimer.Start();
+    }
+
+    private void PreloadSettleTimer_Tick(Microsoft.UI.Dispatching.DispatcherQueueTimer sender, object args)
+    {
+        sender.Tick -= PreloadSettleTimer_Tick;
+        CompletePreload();
+    }
+
+    /// <summary>Puts a preloaded launcher into the state a dismissal would leave it in.</summary>
+    private void CompletePreload()
+    {
+        if (!_preloadPending) return;
+        _preloadPending = false;
+
+        if (_preloadTimer != null)
+        {
+            _preloadTimer.Stop();
+            _preloadTimer.Tick -= PreloadSettleTimer_Tick;
+        }
+
+        // The user got there first. Their open owns the window now, and collapsing it under them
+        // would blank the page they are looking at.
+        if (_isOpen) return;
+
+        ParkOffScreen();
+    }
+
+    /// <summary>Parks the window outside the virtual screen at its full size, so WinUI draws it.</summary>
+    private void PreRenderOffScreen()
+    {
+        if (_hwnd == IntPtr.Zero || !IsWindow(_hwnd)) return;
+
+        ApplyRootAnchor();
+
+        double scale = GetScale();
+        int width = (int)Math.Ceiling(_launcher.ResolvedWebFlyoutWidth * scale);
+        int height = (int)Math.Ceiling(CurrentContentHeightDips() * scale);
+        int left = GetSystemMetrics(SM_XVIRTUALSCREEN) - width - 64;
+        int top = GetSystemMetrics(SM_YVIRTUALSCREEN) - height - 64;
+
+        SetWindowPos(_hwnd, IntPtr.Zero, left, top, width, height,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+
+        // Drawn once off screen, so the first real open slides like every one after it.
+        _hasBeenShown = true;
+    }
+
     /// <summary>Parks the window outside the virtual screen at bar height so it composes a frame.</summary>
     private void PreRenderBarOffScreen()
     {
@@ -1758,12 +1914,17 @@ public sealed partial class WebFlyoutWindow : Window
                 ApplyZoom();   // CSS zoom lives in the document, so each navigation drops it
                 UpdateNavigationButtons();
                 RevealWebViewIfPending();
+                CompletePreload();   // loaded off screen at startup: collapse it, keep it connected
                 return;
             }
 
             // A failed navigation still has to give the browser back, or the flyout is stuck
             // showing a spinner over a hidden page with no way out but Reload.
             RevealWebViewIfPending();
+
+            // A preload that could not load — no network yet at sign-in, typically — still has to
+            // stop rendering. The error is left on screen for whenever it is opened.
+            CompletePreload();
 
             SetStatus($"Could not load {NormalizeUrl(_launcher.WebUrl)} ({e.WebErrorStatus}).",
                 busy: false, showRetry: true);
