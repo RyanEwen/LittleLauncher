@@ -494,6 +494,39 @@ driven from it — `ReportShown` when Windows accepts the toast, `ReportClicked`
 - `_liveNotifications` is **capped**, not trusted to drain: a toast the user simply ignores reports
   nothing back, so entries would otherwise accumulate for the life of the app.
 
+#### Release WebView2 objects yourself — the GC cannot
+
+**This is what was killing the app roughly hourly, and it is not a use-after-free.** A
+`CoreWebView2Notification` and its event args are COM objects owning a mojo `Remote` bound to the
+browser's own sequence. Mojo `CHECK`s that the remote is destroyed on that sequence, and a failed
+`CHECK` is a breakpoint rather than an exception — it takes the process down and no `try`/`catch`
+sees it. Captured under `cdb`, the stack was unambiguous:
+
+```
+Microsoft_Web_WebView2_Core!DllGetActivationFactory      (CsWinRT releasing an RCW)
+  RuntimeClassImpl::Release
+    NotificationReceivedEventArgs::~NotificationReceivedEventArgs
+      Notification::~Notification
+        mojo::Remote<EmbeddedBrowser>::reset
+          mojo::InterfaceEndpointClient::~...   brk #0xF000
+```
+
+Nothing was *using* the object — it was being **collected**. CsWinRT wrappers release their pointer
+on whichever thread finalizes them and, unlike the old built-in RCWs, do not marshal that release
+back to the apartment that created it. So a notification the GC happened to pick up on a background
+thread killed the app. That explains everything the symptom did: it struck at random, left nothing
+in the log, got worse the more notifications arrived, and **clicking a toast was the most reliable
+trigger** — the click drops the last reference and hands the object straight to the collector.
+
+`ReleaseWebViewObject` therefore disposes the projection explicitly, on the thread that made it,
+everywhere one of these is finished with: the event args at the end of the handler, and the
+notification on close, on eviction, on unload and after a click. Disposing releases *our* reference
+only — the browser keeps its own — and suppresses the finalizer, which is the half doing the damage.
+
+**Treat this as a rule for any WebView2 object held past the handler that delivered it**, not a
+notification quirk. The safe pattern is: hold it if you must, then release it deliberately on the UI
+thread.
+
 #### A notification must never outlive its browser — this one kills the process
 
 `CoreWebView2Notification` is owned by the `CoreWebView2` that raised it. Calling anything on one

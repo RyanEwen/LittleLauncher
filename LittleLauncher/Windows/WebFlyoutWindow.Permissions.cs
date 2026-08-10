@@ -69,7 +69,65 @@ public sealed partial class WebFlyoutWindow
     /// cap is what a click can still reach; older toasts just open the launcher without telling the
     /// page they were clicked.
     /// </remarks>
-    private static readonly Dictionary<string, CoreWebView2Notification> _liveNotifications = [];
+    private static readonly Dictionary<string, TrackedNotification> _liveNotifications = [];
+
+    /// <summary>A notification we are holding, with the handler needed to let go of it cleanly.</summary>
+    private sealed record TrackedNotification(
+        CoreWebView2Notification Notification,
+        global::Windows.Foundation.TypedEventHandler<CoreWebView2Notification, object> CloseHandler);
+
+    /// <summary>
+    /// Lets go of a WebView2 object <b>here, on the UI thread</b>, instead of leaving it to the
+    /// garbage collector.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>This is the fix for the crash that killed the app roughly hourly.</b> A
+    /// <see cref="CoreWebView2Notification"/> and its event args are COM objects owning a mojo
+    /// <c>Remote</c> bound to the browser's own sequence. Mojo <c>CHECK</c>s that the remote is
+    /// destroyed on that sequence, and a failed <c>CHECK</c> is a breakpoint, not an exception — it
+    /// takes the process with it and no <c>try</c>/<c>catch</c> can see it. Captured under a
+    /// debugger, the stack was unambiguous:</para>
+    /// <code>
+    /// Microsoft_Web_WebView2_Core!DllGetActivationFactory      (CsWinRT releasing an RCW)
+    ///   RuntimeClassImpl::Release
+    ///     NotificationReceivedEventArgs::~NotificationReceivedEventArgs
+    ///       Notification::~Notification
+    ///         mojo::Remote&lt;EmbeddedBrowser&gt;::reset
+    ///           mojo::InterfaceEndpointClient::~...   brk #0xF000
+    /// </code>
+    /// <para>Nothing was using the object: it was being <i>collected</i>. CsWinRT wrappers release
+    /// their pointer on whichever thread finalizes them, and unlike the old built-in RCWs they do
+    /// not marshal that release back to the apartment that created it — so a notification the GC
+    /// happened to pick up on a background thread killed the app. That is why it struck at random,
+    /// left nothing in the log, and got worse the more notifications arrived; and why clicking a
+    /// toast was a reliable way to trigger it, since the click drops the last reference and hands
+    /// the object straight to the collector.</para>
+    /// <para>So every one of these is released explicitly, on the thread that made it. Disposing
+    /// the projection releases our reference only — the browser holds its own — and suppresses the
+    /// finalizer, which is the half that was doing the damage.</para>
+    /// </remarks>
+    private static void ReleaseWebViewObject(object? projected)
+    {
+        if (projected is not WinRT.IWinRTObject winrt) return;
+
+        try
+        {
+            winrt.NativeObject.Dispose();
+        }
+        catch (Exception ex)
+        {
+            NLog.LogManager.GetCurrentClassLogger().Debug(ex, "Releasing a WebView2 object failed");
+        }
+    }
+
+    /// <summary>Detaches from a tracked notification and releases it on this thread.</summary>
+    private static void ReleaseTracked(TrackedNotification tracked)
+    {
+        try { tracked.Notification.CloseRequested -= tracked.CloseHandler; }
+        catch (Exception ex) { NLog.LogManager.GetCurrentClassLogger().Debug(ex, "Detaching CloseRequested failed"); }
+
+        ReleaseWebViewObject(tracked.Notification);
+    }
 
     private const int MaxTrackedNotifications = 64;
 
@@ -558,25 +616,30 @@ public sealed partial class WebFlyoutWindow
         // Read what the toast needs, subscribe, and report it shown — all of it now, while the
         // browser is certainly still alive. Nothing below this block may touch `notification`.
         string title, body, tag;
+        global::Windows.Foundation.TypedEventHandler<CoreWebView2Notification, object> closeHandler =
+            (_, _) => ForgetNotification(key);
+
         try
         {
             title = string.IsNullOrWhiteSpace(notification.Title) ? _launcher.Name : notification.Title;
             body = notification.Body;
             tag = notification.Tag;
 
-            notification.CloseRequested += (_, _) => _liveNotifications.Remove(key);
+            notification.CloseRequested += closeHandler;
             notification.ReportShown();
         }
         catch (Exception ex)
         {
             Logger.Warn(ex, "Reporting a page notification failed for launcher {Name}", _launcher.Name);
+            ReleaseWebViewObject(notification);
+            ReleaseWebViewObject(e);
             return;
         }
 
         while (_liveNotifications.Count >= MaxTrackedNotifications)
-            _liveNotifications.Remove(_liveNotifications.Keys.First());
+            ForgetNotification(_liveNotifications.Keys.First());
 
-        _liveNotifications[key] = notification;
+        _liveNotifications[key] = new TrackedNotification(notification, closeHandler);
         if (!string.IsNullOrEmpty(tag)) RememberNotificationSource(tag, sender);
 
         try
@@ -612,9 +675,22 @@ public sealed partial class WebFlyoutWindow
         }
         catch (Exception ex)
         {
-            _liveNotifications.Remove(key);
+            ForgetNotification(key);
             Logger.Warn(ex, "Showing a page notification failed for launcher {Name}", _launcher.Name);
         }
+
+        // The args are finished with the moment this handler returns, and leaving them for the
+        // collector is precisely what was killing the app — the captured stack starts in their
+        // destructor. The notification itself lives on in _liveNotifications with its own
+        // reference, so releasing these does not take it away.
+        ReleaseWebViewObject(e);
+    }
+
+    /// <summary>Stops tracking one notification and releases it here rather than leaving it to the GC.</summary>
+    private static void ForgetNotification(string key)
+    {
+        if (_liveNotifications.Remove(key, out var tracked))
+            ReleaseTracked(tracked);
     }
 
     /// <summary>
@@ -641,7 +717,7 @@ public sealed partial class WebFlyoutWindow
     {
         string prefix = _launcher.Id + ":";
         foreach (string key in _liveNotifications.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal)).ToList())
-            _liveNotifications.Remove(key);
+            ForgetNotification(key);
     }
 
     /// <summary>
@@ -678,7 +754,7 @@ public sealed partial class WebFlyoutWindow
 
         if (arguments.TryGetValue("webNotification", out string? key) &&
             key != null &&
-            _liveNotifications.Remove(key, out var notification))
+            _liveNotifications.Remove(key, out var tracked))
         {
             // Only while the browser that raised it is still the live one. A notification outlives
             // its CoreWebView2 as a managed object but not as a usable one, and calling into a dead
@@ -692,13 +768,17 @@ public sealed partial class WebFlyoutWindow
             {
                 try
                 {
-                    notification.ReportClicked();
+                    tracked.Notification.ReportClicked();
                 }
                 catch (Exception ex)
                 {
                     NLog.LogManager.GetCurrentClassLogger().Debug(ex, "Reporting a notification click failed");
                 }
             }
+
+            // Released here, on the dispatcher thread this runs on. Dropping the reference and
+            // walking away is what made clicking a toast the most reliable way to kill the app.
+            ReleaseTracked(tracked);
         }
 
         var owner = MainWindow.Current;
