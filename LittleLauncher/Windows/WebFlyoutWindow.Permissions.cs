@@ -542,6 +542,8 @@ public sealed partial class WebFlyoutWindow
             if (System.IO.File.Exists(iconPath))
                 builder.SetAppLogoOverride(new Uri(iconPath));
 
+            AddNotificationActions(builder, tag);
+
             Microsoft.Windows.AppNotifications.AppNotificationManager.Default.Show(builder.BuildNotification());
         }
         catch (Exception ex)
@@ -600,10 +602,15 @@ public sealed partial class WebFlyoutWindow
     /// Opens the launcher a clicked toast came from, and tells its page the toast was clicked.
     /// </summary>
     /// <returns>False when the toast was not one of ours, so the caller can handle it itself.</returns>
-    internal static bool HandleNotificationActivation(IDictionary<string, string> arguments)
+    internal static bool HandleNotificationActivation(IDictionary<string, string> arguments, string reply = "")
     {
         if (!arguments.TryGetValue("launcher", out string? launcherId) || string.IsNullOrEmpty(launcherId))
             return false;
+
+        // An action button is answered in the page, not by opening the flyout. Replying to a
+        // message from the toast and then having the window fly open would undo the point of
+        // replying from the toast.
+        if (TryDeliverAction(launcherId, arguments, reply)) return true;
 
         if (arguments.TryGetValue("webNotification", out string? key) &&
             key != null &&

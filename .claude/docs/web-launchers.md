@@ -467,16 +467,59 @@ in the page to construct a non-persistent notification instead, which the host d
   replaces rather than stacks, and two launchers on the same site cannot collide on a thread id.
   `ToastIdentifier` hashes anything over the 64-character limit.
 
-**What the bridge cannot reach is the service worker itself.** Document-created scripts run in
-document contexts only, so a `showNotification` called from inside a worker — a push handler,
-typically — still has no host-visible path in this SDK, and there is nothing above the WebView2
-layer that can add one. That is an acceptable line to stop at: a page-raised notification is exactly
-the case that matters for a launcher that is kept running, and a push arriving while nothing is
-loaded was never going to work anyway, because the resource model has already closed the browser.
+Document-created scripts run in document contexts only, so this half of the bridge cannot reach the
+worker. `WebFlyoutWindow.ServiceWorker.cs` does — see below.
 
-One behaviour does change and is worth knowing: a bridged notification is clicked in the *page*, so
-the site's service-worker `notificationclick` handler does not run. The toast still opens the
-launcher it came from, which is the useful half of what that handler would have done.
+### Reaching the service worker
+
+The worker is where `showNotification` is called from a push or background-sync handler, and where
+`notificationclick` is delivered when a toast button is used. Neither is reachable with an injected
+document script, so the worker's **script is wrapped as it is fetched**.
+
+`CoreWebView2WebResourceRequestSourceKinds` makes worker traffic visible to the host, so the
+response is served as the shim followed by `importScripts` of the original. **Nothing is re-fetched
+by the app**: `importScripts` is the browser's own request, carrying the profile's cookies, so a
+dashboard behind a login still loads its real worker. A marker query stops that inner request being
+wrapped again.
+
+Then, in both directions:
+
+- **Out** — the worker's `showNotification` still makes the real notification (never displayed, but
+  it is what `getNotifications()` returns and what a click event must carry) and asks a window
+  client to raise the page-level one the host does see.
+- **In** — a toast button posts back through the page to the worker, which dispatches a genuine
+  `notificationclick` carrying `action`, `reply` and the app's own `notification.data`. The app's
+  own handler runs, so replying from the toast does what replying in the app does.
+
+Three things this has to get right, each of which broke a working build first:
+
+- **The interception must exist before the script is fetched.** Announcing the URL over
+  `postMessage` and registering in the same breath races and loses — the worker installs unwrapped
+  and everything downstream silently does nothing. The patched `register()` therefore *waits* for
+  the host to acknowledge, and fails open after 1.5s so a lost acknowledgement can never stop a page
+  registering its worker.
+- **A worker registered on an earlier visit never re-fetches its script**, so `register()` may never
+  be called again. The bridge enumerates existing registrations and calls `update()`, which is the
+  only moment the wrap can be applied.
+- **The shim calls `skipWaiting`/`clients.claim`.** Wrapping changes the script's bytes, so the
+  browser installs a *new* worker; without these it would sit in "waiting" until every client went
+  away, and the bridge would not take effect for the session the user is in. This is a deliberate
+  change to the site's behaviour.
+
+### Action buttons and inline reply
+
+`CoreWebView2Notification` has no actions on it — it only ever carries non-persistent notifications,
+which the spec forbids actions on, and the constructor **throws** if you pass any. So the shim sends
+them alongside, and the tag is the join: every notification gets one, invented where the app supplied
+none, precisely so the lookup always works.
+
+`type: "text"` is the web platform's inline reply — the same declaration that produces a reply field
+on Android — and maps onto a toast text box attached to its button. Capped at
+`Notification.maxActions`, which Chromium reports as **2**: showing more than the page believes
+exist would be inventing UI the app has no handler for.
+
+An action click is answered in the page and **does not open the flyout** — replying from a toast and
+then having the window fly open would undo the point of replying from the toast.
 
 ### Notifications need the browser alive — which the resource contract does not
 

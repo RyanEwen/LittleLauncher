@@ -278,9 +278,14 @@ public sealed partial class MainWindow : Window
         Microsoft.Windows.AppNotifications.AppNotificationActivatedEventArgs args)
     {
         var arguments = args.Arguments;
+
+        // Whatever the user typed into the toast's reply box, if it had one. Read here rather than
+        // in the flyout: the args do not outlive this callback.
+        string reply = args.UserInput.TryGetValue("llReply", out string? typed) ? typed ?? "" : "";
+
         DispatcherQueue.TryEnqueue(() =>
         {
-            if (WebFlyoutWindow.HandleNotificationActivation(arguments)) return;
+            if (WebFlyoutWindow.HandleNotificationActivation(arguments, reply)) return;
             SettingsWindow.ShowInstance(this);
         });
     }

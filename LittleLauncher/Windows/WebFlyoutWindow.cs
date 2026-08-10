@@ -1681,6 +1681,10 @@ public sealed partial class WebFlyoutWindow : Window
 
         if (_webView == null) return;   // unloaded while the script was being installed
 
+        await InstallServiceWorkerBridgeAsync(_webView.CoreWebView2);
+
+        if (_webView == null) return;
+
         ApplyZoom();
 
         // CurrentTargetUrl, not WebUrl: in bar mode the address is whichever bookmark was
