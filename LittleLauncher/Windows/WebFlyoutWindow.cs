@@ -161,6 +161,19 @@ public sealed partial class WebFlyoutWindow : Window
     private bool _isMaximized;
     private RECT _preMaximizeRect;
 
+    /// <summary>
+    /// True when a drag-resize has been made under <see cref="Launcher.WebLockSize"/> and so was
+    /// never written to the launcher — the flyout is currently a size that must not outlive it.
+    /// </summary>
+    /// <remarks>
+    /// No "pre-resize" rect is kept alongside it, unlike <see cref="_preMaximizeRect"/>: the size
+    /// to go back to is always the launcher's configured one, since that is what an open produces.
+    /// </remarks>
+    private bool _hasTemporaryResize;
+
+    /// <summary>The edge and corner grips, kept so they can be hidden when resizing is impossible.</summary>
+    private readonly List<ResizeGrip> _resizeGrips = [];
+
     private bool _isMovingWindow;
     private POINT _moveStartCursor;
     private RECT _moveStartRect;
@@ -494,6 +507,7 @@ public sealed partial class WebFlyoutWindow : Window
             Grid.SetRow(grip, 0);
             Grid.SetRowSpan(grip, 2);
             root.Children.Add(grip);
+            _resizeGrips.Add(grip);
         }
 
         var we = Microsoft.UI.Input.InputSystemCursorShape.SizeWestEast;
@@ -513,11 +527,30 @@ public sealed partial class WebFlyoutWindow : Window
         Add(ResizeEdges.Bottom | ResizeEdges.Right, HorizontalAlignment.Right, VerticalAlignment.Bottom, CornerGripSize, CornerGripSize, nwse);
     }
 
+    /// <summary>
+    /// Hides the resize grips in the states that cannot be resized, and restores them after.
+    /// </summary>
+    /// <remarks>
+    /// The grips are transparent, so "showing" one means showing its resize cursor — and a resize
+    /// cursor is a promise. While maximized or fullscreen there is no edge to drag (one is the
+    /// work area, the other the screen) and <see cref="Grip_PointerPressed"/> refuses the drag, so
+    /// leaving them hit-testable offered a resize that could not happen. Collapsing them removes
+    /// the cursor and the hit-testing together; the guard in the handler stays as the backstop for
+    /// a drag already in flight when the state changes.
+    /// </remarks>
+    private void UpdateResizeGripVisibility()
+    {
+        var visibility = _isMaximized || _isFullScreen ? Visibility.Collapsed : Visibility.Visible;
+        foreach (var grip in _resizeGrips)
+            grip.Visibility = visibility;
+    }
+
     private void Grip_PointerPressed(object sender, PointerRoutedEventArgs e)
     {
         // Neither state has an edge to drag: one is the screen, the other is the work area. A
         // resize from here would also persist the maximized size onto the launcher, which is
-        // exactly what "temporarily" rules out.
+        // exactly what "temporarily" rules out. The grips are collapsed in both states
+        // (UpdateResizeGripVisibility); this stays as the backstop.
         if (_isFullScreen || _isMaximized) return;
         if (sender is not ResizeGrip grip || grip.Tag is not ResizeEdges edges) return;
 
@@ -578,6 +611,9 @@ public sealed partial class WebFlyoutWindow : Window
     /// Written only on release, and only from a real drag — the placement code clamps the flyout
     /// to the work area on every open, and persisting that would silently shrink the launcher on
     /// the first open on a smaller screen.
+    /// <para>With <see cref="Launcher.WebLockSize"/> set (Remember Size off) nothing is written at
+    /// all: the drag holds for as long as the flyout stays open and <see cref="ParkOffScreen"/>
+    /// undoes it, exactly as maximize is undone there.</para>
     /// </remarks>
     private void CompleteResize()
     {
@@ -593,6 +629,16 @@ public sealed partial class WebFlyoutWindow : Window
 
         if (width == _launcher.ResolvedWebFlyoutWidth && height == _launcher.ResolvedWebFlyoutHeight)
             return;
+
+        // A locked size is the whole point of the toggle: the flyout can still be dragged to any
+        // size for the session, it just does not become the launcher's size. Flagged rather than
+        // reverted here, because snapping back under the pointer mid-drag would read as the resize
+        // being refused rather than being temporary.
+        if (_launcher.WebLockSize)
+        {
+            _hasTemporaryResize = true;
+            return;
+        }
 
         _launcher.WebFlyoutWidth = Math.Clamp(width, Launcher.MinWebFlyoutWidth, Launcher.MaxWebFlyoutDimension);
         _launcher.WebFlyoutHeight = Math.Clamp(height, Launcher.MinWebFlyoutHeight, Launcher.MaxWebFlyoutDimension);
@@ -730,6 +776,7 @@ public sealed partial class WebFlyoutWindow : Window
 
         _isMaximized = true;
         UpdateMaximizeButton();
+        UpdateResizeGripVisibility();
 
         // A slide still in flight would otherwise keep writing its own geometry over this one.
         _animationVersion++;
@@ -759,6 +806,7 @@ public sealed partial class WebFlyoutWindow : Window
 
         _isMaximized = false;
         UpdateMaximizeButton();
+        UpdateResizeGripVisibility();
         ApplyRootAnchor();
 
         if (!restoreGeometry || _hwnd == IntPtr.Zero || !IsWindow(_hwnd)) return;
@@ -1382,6 +1430,18 @@ public sealed partial class WebFlyoutWindow : Window
                 ExitMaximized(restoreGeometry: false);
             }
 
+            // A drag-resize under a locked size ends here too, and for the same reason: the park
+            // size is what the next open's first frame is drawn at, so leaving the dragged size in
+            // place would show it for a frame before the placement code moved it back.
+            if (_hasTemporaryResize)
+            {
+                _hasTemporaryResize = false;
+                double parkScale = GetScale();
+                rect.Right = rect.Left + (int)Math.Ceiling(_launcher.ResolvedWebFlyoutWidth * parkScale);
+                rect.Bottom = rect.Top + (int)Math.Ceiling(CurrentContentHeightDips() * parkScale);
+                ApplyRootAnchor();
+            }
+
             int width = Math.Max(1, rect.Right - rect.Left);
             int height = Math.Max(1, rect.Bottom - rect.Top);
             int left = GetSystemMetrics(SM_XVIRTUALSCREEN) - width - 64;
@@ -1935,6 +1995,7 @@ public sealed partial class WebFlyoutWindow : Window
         {
             if (!GetWindowRect(_hwnd, out _preFullScreenRect)) return;
             _isFullScreen = true;
+            UpdateResizeGripVisibility();
 
             _header.Visibility = Visibility.Collapsed;
             _bookmarkBar.Visibility = Visibility.Collapsed;
@@ -1960,6 +2021,7 @@ public sealed partial class WebFlyoutWindow : Window
         }
 
         _isFullScreen = false;
+        UpdateResizeGripVisibility();
 
         // Back to whatever the flyout was: bar mode restores its own chrome and anchoring.
         _header.Visibility = IsBarMode && !_isExpanded ? Visibility.Collapsed : Visibility.Visible;

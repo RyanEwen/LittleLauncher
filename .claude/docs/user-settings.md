@@ -122,6 +122,11 @@ model default, which would have flipped it on for every existing launcher.
   (0, default) or one of the nine corner/edge/centre positions. Outranked by `WebFlyoutPosition`,
   so with `WebRememberPosition` on it decides only the first open; changing it clears
   `WebFlyoutPosition` so the new choice actually takes effect
+- `WebLockSize` (`bool`) — hold the flyout at its configured size, so dragging its edges only
+  lasts while it is open. **Surfaced as "Remember Size", which is on by default — this property is
+  its inverse**, which is the only phrasing that survives `WhenWritingDefault`; a `bool` defaulting
+  to `true` cannot be turned off. `WebFlyoutWidth`/`WebFlyoutHeight` are then set deliberately, in
+  launcher settings, and a drag cannot overwrite them
 - `WebPinFlyout` (`bool`) — stay open when focus is lost
 - `WebAllowAllPermissions` (`bool`) — grant camera, microphone, location and notifications without
   asking. Defaults `false` (ask), which is both the safe direction and the only one that survives

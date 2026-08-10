@@ -101,6 +101,28 @@ The size is persisted **only on pointer release**, never from the placement code
 the flyout to the work area, and writing that back would silently shrink the launcher the first
 time it opened on a smaller screen.
 
+### Remember Size — locking a size in
+
+**Remember Size** (Advanced, beside Remember Position) is on by default and is what makes a drag
+stick. Turned off, the flyout can still be dragged to any size and stays there for as long as it is
+open, but nothing is written: the next open is at `WebFlyoutWidth` × `WebFlyoutHeight` as set in
+launcher settings. That is how a size is pinned down — set it in the form, switch this off, and no
+amount of dragging can drift it afterwards.
+
+It is the same bargain maximize makes, and it is implemented the same way rather than a second way:
+`CompleteResize` flags `_hasTemporaryResize` instead of writing, and `ParkOffScreen` undoes it
+alongside `_isMaximized`. Two details follow from that shared path:
+
+- **Nothing snaps back mid-session.** Reverting on pointer release would read as the resize being
+  *refused* rather than being temporary, and the user would keep trying.
+- **The park size is reset, not just the model.** `ParkOffScreen` parks at the window's current
+  rect because that is what the next open's first frame is drawn at — so a dragged size left in
+  place would flash for a frame before the placement code moved it back.
+
+The stored property is `Launcher.WebLockSize`, the **inverse** of the toggle, because a `bool`
+defaulting to `true` cannot be turned off in this settings file — see "Settings that must default
+to zero / false" below.
+
 `_isResizing` pins the flyout open, exactly like `_isModalOpen` — a drag that strays outside the
 window must not read as "the user clicked elsewhere".
 
@@ -118,6 +140,13 @@ Three things follow from that, and each is a guard rather than a convention:
 - **The grips and the header drag are inert while maximized.** Both would otherwise persist the
   maximized geometry — `CompleteResize` writes the size, `EndWindowMove` writes the position —
   which is exactly the state that is meant not to outlive the dismissal.
+
+  The grips are also **collapsed** in that state, not merely refused (`UpdateResizeGripVisibility`,
+  called from `EnterMaximized` / `ExitMaximized` and both branches of `ApplyFullScreen`). They are
+  transparent, so all a grip shows is its resize cursor — and a resize cursor is a promise, the
+  same rule the external-drop code follows for drop cursors. Refusing the drag in the handler left
+  the edges advertising a resize that silently did nothing. The handler guard stays as the backstop
+  for a drag already in flight when the state changes.
 - **`ApplyLauncherChanges` must not resize while maximized.** It runs on *anything* touching the
   launcher, a bookmark's favicon fetch completing included, so without the guard a maximized
   flyout snapped back to its normal size with no user action at all. Same trap as
@@ -457,8 +486,10 @@ the CLR default is **omitted from the file**. Two consequences shape these prope
   store `0` for "unset" and resolve their real defaults through the `Resolved*` properties on
   `Launcher`. Do not put the default in the field initialiser.
 - Booleans must be phrased so `false` is the default behaviour — hence `WebPinFlyout` rather than an
-  auto-hide flag. A bool defaulting to `true` **cannot be turned off**: `false` is dropped on write
-  and the initialiser puts it back on load.
+  auto-hide flag, and `WebLockSize` rather than the "Remember Size" the UI actually shows. A bool
+  defaulting to `true` **cannot be turned off**: `false` is dropped on write and the initialiser
+  puts it back on load. **A setting that reads better in the positive is still stored in the
+  negative** — invert it in the one line that builds the toggle, not in the model.
 - `WebHiddenPolicies.UnloadWhenIdle` is `0` for the same reason: the cheapest behaviour is the one
   that survives being omitted.
 

@@ -252,6 +252,12 @@ internal static class LauncherPayload
         existing.WebAnchor = downloaded.WebAnchor;
         existing.WebRememberPosition = downloaded.WebRememberPosition;
 
+        // Travels, unlike WebFlyoutPosition below, because it is a decision about the launcher
+        // rather than a record of where a window ended up on one machine's monitors — and the
+        // size it locks (WebFlyoutWidth/Height) is synced two lines up, so leaving it behind would
+        // send the size without the rule that governs it.
+        existing.WebLockSize = downloaded.WebLockSize;
+
         // Deliberately NOT synced: WebFlyoutPosition. It is a remembered pixel position on one
         // machine's monitor layout, not a preference — copying it lands the flyout somewhere
         // arbitrary on a different display arrangement, or entirely off-screen. WebAnchor above

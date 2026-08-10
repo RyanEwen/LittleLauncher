@@ -1242,6 +1242,20 @@ public sealed class LauncherSettingsWindow : Window
             "Keep this flyout where you drag it; otherwise a move lasts until you close it",
             rememberToggle);
 
+        // ── Remember size ───────────────────────────────────────
+        // Stored inverted (WebLockSize) because this one is ON by default, and a bool defaulting
+        // to true cannot be turned off under WhenWritingDefault.
+        var rememberSizeToggle = new ToggleSwitch { IsOn = !launcher.WebLockSize, OnContent = "", OffContent = "", MinWidth = 0 };
+        rememberSizeToggle.Toggled += (_, _) =>
+        {
+            launcher.WebLockSize = !rememberSizeToggle.IsOn;
+            SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
+        };
+        var rememberSizeRow = BuildRow("Remember Size",
+            "Keep this flyout at the size you drag it to; otherwise it reopens at the size above",
+            rememberSizeToggle);
+
         // ── Profile ─────────────────────────────────────────────
         // A combo rather than a toggle: "shared with other launchers" is a statement about where
         // the sign-ins live, and naming both ends of it beats an unlabelled switch.
@@ -1347,7 +1361,7 @@ public sealed class LauncherSettingsWindow : Window
 
         // ── Advanced ────────────────────────────────────────────
         var advancedPanel = new StackPanel { Spacing = 12 };
-        foreach (var row in new[] { zoomRow, policyRow, idleRow, reloadRow, pinRow, anchorRow, rememberRow, trustRow, resetPermissionsRow, profileRow, clearRow })
+        foreach (var row in new[] { zoomRow, policyRow, idleRow, reloadRow, pinRow, anchorRow, rememberRow, rememberSizeRow, trustRow, resetPermissionsRow, profileRow, clearRow })
             advancedPanel.Children.Add(row);
 
         var advanced = new Expander

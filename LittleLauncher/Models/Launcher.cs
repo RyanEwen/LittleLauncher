@@ -425,6 +425,24 @@ public partial class Launcher : ObservableObject
     [ObservableProperty]
     public partial string WebFlyoutPosition { get; set; } = "";
 
+    /// <summary>
+    /// Hold the flyout at its configured size, making any drag-resize temporary.
+    /// </summary>
+    /// <remarks>
+    /// <para>Surfaced as <b>Remember Size</b>, which is <b>on</b> by default — so this property is
+    /// its inverse, and off means locked. A bool that defaults to <c>true</c> cannot be turned off
+    /// in this settings file: <c>WhenWritingDefault</c> drops <c>false</c> on save and the field
+    /// initialiser puts <c>true</c> back on load. See
+    /// <c>.claude/docs/user-settings.md</c>.</para>
+    /// <para>Locking is how a size is pinned down: set the width and height you want, turn Remember
+    /// Size off, and dragging the edges then only lasts as long as the flyout is open. It is the
+    /// same bargain the header's maximize makes, one step less drastic — and unlike maximize it is
+    /// a property of the launcher, because "this one is always this big" is a decision about the
+    /// launcher rather than about one viewing.</para>
+    /// </remarks>
+    [ObservableProperty]
+    public partial bool WebLockSize { get; set; }
+
     /// <summary>Bookmarks shown as a bar along the bottom of the web flyout.</summary>
     public ObservableCollection<WebBookmark> WebBookmarks { get; set; } = [];
 
