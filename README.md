@@ -30,6 +30,14 @@
 </p>
 
 <p align="center">
+  <img src="docs/web-launcher.png" alt="Web launcher — a Home Assistant dashboard in the flyout" width="270">
+  &nbsp;
+  <img src="docs/web-launcher-cameras.png" alt="Web launcher — camera feeds in the flyout" width="270">
+  &nbsp;
+  <img src="docs/web-launcher-video.png" alt="Web launcher — a video site in the flyout" width="270">
+</p>
+
+<p align="center">
   <img src="docs/icon-launcher-multiple-cols.png" alt="Flyout — icon view with multiple columns" width="720">
 </p>
 
