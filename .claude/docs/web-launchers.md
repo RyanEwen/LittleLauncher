@@ -390,6 +390,13 @@ worded in `DescribePermission`.
 - **Answers are saved into the launcher's WebView2 profile** (`SavesInProfile`), so they are per
   launcher like its cookies, and launchers on the shared profile answer once between them.
 
+**Trusted grants are also seeded up front** (`SeedTrustedPermissionsAsync`), for the launcher's own
+origins only. Saving on request is not enough on its own, because a well-built app *checks before it
+asks*: Teams reads `Notification.permission` on load, finds `default`, shows "Stay in the know. Turn
+on desktop notifications." and then renders its own in-page banners — because as far as it can tell
+the desktop cannot show them. Nothing is ever requested, so nothing is ever saved, and the prompt
+returns on every load forever. Seeding breaks the loop, so the first read already says `granted`.
+
 `Launcher.WebAllowAllPermissions` ("Trust This Site" in Advanced) grants everything without asking —
 and **saves those grants into the profile like any other answer**. It used to set
 `SavesInProfile = false` on the grounds that the toggle *is* the decision, which looks equivalent

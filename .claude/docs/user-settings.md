@@ -127,6 +127,11 @@ model default, which would have flipped it on for every existing launcher.
   its inverse**, which is the only phrasing that survives `WhenWritingDefault`; a `bool` defaulting
   to `true` cannot be turned off. `WebFlyoutWidth`/`WebFlyoutHeight` are then set deliberately, in
   launcher settings, and a drag cannot overwrite them
+- `WebBookmarkIconsOnly` (`bool`) — hide the labels in the bookmark bar, leaving just the
+  favicons; names become tooltips rather than being discarded. Bar-mode only, and edited in
+  the Bookmarks section rather than Advanced, because Advanced is shown for single-address
+  launchers too. It is part of the bar's rebuild signature, so toggling it re-renders
+  rather than handing back buttons built for the other mode
 - `WebPinFlyout` (`bool`) — stay open when focus is lost
 - `WebAllowAllPermissions` (`bool`) — grant camera, microphone, location and notifications without
   asking. Defaults `false` (ask), which is both the safe direction and the only one that survives

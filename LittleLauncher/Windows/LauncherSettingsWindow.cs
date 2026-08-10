@@ -384,9 +384,51 @@ public sealed class LauncherSettingsWindow : Window
         var (iconButton, customIconRow, refreshIconPreview) = BuildIconChooser(launcher);
         _refreshIconPreview = refreshIconPreview;
 
+        // ── Back to the page's own icon ──────────────────────────
+        // A web launcher adopts its page's icon until someone picks one, and picking one was a
+        // one-way door: every route out of Custom leads to another *chosen* icon, so there was no
+        // way back to "whatever the page says". This is that way back, and it only appears when
+        // there is something to undo.
+        var resetIconButton = new Button
+        {
+            Content = "Use page icon",
+            Padding = new Thickness(10, 6, 10, 6),
+            Visibility = launcher.IsWebLauncher && !WebFlyoutWindow.MayAdoptPageIcon(launcher)
+                ? Visibility.Visible
+                : Visibility.Collapsed,
+        };
+        ToolTipService.SetToolTip(resetIconButton, "Go back to the icon this launcher's page declares");
+        resetIconButton.Click += (_, _) =>
+        {
+            // The adopted state is Custom pointing at the managed page-icon path — that is exactly
+            // what MayAdoptPageIcon recognises, and it restores the real icon immediately when one
+            // has already been fetched. With nothing fetched yet, Composite is the "never chosen"
+            // state, so the next load adopts.
+            string adopted = WebFlyoutWindow.GetPageIconPath(launcher.Id);
+            if (File.Exists(adopted))
+            {
+                launcher.TrayIconMode = TrayIconModes.Custom;
+                launcher.CustomTrayIconPath = adopted;
+            }
+            else
+            {
+                launcher.TrayIconMode = TrayIconModes.Composite;
+                launcher.CustomTrayIconPath = "";
+            }
+
+            SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
+            resetIconButton.Visibility = Visibility.Collapsed;
+            refreshIconPreview();
+        };
+
         var iconRow = new Grid();
         iconRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         iconRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var iconButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
+        iconButtons.Children.Add(resetIconButton);
+        iconButtons.Children.Add(iconButton);
 
         var iconLabel = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         iconLabel.Children.Add(new TextBlock { Text = "Icon", FontSize = 14 });
@@ -394,9 +436,9 @@ public sealed class LauncherSettingsWindow : Window
         var iconSubtitle = new TextBlock { FontSize = 12, Opacity = 0.5, TextWrapping = TextWrapping.Wrap };
         iconLabel.Children.Add(iconSubtitle);
         Grid.SetColumn(iconLabel, 0);
-        Grid.SetColumn(iconButton, 1);
+        Grid.SetColumn(iconButtons, 1);
         iconRow.Children.Add(iconLabel);
-        iconRow.Children.Add(iconButton);
+        iconRow.Children.Add(iconButtons);
 
         // ── View mode combo ──────────────────────────────────────
         var viewModeCombo = new ComboBox { MinWidth = 160 };
@@ -786,6 +828,20 @@ public sealed class LauncherSettingsWindow : Window
                 }
 
                 int index = launcher.WebBookmarks.IndexOf(captured);
+
+                // A bookmark is named from its host when it is added, which is rarely what anyone
+                // would call it — and with an icons-only bar the name becomes the tooltip, so it is
+                // the only thing identifying the button.
+                buttons.Children.Add(Small("", "Rename", async () =>
+                {
+                    string? renamed = await TextPromptWindow.ShowAsync(
+                        "Rename bookmark", "Name", captured.Name, "Rename", _hwnd);
+                    if (renamed == null) return;
+
+                    captured.Name = string.IsNullOrWhiteSpace(renamed) ? HostOf(captured.Url) : renamed.Trim();
+                    Persist();
+                    Rebuild();
+                }));
                 buttons.Children.Add(Small("", "Move up", () =>
                 {
                     int i = launcher.WebBookmarks.IndexOf(captured);
@@ -897,11 +953,34 @@ public sealed class LauncherSettingsWindow : Window
             Margin = new Thickness(0, 12, 0, 4),
         };
 
+        // ── Bar appearance ──────────────────────────────────────
+        // Kept here rather than in Advanced: it is a property of the bar, and Advanced is shown for
+        // single-address launchers too, where a bookmark-bar option means nothing at all.
+        var iconsOnlyToggle = new ToggleSwitch
+        {
+            IsOn = launcher.WebBookmarkIconsOnly,
+            OnContent = "",
+            OffContent = "",
+            MinWidth = 0,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        iconsOnlyToggle.Toggled += (_, _) =>
+        {
+            launcher.WebBookmarkIconsOnly = iconsOnlyToggle.IsOn;
+            Persist();
+        };
+
+        var iconsOnlyRow = BuildRow("Icons Only",
+            "Hide the labels in the bar; names still show as tooltips",
+            iconsOnlyToggle);
+        iconsOnlyRow.Margin = new Thickness(0, 12, 0, 0);
+
         var body = new StackPanel();
         body.Children.Add(list);
         body.Children.Add(addRow);
         body.Children.Add(defaultLabel);
         body.Children.Add(defaultCombo);
+        body.Children.Add(iconsOnlyRow);
 
         Rebuild();
         RebuildDefaultCombo();

@@ -443,6 +443,17 @@ public partial class Launcher : ObservableObject
     [ObservableProperty]
     public partial bool WebLockSize { get; set; }
 
+    /// <summary>
+    /// Show only icons in the bookmark bar, without their labels.
+    /// </summary>
+    /// <remarks>
+    /// For a bar of familiar sites, the labels are the widest part of every button and say the
+    /// least — the favicon already identifies the page. Names still exist and become tooltips, so
+    /// nothing is lost, and a bar that scrolled now usually does not.
+    /// </remarks>
+    [ObservableProperty]
+    public partial bool WebBookmarkIconsOnly { get; set; }
+
     /// <summary>Bookmarks shown as a bar along the bottom of the web flyout.</summary>
     public ObservableCollection<WebBookmark> WebBookmarks { get; set; } = [];
 

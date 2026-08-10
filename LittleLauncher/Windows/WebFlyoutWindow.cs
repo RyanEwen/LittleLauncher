@@ -1182,7 +1182,9 @@ public sealed partial class WebFlyoutWindow : Window
             return;
         }
 
-        string signature = string.Join("", _launcher.WebBookmarks.Select(b => $"{b.Name}{b.Url}{b.IconPath}"));
+        // Icons-only is part of the signature: it changes what every button contains, so
+        // toggling it has to rebuild rather than hand back the buttons built for the other mode.
+        string signature = _launcher.WebBookmarkIconsOnly + "|" + string.Join("", _launcher.WebBookmarks.Select(b => $"{b.Name}{b.Url}{b.IconPath}"));
         if (!force && signature == _barSignature && _bookmarkStrip.Children.Count > 0)
         {
             // Same bookmarks as last time — the buttons are already built, laid out and decoded.
@@ -1217,13 +1219,18 @@ public sealed partial class WebFlyoutWindow : Window
             Visibility = icon.Source == null ? Visibility.Visible : Visibility.Collapsed,
         };
 
+        string caption = string.IsNullOrWhiteSpace(bookmark.Name) ? bookmark.Url : bookmark.Name;
+
         var label = new TextBlock
         {
-            Text = string.IsNullOrWhiteSpace(bookmark.Name) ? bookmark.Url : bookmark.Name,
+            Text = caption,
             FontSize = 12,
             VerticalAlignment = VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis,
             MaxWidth = 140,
+            // Icons-only hides the label rather than omitting it, so the name is still there to
+            // become a tooltip and the button rebuilds the same way either way.
+            Visibility = _launcher.WebBookmarkIconsOnly ? Visibility.Collapsed : Visibility.Visible,
         };
 
         // Both icons share one fixed 16px slot rather than sitting side by side in the stack.
@@ -1254,7 +1261,10 @@ public sealed partial class WebFlyoutWindow : Window
             Background = (Brush)Application.Current.Resources["SubtleFillColorTransparentBrush"],
             BorderThickness = new Thickness(0),
         };
-        ToolTipService.SetToolTip(button, bookmark.Url);
+        // With the labels hidden the name is the only thing identifying the button, so it leads the
+        // tooltip; with them shown the name is already on screen and the address is the useful part.
+        ToolTipService.SetToolTip(button,
+            _launcher.WebBookmarkIconsOnly ? $"{caption}\n{bookmark.Url}" : bookmark.Url);
         button.Click += (_, _) => OnBookmarkClicked(bookmark);
 
         // The icon arrives after the bookmark does — first from a favicon fetch, later replaced by
@@ -1949,6 +1959,10 @@ public sealed partial class WebFlyoutWindow : Window
         core.NotificationReceived += OnNotificationReceived;
 
         ApplyPendingPermissionReset(core);
+
+        // Before the page loads, so its first read of Notification.permission already says granted
+        // rather than prompting for something the launcher has already decided.
+        _ = SeedTrustedPermissionsAsync(core);
     }
 
     /// <summary>

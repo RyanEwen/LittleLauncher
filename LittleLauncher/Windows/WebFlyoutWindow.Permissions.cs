@@ -359,6 +359,69 @@ public sealed partial class WebFlyoutWindow
         }
     }
 
+    /// <summary>
+    /// Writes the grants "Trust This Site" implies into the profile before the page asks for them.
+    /// </summary>
+    /// <remarks>
+    /// <para>Saving a grant when the page asks (see <see cref="OnPermissionRequested"/>) is not
+    /// enough on its own, because a well-built app <b>checks before it asks</b>. Teams reads
+    /// <c>Notification.permission</c> on load, finds <c>default</c>, and shows "Stay in the know.
+    /// Turn on desktop notifications." — then renders its own in-page banners instead of real ones,
+    /// because as far as it can tell the desktop cannot show them. Nothing is ever requested, so
+    /// nothing is ever saved, and the prompt returns on every load forever.</para>
+    /// <para>Seeding breaks that loop: the answers the toggle already implies are written for the
+    /// launcher's own origins, so the very first read reports <c>granted</c> and the app goes
+    /// straight to real notifications. Only the four the toggle names, and only for this launcher's
+    /// own addresses — a trusted launcher is a statement about *its* site, not about every site its
+    /// pages happen to link to.</para>
+    /// </remarks>
+    private async Task SeedTrustedPermissionsAsync(CoreWebView2 core)
+    {
+        if (!_launcher.WebAllowAllPermissions) return;
+
+        CoreWebView2PermissionKind[] kinds =
+        [
+            CoreWebView2PermissionKind.Notifications,
+            CoreWebView2PermissionKind.Microphone,
+            CoreWebView2PermissionKind.Camera,
+            CoreWebView2PermissionKind.Geolocation,
+        ];
+
+        foreach (string origin in TrustedOrigins())
+        {
+            foreach (var kind in kinds)
+            {
+                try
+                {
+                    await core.Profile.SetPermissionStateAsync(kind, origin, CoreWebView2PermissionState.Allow);
+                }
+                catch (Exception ex)
+                {
+                    Logger.Debug(ex, "Seeding {Kind} for {Origin} failed", kind, origin);
+                }
+            }
+        }
+    }
+
+    /// <summary>The origins this launcher is actually pointed at — its address, or its bookmarks.</summary>
+    private IEnumerable<string> TrustedOrigins()
+    {
+        var urls = IsBarMode
+            ? _launcher.WebBookmarks.Select(b => b.Url)
+            : [_launcher.ResolvedSingleWebUrl];
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string url in urls)
+        {
+            if (string.IsNullOrWhiteSpace(url)) continue;
+            if (!Uri.TryCreate(NormalizeUrl(url), UriKind.Absolute, out var uri)) continue;
+
+            // The form WebView2 stores and reports: scheme, host, port, trailing slash.
+            string origin = uri.GetLeftPart(UriPartial.Authority) + "/";
+            if (seen.Add(origin)) yield return origin;
+        }
+    }
+
     /// <summary>Applies a reset that was asked for while this launcher had no browser.</summary>
     private void ApplyPendingPermissionReset(CoreWebView2 core)
     {
