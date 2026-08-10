@@ -380,3 +380,6 @@ token.txt
 
 # Local build secrets — OAuth client secrets injected at compile time, never committed
 local.secrets.props
+
+# Local crash diagnostics (cdb scripts, dumps)
+.crashdiag/

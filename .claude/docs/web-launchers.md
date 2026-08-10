@@ -51,6 +51,10 @@ This is the whole point of the feature, so it is the thing not to regress.
 - **`WarmUp` deliberately skips web launchers.** The flyout is pre-rendered at startup because its
   content is expensive to re-rasterise; doing that for a browser would boot a renderer for a page
   the user may never open, which is exactly the cost this feature exists to avoid.
+- **The staggering timer must be a field.** A `DispatcherQueueTimer` lives only as long as
+  something references it, so the local one this shipped with was collectable the moment
+  `PreloadKeepRunning` returned — and ten seconds is ample. Preload silently never ran: no log line,
+  no browser, nothing to see. Every other timer in the class is a field for the same reason.
 - **`KeepRunning` launchers are the exception, and are preloaded at startup**
   (`PreloadKeepRunning`). The rule above is about pages the user may never open; this policy is the
   user saying the opposite outright, and the only reason to say it is notifications. Without the
@@ -182,6 +186,27 @@ takes the whole monitor over the taskbar, hides the chrome and squares the corne
 the header, the corners and the taskbar — the tray icon it was opened from stays reachable. The
 two compose in the obvious direction: a page going fullscreen from a maximized flyout restores to
 maximized afterwards.
+
+## Restoring keyboard focus
+
+Dismissing the flyout while typing and reopening it used to land the caret nowhere: the show path
+calls `SetFocus` on the flyout's top-level window and nothing routes that into the WebView2, so the
+page came back unfocused and the user had to click into it again.
+
+Chromium keeps everything else by itself — measured, a caret left at offset 9 in a textarea came back
+at offset 9 across a hide/show, with `document.activeElement` unchanged. So the fix is only to hand
+focus back: `RestorePageFocus` calls `Focus(FocusState.Programmatic)` on the control once it is
+visible, queued rather than inline because focusing a control in the same layout pass that revealed
+it does not take.
+
+**Only when the page had focus before** (`_pageHadFocus`, armed by the browser's `GotFocus`). That
+restriction is what keeps it free: focus in the page means Escape belongs to the page — `WM_KEYDOWN`
+goes to the browser's child windows and never reaches this window's subclass — so restoring it
+unconditionally would quietly take Escape-to-dismiss away from every launcher. Restoring it only for
+someone who was already typing trades the key away exactly where they had already given it up.
+
+Skipped while a permission prompt is up: a question that cannot be typed into is worse than a caret
+that has to be clicked back into.
 
 ## Opening launcher settings from the flyout
 

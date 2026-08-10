@@ -108,6 +108,24 @@ public sealed partial class WebFlyoutWindow : Window
 
     /// <summary>True when each bookmark keeps its own browser rather than sharing one.</summary>
     private bool TabsEnabled => IsBarMode && _launcher.WebBookmarksAsTabs;
+
+    /// <summary>
+    /// True once the user has put keyboard focus into the page, so a reopen should put it back.
+    /// </summary>
+    /// <remarks>
+    /// <para>Chromium keeps the rest by itself: across a dismissal the document's
+    /// <c>activeElement</c> and the caret position both survive — measured, a caret left at offset 9
+    /// in a textarea came back at offset 9. The only thing missing was anyone handing focus back to
+    /// the browser, because the show path calls <c>SetFocus</c> on the flyout's top-level window and
+    /// nothing routes that into the WebView2.</para>
+    /// <para><b>Only when the page had focus</b>, which is what keeps this from costing anything.
+    /// Focus in the page means Escape belongs to the page — <c>WM_KEYDOWN</c> goes to the browser's
+    /// child windows and never reaches this window's subclass — so restoring it unconditionally
+    /// would quietly take Escape-to-dismiss away from every launcher. Restoring it only for someone
+    /// who was already typing in the page trades the key away exactly where they had already given
+    /// it up, and leaves it working everywhere else.</para>
+    /// </remarks>
+    private bool _pageHadFocus;
     private bool _webViewInitializing;
 
     /// <summary>
@@ -922,7 +940,13 @@ public sealed partial class WebFlyoutWindow : Window
         var queue = new Queue<Launcher>(launchers.Where(NeedsPreload));
         if (queue.Count == 0) return;
 
-        var timer = owner.DispatcherQueue.CreateTimer();
+        // Held in a static field, not a local. A DispatcherQueueTimer is only kept alive by
+        // something referencing it: a local one is collectable the moment this method returns, and
+        // ten seconds is ample for that to happen — which is exactly what went wrong. Preload
+        // silently never ran, with no log line and nothing to see, because the timer was gone
+        // before it could tick. Every other timer in this class is a field for the same reason.
+        _preloadQueueTimer?.Stop();
+        var timer = _preloadQueueTimer = owner.DispatcherQueue.CreateTimer();
         timer.Interval = TimeSpan.FromSeconds(PreloadFirstDelaySeconds);
         timer.IsRepeating = false;
 
@@ -957,6 +981,9 @@ public sealed partial class WebFlyoutWindow : Window
         timer.Tick += Next;
         timer.Start();
     }
+
+    /// <summary>The staggering timer, rooted so the garbage collector cannot take it mid-wait.</summary>
+    private static Microsoft.UI.Dispatching.DispatcherQueueTimer? _preloadQueueTimer;
 
     private const int PreloadFirstDelaySeconds = 10;
     private const int PreloadStaggerSeconds = 6;
@@ -1944,6 +1971,7 @@ public sealed partial class WebFlyoutWindow : Window
 
         // Nothing queued: the page is live and current, so show it straight away.
         _webView.Visibility = Visibility.Visible;
+        RestorePageFocus();
     }
 
     private async Task CreateWebViewAsync()
@@ -1962,6 +1990,9 @@ public sealed partial class WebFlyoutWindow : Window
         // change while a browser is starting.
         string tabKey = NormalizeUrl(CurrentTargetUrl());
         RegisterTab(tabKey, webView);
+
+        // Clicking into the page is what arms the focus restore; see _pageHadFocus.
+        webView.GotFocus += (_, _) => _pageHadFocus = true;
 
         try
         {
@@ -2421,11 +2452,36 @@ public sealed partial class WebFlyoutWindow : Window
     }
 
     /// <summary>Shows the browser again once the content it was waiting for has arrived.</summary>
+    /// <summary>
+    /// Hands keyboard focus back to the page, so the caret returns to wherever it was left.
+    /// </summary>
+    /// <remarks>
+    /// Nothing is remembered here beyond "the page had focus": Chromium restores the document's
+    /// own <c>activeElement</c> and selection by itself once the widget is focused again. Skipped
+    /// while a prompt is up, because a permission question that cannot be typed into is worse than
+    /// a caret that has to be clicked back into.
+    /// </remarks>
+    private void RestorePageFocus()
+    {
+        if (!_pageHadFocus || IsPromptOpen) return;
+        if (_webView == null || _webView.Visibility != Visibility.Visible) return;
+
+        // Queued rather than called inline: the browser has just been made visible, and focusing a
+        // control in the same layout pass that revealed it does not take.
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (!_isOpen || _webView == null || _webView.Visibility != Visibility.Visible) return;
+            try { _webView.Focus(FocusState.Programmatic); }
+            catch (Exception ex) { Logger.Debug(ex, "Restoring page focus failed for launcher {Name}", _launcher.Name); }
+        });
+    }
+
     private void RevealWebViewIfPending()
     {
         if (!_revealOnNavigationCompleted) return;
         _revealOnNavigationCompleted = false;
         if (_webView != null) _webView.Visibility = Visibility.Visible;
+        RestorePageFocus();
     }
 
     private void ReloadPage()
