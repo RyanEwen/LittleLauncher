@@ -272,6 +272,9 @@ public sealed partial class WebFlyoutWindow
             return;   // not ours; a page is free to post whatever it likes
         }
 
+        // Released on this thread once read; the finalizer releasing it is what kills the process.
+        try
+        {
         string? kind = message?["__ll"]?.GetValue<string>();
         if (kind == "swScript")
         {
@@ -287,6 +290,8 @@ public sealed partial class WebFlyoutWindow
                 RememberNotificationSource(tag, sender);
             }
         }
+        }
+        finally { ReleaseWebViewObject(e); }
     }
 
     /// <summary>Starts intercepting one worker script, so the next fetch of it arrives wrapped.</summary>
@@ -388,8 +393,10 @@ public sealed partial class WebFlyoutWindow
         finally
         {
             // Never skipped: an incomplete deferral leaves the worker's script request hanging, and
-            // with it the whole registration.
+            // with it the whole registration. The args are released only *after* it completes —
+            // they are live for as long as the deferral is.
             deferral.Complete();
+            ReleaseWebViewObject(e);
         }
     }
 

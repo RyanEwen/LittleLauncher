@@ -106,18 +106,51 @@ public sealed partial class WebFlyoutWindow
     /// the projection releases our reference only — the browser holds its own — and suppresses the
     /// finalizer, which is the half that was doing the damage.</para>
     /// </remarks>
+    /// <summary>Whether the release path has been reported yet this session. See below.</summary>
+    private static bool _releasePathLogged;
+
     private static void ReleaseWebViewObject(object? projected)
     {
-        if (projected is not WinRT.IWinRTObject winrt) return;
+        if (projected == null) return;
 
         try
         {
-            winrt.NativeObject.Dispose();
+            // Two shapes, because the app has both WebView2 assemblies on hand — the CsWinRT
+            // projection and the plain .NET wrapper — and which one a given type comes from is not
+            // obvious from the call site. A silent `is` miss here is indistinguishable from a fix
+            // that works, which is exactly the trap the previous attempt fell into, so the path
+            // taken is reported once per session.
+            if (projected is WinRT.IWinRTObject winrt)
+            {
+                winrt.NativeObject.Dispose();
+                ReportReleasePath("CsWinRT projection", projected);
+                return;
+            }
+
+            if (projected is IDisposable disposable)
+            {
+                disposable.Dispose();
+                ReportReleasePath("IDisposable", projected);
+                return;
+            }
+
+            // Nothing to dispose: this object will be released by the finalizer, on the finalizer
+            // thread, which is the thing that kills the process.
+            ReportReleasePath("NONE — object will be finalized", projected);
         }
         catch (Exception ex)
         {
             NLog.LogManager.GetCurrentClassLogger().Debug(ex, "Releasing a WebView2 object failed");
         }
+    }
+
+    private static void ReportReleasePath(string path, object projected)
+    {
+        if (_releasePathLogged) return;
+        _releasePathLogged = true;
+
+        NLog.LogManager.GetCurrentClassLogger().Info(
+            "WebView2 release path for {Type}: {Path}", projected.GetType().FullName, path);
     }
 
     /// <summary>Detaches from a tracked notification and releases it on this thread.</summary>
@@ -274,6 +307,9 @@ public sealed partial class WebFlyoutWindow
         }
 
         if (allowed) OnPermissionGranted(args.PermissionKind);
+
+        // Answered and completed, so the args are ours to let go of — on this thread.
+        ReleaseWebViewObject(args);
     }
 
     /// <summary>

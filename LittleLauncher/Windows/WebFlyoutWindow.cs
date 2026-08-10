@@ -2078,8 +2078,13 @@ public sealed partial class WebFlyoutWindow : Window
         // whatever size the flyout happens to be.
         core.ContainsFullScreenElementChanged += (_, _) => ApplyFullScreen(core.ContainsFullScreenElement);
 
+        // Every WebView2 object handed to a handler is released here, on the UI thread, rather than
+        // left for the finalizer — see ReleaseWebViewObject. The captured crash was one of these
+        // being collected on the .NET Finalizer thread.
         core.NavigationCompleted += (_, e) =>
         {
+            try
+            {
             if (e.IsSuccess)
             {
                 HideStatus();
@@ -2100,6 +2105,8 @@ public sealed partial class WebFlyoutWindow : Window
 
             SetStatus($"Could not load {NormalizeUrl(_launcher.WebUrl)} ({e.WebErrorStatus}).",
                 busy: false, showRetry: true);
+            }
+            finally { ReleaseWebViewObject(e); }
         };
 
         core.ProcessFailed += (_, _) =>
