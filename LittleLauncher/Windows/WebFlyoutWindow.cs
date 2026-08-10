@@ -1670,6 +1670,13 @@ public sealed partial class WebFlyoutWindow : Window
         if (_webView == null) return;   // unloaded while initialising
 
         ConfigureCore(_webView.CoreWebView2);
+
+        // Awaited, and before Navigate: a document-created script added after the navigation has
+        // started misses the very page the flyout was opened to show.
+        await InstallNotificationBridgeAsync(_webView.CoreWebView2);
+
+        if (_webView == null) return;   // unloaded while the script was being installed
+
         ApplyZoom();
 
         // CurrentTargetUrl, not WebUrl: in bar mode the address is whichever bookmark was

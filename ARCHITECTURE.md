@@ -118,6 +118,12 @@ notifications become Windows toasts that reopen the launcher they came from. Not
 running page, which is exactly what the resource model above takes away, so granting them **offers**
 to move the launcher to `KeepRunning` rather than changing it silently.
 
+WebView2 reports only *non-persistent* notifications (`new Notification(...)`); one raised through
+`ServiceWorkerRegistration.showNotification()` is created inside Chromium and never reaches the
+host, so it is shown nowhere and dropped in silence. Since that persistent API is the one every
+messaging site actually uses, a document-created script rewrites it in the page to the flavour the
+host can see — tag replacement and `getNotifications()` included.
+
 See [.claude/docs/web-launchers.md](.claude/docs/web-launchers.md) for the WinUI WebView2 limits
 worked around (no controller access, so zoom is CSS; focus-loss must be re-verified against
 `GetForegroundWindow` because the browser's HWNDs are children of the window).

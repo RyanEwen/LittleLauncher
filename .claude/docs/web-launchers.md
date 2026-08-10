@@ -397,6 +397,47 @@ driven from it — `ReportShown` when Windows accepts the toast, `ReportClicked`
 - `_liveNotifications` is **capped**, not trusted to drain: a toast the user simply ignores reports
   nothing back, so entries would otherwise accumulate for the life of the app.
 
+#### WebView2 only reports *non-persistent* notifications — hence the bridge
+
+This is the single fact that decides whether any of this works, and it is easy to miss because
+nothing fails loudly.
+
+`ICoreWebView2_24::add_NotificationReceived` fires for `new Notification(...)` **only**. A
+notification raised through `ServiceWorkerRegistration.showNotification()` — the *persistent* API —
+is created inside Chromium, resolves its promise, is returned by the page's own
+`getNotifications()`, and **is never surfaced to the host at all**. It is displayed nowhere and
+dropped in silence. Measured against a probe host on WebView2 151.0.4129.72: page-context
+`new Notification` raised the event, `registration.showNotification` raised nothing, and the page
+could not tell the difference.
+
+That would leave every messaging launcher permanently silent, because the persistent API is the one
+real apps use — WhatsApp Web, Discord, Messenger, Google Messages, Teams and Home Assistant all
+register service workers that call `showNotification`. So `NotificationBridgeScript`
+(`InstallNotificationBridgeAsync`) rewrites `ServiceWorkerRegistration.prototype.showNotification`
+in the page to construct a non-persistent notification instead, which the host does see.
+
+- **It is awaited before the first `Navigate`.** A document-created script added after the
+  navigation has started misses the one page the flyout was opened to show.
+- **It reimplements the two behaviours a page can observe**: a repeated `tag` closes the earlier
+  notification, and `getNotifications()` returns what is still on screen. Chat apps use both to keep
+  one entry per conversation and to clear it when the thread is read.
+- **It falls back to the original method on any error**, so a future WebView2 that supports this
+  natively is left alone.
+- **The toast honours the tag too** — `SetTag` plus `SetGroup` on the launcher id, so Windows
+  replaces rather than stacks, and two launchers on the same site cannot collide on a thread id.
+  `ToastIdentifier` hashes anything over the 64-character limit.
+
+**What the bridge cannot reach is the service worker itself.** Document-created scripts run in
+document contexts only, so a `showNotification` called from inside a worker — a push handler,
+typically — still has no host-visible path in this SDK, and there is nothing above the WebView2
+layer that can add one. That is an acceptable line to stop at: a page-raised notification is exactly
+the case that matters for a launcher that is kept running, and a push arriving while nothing is
+loaded was never going to work anyway, because the resource model has already closed the browser.
+
+One behaviour does change and is worth knowing: a bridged notification is clicked in the *page*, so
+the site's service-worker `notificationclick` handler does not run. The toast still opens the
+launcher it came from, which is the useful half of what that handler would have done.
+
 ### Notifications need the browser alive — which the resource contract does not
 
 This is the tension worth understanding before changing either side. A dismissed flyout suspends its

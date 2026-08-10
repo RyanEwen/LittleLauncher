@@ -349,6 +349,109 @@ public sealed partial class WebFlyoutWindow
     // ── Notifications ───────────────────────────────────────────────
 
     /// <summary>
+    /// Script that routes <c>registration.showNotification()</c> through <c>new Notification()</c>,
+    /// which is the only notification API WebView2 tells the host about.
+    /// </summary>
+    /// <remarks>
+    /// <para>See <see cref="InstallNotificationBridgeAsync"/> for why this is needed at all. The
+    /// shim keeps the two behaviours a page can actually observe: replacing a notification that
+    /// shares a <c>tag</c>, and <c>getNotifications()</c> returning what is still on screen — chat
+    /// apps use both to collapse an updated conversation into one entry and to clear it once the
+    /// thread is read.</para>
+    /// <para>It never throws away the real call: anything unexpected falls back to the original
+    /// method, so a page on a future WebView2 that does support this is left exactly as it was.</para>
+    /// </remarks>
+    private const string NotificationBridgeScript = """
+        (function () {
+            if (!window.ServiceWorkerRegistration || !window.Notification) return;
+
+            var proto = ServiceWorkerRegistration.prototype;
+            var original = proto.showNotification;
+            if (!original || original.__littleLauncherShim) return;
+
+            var live = [];
+
+            function shim(title, options) {
+                try {
+                    var o = options || {};
+
+                    // A persistent notification replaces any earlier one with the same tag.
+                    if (o.tag) {
+                        for (var i = live.length - 1; i >= 0; i--) {
+                            if (live[i].tag === o.tag) {
+                                try { live[i].close(); } catch (e) { }
+                                live.splice(i, 1);
+                            }
+                        }
+                    }
+
+                    var n = new Notification(title, {
+                        body: o.body, icon: o.icon, badge: o.badge, image: o.image,
+                        tag: o.tag, data: o.data, dir: o.dir, lang: o.lang,
+                        silent: o.silent, timestamp: o.timestamp,
+                        requireInteraction: o.requireInteraction
+                    });
+
+                    n.addEventListener('close', function () {
+                        var j = live.indexOf(n);
+                        if (j >= 0) live.splice(j, 1);
+                    });
+
+                    live.push(n);
+                    while (live.length > 64) live.shift();
+
+                    return Promise.resolve();
+                } catch (e) {
+                    return original.apply(this, arguments);
+                }
+            }
+
+            shim.__littleLauncherShim = true;
+            proto.showNotification = shim;
+
+            proto.getNotifications = function (filter) {
+                var tag = (filter || {}).tag;
+                return Promise.resolve(tag ? live.filter(function (n) { return n.tag === tag; }) : live.slice());
+            };
+        })();
+        """;
+
+    /// <summary>
+    /// Installs the shim that makes a page's notifications reach the host at all.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>WebView2 raises <c>NotificationReceived</c> for non-persistent notifications only</b>
+    /// — the ones built with <c>new Notification(...)</c>. A notification raised through
+    /// <c>ServiceWorkerRegistration.showNotification()</c> is created inside Chromium, is visible to
+    /// the page through <c>getNotifications()</c>, and is never surfaced to the host, so it is shown
+    /// nowhere and dropped in silence. That is the API's contract, not a bug here: the interface is
+    /// <c>ICoreWebView2_24</c> and its documentation says "non-persistent" outright.</para>
+    /// <para>It matters because the persistent API is the one real apps use — WhatsApp, Discord,
+    /// Messenger, Teams and Google Messages all raise notifications that way, so without this every
+    /// messaging launcher is silent no matter what its permissions or hidden policy say. Rewriting
+    /// the call in the page turns them back into the flavour the host can see.</para>
+    /// <para><b>What this cannot reach is the service worker itself.</b> Document-created scripts
+    /// run in document contexts only, and a <c>showNotification</c> called from inside a worker —
+    /// a push handler, typically — has no host-visible path at all in this SDK. A page-raised
+    /// notification is the case that matters for a launcher that is kept running; a push arriving
+    /// while nothing is loaded was never going to work anyway, since the resource model has already
+    /// closed the browser by then.</para>
+    /// <para>Awaited before the first navigation, or the page the flyout opens on is the one page
+    /// that misses it.</para>
+    /// </remarks>
+    private async Task InstallNotificationBridgeAsync(CoreWebView2 core)
+    {
+        try
+        {
+            await core.AddScriptToExecuteOnDocumentCreatedAsync(NotificationBridgeScript);
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn(ex, "Installing the notification bridge failed for launcher {Name}", _launcher.Name);
+        }
+    }
+
+    /// <summary>
     /// Turns a page's notification into a Windows toast.
     /// </summary>
     /// <remarks>
@@ -376,6 +479,16 @@ public sealed partial class WebFlyoutWindow
             if (!string.IsNullOrWhiteSpace(notification.Body))
                 builder.AddText(notification.Body);
 
+            // A tag means "this replaces the one I sent before" — how a chat app keeps one entry
+            // per conversation instead of a stack of them. Windows does that replacement by
+            // tag+group, so the group is the launcher: two launchers on the same site would
+            // otherwise collide on a tag as generic as a thread id.
+            if (!string.IsNullOrWhiteSpace(notification.Tag))
+            {
+                builder.SetTag(ToastIdentifier(notification.Tag));
+                builder.SetGroup(ToastIdentifier(_launcher.Id));
+            }
+
             // The launcher's own icon, not the notification's: notification.IconUri is a page URL
             // that Windows would have to fetch itself, and for a self-hosted dashboard behind a
             // login it would fetch a redirect. The adopted page icon is already on disk.
@@ -397,6 +510,24 @@ public sealed partial class WebFlyoutWindow
             _liveNotifications.Remove(key);
             Logger.Warn(ex, "Showing a page notification failed for launcher {Name}", _launcher.Name);
         }
+    }
+
+    /// <summary>
+    /// Makes a page-supplied string safe to use as a Windows toast tag or group.
+    /// </summary>
+    /// <remarks>
+    /// Both are capped at 64 characters, and a page's tag is arbitrary text — a URL, a thread id,
+    /// occasionally something long enough to be rejected outright. Hashing anything that does not
+    /// fit keeps the one property that matters: the same tag maps to the same identifier, which is
+    /// what makes Windows replace the earlier toast rather than stack another one.
+    /// </remarks>
+    private static string ToastIdentifier(string value)
+    {
+        var cleaned = new string([.. value.Where(char.IsLetterOrDigit)]);
+        if (cleaned.Length is > 0 and <= 64) return cleaned;
+
+        byte[] hash = System.Security.Cryptography.MD5.HashData(System.Text.Encoding.UTF8.GetBytes(value));
+        return Convert.ToHexString(hash);
     }
 
     /// <summary>
