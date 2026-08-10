@@ -20,6 +20,7 @@ Little Launcher uses a flat upright rocket as its identity icon. The **app ident
 | **Start menu shortcut** | `exe,0` (embedded icon) | No — always Blue rocket |
 | **Exe embedded icon** | `Resources/LittleLauncher.ico` (compiled into exe) | No — always Blue rocket |
 | **Pin-to-taskbar dialog** | Per-launcher `app-icon-{id}.ico` loaded via `WM_SETICON` in companion exe | Yes (per launcher `TrayIconMode`) |
+| **Windows notifications (per launcher)** | `toast-icon-{id}.png` written by `SaveToastIconToAppData(Launcher)` | Yes (per launcher `TrayIconMode`) |
 
 ## Key Files
 
@@ -27,6 +28,10 @@ Little Launcher uses a flat upright rocket as its identity icon. The **app ident
 - **`Resources/AppIcons/*.png`** — Preset icon PNGs (Blue, Green, Teal, Red, Orange, Purple). Flat upright rockets stretched 20% horizontally for a wider profile. Copied to output at build time. Loaded at runtime by `ResolveBaseIconBitmap()`.
 - **`<AppDataDir>/app-icon-{launcherId}.ico`** — Per-launcher runtime icon. Written by `SaveResolvedIconToAppData(Launcher)`. The first launcher's icon is also copied to `app-icon.ico` by this method.
 - **`<AppDataDir>/app-icon-{launcherId}-pin{tick}.ico`** — Timestamped copy created at pin time. Used by the companion exe for both `LoadImage` (WM_SETICON) and `RelaunchIconResource`. Windows caches icon bitmaps per file path, so each pin gets a unique filename. `CleanUpStaleIconFiles()` keeps only the most recent per launcher.
+- **`<AppDataDir>/toast-icon-{launcherId}.png`** — Per-launcher notification icon, 256px PNG.
+  Written by `SaveToastIconToAppData(Launcher)` from the same `ResolveBaseIconBitmap` every
+  other surface uses. **PNG, not `.ico`:** the notification platform does not render
+  multi-image icon files, so pointing `SetAppLogoOverride` at one shows nothing at all.
 - **`<AppDataDir>/app-icon.ico`** — Canonical icon for shortcuts (always mirrors first launcher's icon). Used by `.lnk` shortcuts and the Settings window.
 - **`<AppDataDir>/settings-icon.ico`** — Runtime-generated icon: the current app icon composited with a gear glyph overlay (dark circle + white gear in bottom-right corner). Written by `SaveSettingsIconToAppData()`. Used by the Settings window.
 - **`<AppDataDir>/LittleLauncherFlyout.exe`** — Copy of the companion exe deployed by `EnsureFlyoutShortcut()` for all build types. Pinning uses this copy.
@@ -92,6 +97,8 @@ Tray icons are registered with Shell_NotifyIcon using a stable `guidItem` derive
 | `BitmapToIcoBytes(Bitmap)` | Converts bitmap to raw multi-resolution ICO byte array (16–256px). Bypasses `System.Drawing.Icon.Save()` which loses multi-resolution data on .NET |
 | `BitmapToIcon(Bitmap)` | Calls `BitmapToIcoBytes()` then wraps in `System.Drawing.Icon` |
 | `ResolveTrayIcon(Launcher)` | `ResolveBaseIconBitmap(Launcher)` → `BitmapToIcon()` |
+| `SaveToastIconToAppData(Launcher)` | `ResolveBaseIconBitmap(Launcher)` → 256px PNG → write `toast-icon-{id}.png` for Windows notifications |
+| `EnsureToastIconSaved(Launcher)` | Static. Returns that path, writing it first if absent — the notification path calls this |
 | `SaveResolvedIconToAppData(Launcher)` | `ResolveBaseIconBitmap(Launcher)` → `BitmapToIcoBytes()` → write `app-icon-{id}.ico`; copies to `app-icon.ico` for first launcher |
 | `SaveSettingsIconToAppData()` | First launcher's `ResolveBaseIconBitmap()` → gear overlay → `BitmapToIcon()` → write file |
 | `RefreshLauncherIcon(Launcher)` | Batch-friendly: updates tray HICON + writes .ico to disk only (no settings save, no cleanup, no settings window refresh) |
@@ -274,6 +281,13 @@ After any bulk icon change, call `FlyoutWindow.InvalidateItems()` so the flyout 
 - **`LauncherItem.IconGlyph` must be a Unicode character**, not a text name. Use `""` (globe, `U+E774`) for websites and `""` (open, `U+E8E5`) for apps. Text strings like `"Globe24"` render as rectangle tofu in `FontIcon`.
 - **`LauncherItem.IconGlyph` can be an emoji character** (e.g. `"🚀"`, `"💻"`). Use `IconGallery.IsFluentGlyph()` to determine whether a glyph is a Segoe Fluent icon (PUA range U+E000–U+F8FF) or an emoji. Fluent glyphs render via `FontIcon`; emojis render via `TextBlock`. The `IsFluentGlyphConverter` XAML converter handles this in data templates. In `System.Drawing` code (composite tray icon), use `"Segoe UI Emoji"` font for emoji glyphs instead of `"Segoe Fluent Icons"`.
 - **Icon Gallery** (`Classes/IconGallery.cs`) provides a gallery-style Flyout for choosing glyphs, emojis, bundled app color icons, selfh.st catalog icons, or custom images. It is shown from the item edit dialog via a "Choose" button and from the launcher icon chooser. The item gallery has tabs (Glyphs, Emoji, App Icons, selfh.st) plus a color palette for choosing glyph colors; the launcher tray icon gallery now exposes presets, glyphs, emojis, and a selfh.st tab that feeds image-based selections into `TrayIconModes.Custom`. Selected colors are returned in `IconResult.Color` and stored as `LauncherItem.IconColor` (hex string) or encoded in the launcher `TrayIconMode` string (`"Glyph:#RRGGBB:X"`). selfh.st icons are fetched manually from the public catalog/index and cached locally as `AppData\LittleLauncher\icons\selfhst-{reference}.png` when selected. When a selfh.st tab is active, the gallery shows attribution links for selfh.st and the CC BY 4.0 license in the footer. When opened, the gallery pre-selects the current icon: it opens the correct tab, highlights the matching color swatch, and highlights + selects the matching icon button so the user can immediately Confirm or change just the color. Pre-selection is driven by `currentGlyph`/`currentColor`/`currentImagePath` params on `CreateFlyout()` and by parsing `currentMode` in `CreateLauncherIconFlyout()`.
+- **A notification's icon comes from `toast-icon-{id}.png`, not the adopted page icon.** It used
+  to read `web-favicon-{id}.png` directly, which is written *only* for a web launcher nobody
+  has chosen an icon for — so a launcher wearing a custom image or a glyph had no file at
+  that path, `SetAppLogoOverride` was skipped, and Windows fell back to Little Launcher's own
+  logo. Every toast showed the app's icon rather than the site's, upscaled from the small
+  manifest logo and blurry with it. Resolving through `ResolveBaseIconBitmap` fixes both at
+  once: the right icon, at 256px.
 - The bundled `.ico` is the Blue rocket only — it's the exe identity icon and fallback.
 - Tray visibility state is now tied to each launcher's stable GUID identity via `NOTIFYICONDATA.guidItem`, not the runtime-assigned `uID`. Launcher reordering, name changes, and icon changes do not reset the user's tray preference; deleting/recreating a launcher still will.
 - `SaveResolvedIconToAppData()` always writes an `.ico` for all modes (including mode 0). There is no "delete and fall back to exe icon" path.

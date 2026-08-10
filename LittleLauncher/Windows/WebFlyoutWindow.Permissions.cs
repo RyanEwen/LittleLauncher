@@ -664,9 +664,15 @@ public sealed partial class WebFlyoutWindow
 
             // The launcher's own icon, not the notification's: notification.IconUri is a page URL
             // that Windows would have to fetch itself, and for a self-hosted dashboard behind a
-            // login it would fetch a redirect. The adopted page icon is already on disk.
-            string iconPath = GetPageIconPath(_launcher.Id);
-            if (System.IO.File.Exists(iconPath))
+            // login it would fetch a redirect.
+            //
+            // Resolved the way every other surface resolves it, rather than reading the adopted
+            // page icon directly. That file only exists for a web launcher nobody has chosen an
+            // icon for, so a launcher wearing a custom image or a glyph had nothing at that path
+            // and Windows fell back to Little Launcher's own logo — every toast showed the app's
+            // icon instead of the site's, upscaled from the small manifest logo and blurry with it.
+            string? iconPath = MainWindow.EnsureToastIconSaved(_launcher);
+            if (iconPath != null && System.IO.File.Exists(iconPath))
                 builder.SetAppLogoOverride(new Uri(iconPath));
 
             AddNotificationActions(builder, tag);

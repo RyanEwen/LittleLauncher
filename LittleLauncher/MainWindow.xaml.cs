@@ -947,6 +947,55 @@ public sealed partial class MainWindow : Window
     internal static void EnsureLauncherIconSaved(Launcher launcher) =>
         SaveResolvedIconToAppData(launcher);
 
+    /// <summary>Where a launcher's notification icon lives. PNG, because a toast cannot use an .ico.</summary>
+    internal static string GetToastIconPath(string launcherId) =>
+        Path.Combine(GetPhysicalAppDataDir(), $"toast-icon-{launcherId}.png");
+
+    /// <summary>
+    /// Writes the launcher's resolved icon as a PNG for Windows notifications to show, and returns
+    /// its path.
+    /// </summary>
+    /// <remarks>
+    /// <para>A toast used to carry no launcher icon at all: the notification code looked only for
+    /// the *adopted page* icon, which is written solely for a web launcher that has not had an icon
+    /// chosen for it — so a launcher with a custom image or a glyph had no file at that path and
+    /// Windows fell back to Little Launcher's own logo. Every notification therefore wore the app's
+    /// icon rather than the site's, blurred by being scaled up from the small logo the manifest
+    /// declares.</para>
+    /// <para>Resolved through <see cref="ResolveBaseIconBitmap"/> like every other surface, so a
+    /// toast shows exactly what the tray shows — composite, preset, glyph, adopted favicon or
+    /// custom image alike — at the 256px that bitmap is already produced at, comfortably above what
+    /// a toast asks for at any DPI.</para>
+    /// <para>PNG rather than the existing <c>.ico</c>: the notification platform does not render
+    /// multi-image icon files, and pointing it at one is how you get nothing at all.</para>
+    /// </remarks>
+    internal static string? SaveToastIconToAppData(Launcher launcher)
+    {
+        try
+        {
+            string path = GetToastIconPath(launcher.Id);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+
+            using var bitmap = ResolveBaseIconBitmap(launcher);
+            if (bitmap == null) return null;
+
+            bitmap.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+            return path;
+        }
+        catch (Exception ex)
+        {
+            Logger.Debug(ex, "Saving the notification icon failed for launcher {Name}", launcher.Name);
+            return null;
+        }
+    }
+
+    /// <summary>Returns the launcher's notification icon, writing it first if it is not there yet.</summary>
+    internal static string? EnsureToastIconSaved(Launcher launcher)
+    {
+        string path = GetToastIconPath(launcher.Id);
+        return File.Exists(path) ? path : SaveToastIconToAppData(launcher);
+    }
+
     /// <summary>
     /// Persists a launcher's resolved icon as an .ico file in AppData so that
     /// shortcuts (Start Menu, pinned taskbar) can reference it.
@@ -1065,6 +1114,11 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private void RefreshLauncherIcon(Launcher launcher)
     {
+        // Written alongside the .ico, and before the early return below: a launcher whose tray
+        // icon is hidden still raises notifications, and they should not be the one surface left
+        // wearing a stale icon.
+        SaveToastIconToAppData(launcher);
+
         if (!_trayIcons.TryGetValue(launcher.Id, out var entry)) return;
         entry.Icon?.Dispose();
         entry.Icon = ResolveTrayIcon(launcher);
