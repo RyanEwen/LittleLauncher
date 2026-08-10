@@ -29,12 +29,21 @@ This is the whole point of the feature, so it is the thing not to regress.
 | Never opened since app start | No window, no browser | Nothing |
 | Open | Window + browser, visible | A browser tab's worth |
 | Dismissed | Window parked off screen, browser collapsed + suspended, `MemoryUsageTargetLevel = Low` | Minimal — rendering, video and timers stop |
+| Dismissed under `KeepRunning` | Collapsed, `MemoryUsageTargetLevel = Low`, **not** suspended | A background tab — rendering stops, script and sockets do not |
 | Dismissed past `WebIdleUnloadMinutes` (default policy) | Window only | Nothing |
 
 - **Collapsing the control is load-bearing, not cosmetic.** WebView2 refuses to suspend a visible
   browser, and the WinUI `WebView2` control drives `CoreWebView2Controller.IsVisible` from its XAML
   `Visibility`. Collapsing is therefore both what stops the rendering and what makes
   `TrySuspendAsync` legal.
+- **`KeepRunning` still collapses.** It used to return before doing anything, which left the
+  browser *visible* to Chromium on a window parked off the virtual screen — still compositing, still
+  decoding video, and reporting `visibilityState: 'visible'` so the page declined to throttle
+  itself. Collapsing stops the rendering while script, websockets and notifications carry on, which
+  is the background-tab behaviour a chat app is already written for. What it must never do is
+  suspend: a suspended page raises no notifications, and that is the whole reason the policy exists.
+  Measured: with the control collapsed and the memory target `Low`, notifications kept arriving
+  indefinitely with the page reporting `hidden`.
 - **Suspension is best-effort; the unload is the guarantee.** `TrySuspendAsync` declines in cases
   like active media capture or a download in flight. Treat a `false` return as normal (it is logged
   at debug) — the idle timer is what makes the promise true, because after it fires there is no

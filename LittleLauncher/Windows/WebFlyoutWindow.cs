@@ -1487,7 +1487,20 @@ public sealed partial class WebFlyoutWindow : Window
 
         int policy = WebHiddenPolicies.Normalize(_launcher.WebHiddenPolicy);
         if (policy == WebHiddenPolicies.KeepRunning)
+        {
+            // Collapse and drop the memory target, but never suspend. This used to return
+            // immediately, which left the browser fully *visible* to Chromium on a window parked
+            // off the virtual screen: still compositing, still decoding video, with the page
+            // reporting visibilityState 'visible' and so declining to throttle anything. Collapsing
+            // stops the rendering; script, websockets and notifications carry on exactly as they do
+            // in a background tab, which is what a chat app is already written for.
+            //
+            // Suspending is the line not to cross here: a suspended page raises no notifications,
+            // and that is the entire reason this policy exists.
+            _webView.Visibility = Visibility.Collapsed;
+            TrySetMemoryTarget(CoreWebView2MemoryUsageTargetLevel.Low);
             return;
+        }
 
         _webView.Visibility = Visibility.Collapsed;
         _ = SuspendWebViewAsync();
@@ -1508,6 +1521,22 @@ public sealed partial class WebFlyoutWindow : Window
         sender.Tick -= IdleUnloadTimer_Tick;
         if (_isOpen) return;
         UnloadWebView();
+    }
+
+    /// <summary>Best-effort memory hint. Never worth failing a dismissal over.</summary>
+    private void TrySetMemoryTarget(CoreWebView2MemoryUsageTargetLevel level)
+    {
+        var core = _webView?.CoreWebView2;
+        if (core == null) return;
+
+        try
+        {
+            core.MemoryUsageTargetLevel = level;
+        }
+        catch (Exception ex)
+        {
+            Logger.Debug(ex, "Setting the memory target failed for launcher {Name}", _launcher.Name);
+        }
     }
 
     private async Task SuspendWebViewAsync()
