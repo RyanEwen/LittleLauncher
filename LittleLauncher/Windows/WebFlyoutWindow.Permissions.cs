@@ -513,7 +513,18 @@ public sealed partial class WebFlyoutWindow
             // login gets a redirect. Capped, because this rides a web message.
             function iconDataUrl(url) {
                 if (!url) return Promise.resolve('');
-                return fetch(url, { credentials: 'include' })
+
+                // Already inline. Chat apps commonly hand the avatar over as a data URL, and
+                // fetching one of those with credentials rejects outright — which is exactly how
+                // this shipped broken the first time.
+                if (url.lastIndexOf('data:', 0) === 0)
+                    return Promise.resolve(url.length > 400 * 1024 ? '' : url);
+
+                // Credentials for the page's own origin, since an avatar usually sits behind the
+                // same login; without them for anything else, because a CDN that does not allow
+                // credentialed CORS rejects the request outright.
+                var sameOrigin = url.lastIndexOf(location.origin, 0) === 0 || url.lastIndexOf('/', 0) === 0;
+                return fetch(url, { credentials: sameOrigin ? 'include' : 'omit' })
                     .then(function (r) { return r.ok ? r.blob() : null; })
                     .then(function (b) {
                         if (!b || b.size > 400 * 1024) return '';
@@ -549,7 +560,7 @@ public sealed partial class WebFlyoutWindow
                 iconDataUrl(this.icon).then(function (icon) {
                     post({
                         __ll: 'notify', tag: self.tag, title: self.title, body: self.body,
-                        icon: icon, silent: self.silent, actions: o.actions || []
+                        icon: icon, iconUrl: self.icon, silent: self.silent, actions: o.actions || []
                     });
                 });
             }
@@ -679,6 +690,15 @@ public sealed partial class WebFlyoutWindow
             // The notification's own icon first — an avatar, usually — circle-cropped the way every
             // other messaging app shows one. The launcher icon is what is left when there is none.
             string? avatar = SaveNotificationIcon(tag, icon);
+
+            // Truncated deliberately: a page icon is often an inline data URL tens of kilobytes
+            // long, and logging it whole makes the log unreadable and enormous.
+            string source = message["iconUrl"]?.GetValue<string>() ?? "";
+            Logger.Debug("Toast icon for {Name}: source={Source} bytes={Bytes} saved={Saved}",
+                _launcher.Name,
+                source.Length <= 60 ? source : source[..60] + "…",
+                icon.Length, avatar ?? "(none)");
+
             if (avatar != null)
             {
                 builder.SetAppLogoOverride(new Uri(avatar),
@@ -687,8 +707,12 @@ public sealed partial class WebFlyoutWindow
             else
             {
                 string? launcherIcon = MainWindow.EnsureToastIconSaved(_launcher);
-                if (launcherIcon != null && System.IO.File.Exists(launcherIcon))
-                    builder.SetAppLogoOverride(new Uri(launcherIcon));
+                bool exists = launcherIcon != null && System.IO.File.Exists(launcherIcon);
+                Logger.Debug("Toast falling back to the launcher icon: {Path} exists={Exists}",
+                    launcherIcon ?? "(null)", exists);
+
+                if (exists)
+                    builder.SetAppLogoOverride(new Uri(launcherIcon!));
             }
 
             if (message["actions"] is JsonArray actions && actions.Count > 0)
