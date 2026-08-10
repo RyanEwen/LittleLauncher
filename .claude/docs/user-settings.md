@@ -127,6 +127,9 @@ model default, which would have flipped it on for every existing launcher.
   its inverse**, which is the only phrasing that survives `WhenWritingDefault`; a `bool` defaulting
   to `true` cannot be turned off. `WebFlyoutWidth`/`WebFlyoutHeight` are then set deliberately, in
   launcher settings, and a drag cannot overwrite them
+- `WebBookmarksAsTabs` (`bool`) — give every bookmark its own live browser so switching never
+  loses its place, instead of navigating a single one. Bar-mode only; costs one browser per
+  bookmark, so it is opt-in and off by default
 - `WebBookmarkIconsOnly` (`bool`) — hide the labels in the bookmark bar, leaving just the
   favicons; names become tooltips rather than being discarded. Bar-mode only, and edited in
   the Bookmarks section rather than Advanced, because Advanced is shown for single-address

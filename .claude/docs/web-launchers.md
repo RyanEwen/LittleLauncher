@@ -265,6 +265,35 @@ Icon adoption independently checks that the loaded page's host matches the bookm
 writing (`SameHost`). A wrong page is obvious; a wrong icon persists and looks like data
 corruption.
 
+### Treat as Tabs
+
+`Launcher.WebBookmarksAsTabs` (Advanced, in the Bookmarks section) gives every bookmark its own
+browser instead of navigating one. Switching then costs nothing and loses nothing: scroll position,
+a half-typed message, an open thread and a signed-in view all survive flipping away and back.
+
+`_webView` deliberately stays the single field the rest of the class talks to, and always points at
+the active tab; `_tabs` holds them all, keyed by bookmark URL. That is what lets zoom, navigation,
+the header, permissions, notifications and the worker bridge carry on operating on "the browser"
+without any of them learning about tabs.
+
+- **Switching is a visibility change and nothing else.** The outgoing tab is collapsed — so it stops
+  rendering, like a background tab — but deliberately **not** suspended: suspending freezes its
+  scripts, and the whole reason to keep the others loaded is that they go on receiving.
+- **Reload On Open does not apply to an existing tab.** `ActivateTabAsync` returns before that check,
+  because reloading is exactly the "lose your place" this mode exists to prevent.
+- **The hidden policy still governs all of them together.** `ApplyHiddenPolicy` iterates every live
+  browser, not just the visible one, or a dismissal would leave N background tabs awake and undo the
+  resource promise N times over. The idle unload closes the lot.
+- **Two traps that only appear with more than one browser**, both closed:
+  `UnloadWebView` must not `Close()` the active tab twice (it is also in `_tabs`, and a second
+  `Close` on a dead control takes the process rather than throwing); and the worker bridge's watched
+  script set is keyed **per browser**, since a resource filter belongs to one `CoreWebView2` and two
+  tabs on the same site share a script URL. A toast's action is likewise routed back to the tab that
+  raised it (`_notificationSources`), not to whichever is in front — with tabs on, the two are
+  usually not the same.
+
+The cost is the honest one: N browsers rather than one. Hence opt-in, per launcher, default off.
+
 ### Geometry: reveal, do not animate
 
 Expansion **snaps**. Two attempts at animating it were removed, for a reason worth not

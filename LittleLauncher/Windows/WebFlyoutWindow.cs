@@ -91,7 +91,23 @@ public sealed partial class WebFlyoutWindow : Window
     private readonly SUBCLASSPROC _wndProcDelegate;
 
     private MainWindow? _owner;
+    /// <summary>The browser currently on screen. In tabs mode this is the active tab.</summary>
     private WebView2? _webView;
+
+    /// <summary>
+    /// Every live tab, keyed by the bookmark URL it was opened for. Empty unless the launcher has
+    /// <see cref="Launcher.WebBookmarksAsTabs"/> set.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="_webView"/> deliberately stays the one field the rest of this class talks to, and
+    /// always points at whichever of these is active. That is what lets zoom, navigation, the
+    /// header, permissions, notifications and the service worker bridge carry on operating on "the
+    /// browser" without every one of them learning about tabs.
+    /// </remarks>
+    private readonly Dictionary<string, WebView2> _tabs = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>True when each bookmark keeps its own browser rather than sharing one.</summary>
+    private bool TabsEnabled => IsBarMode && _launcher.WebBookmarksAsTabs;
     private bool _webViewInitializing;
 
     /// <summary>
@@ -1651,6 +1667,10 @@ public sealed partial class WebFlyoutWindow : Window
 
         if (_webView == null) return;
 
+        // Every live browser, not just the one on screen: in tabs mode the others are already
+        // collapsed but still hold their memory target and, under a suspending policy, still need
+        // freezing. A background tab that stayed awake through a dismissal would quietly undo the
+        // resource promise N times over.
         int policy = WebHiddenPolicies.Normalize(_launcher.WebHiddenPolicy);
         if (policy == WebHiddenPolicies.KeepRunning)
         {
@@ -1663,13 +1683,19 @@ public sealed partial class WebFlyoutWindow : Window
             //
             // Suspending is the line not to cross here: a suspended page raises no notifications,
             // and that is the entire reason this policy exists.
-            _webView.Visibility = Visibility.Collapsed;
-            TrySetMemoryTarget(CoreWebView2MemoryUsageTargetLevel.Low);
+            foreach (var view in LiveWebViews())
+            {
+                view.Visibility = Visibility.Collapsed;
+                TrySetMemoryTarget(view, CoreWebView2MemoryUsageTargetLevel.Low);
+            }
             return;
         }
 
-        _webView.Visibility = Visibility.Collapsed;
-        _ = SuspendWebViewAsync();
+        foreach (var view in LiveWebViews())
+        {
+            view.Visibility = Visibility.Collapsed;
+            _ = SuspendWebViewAsync(view);
+        }
 
         if (policy != WebHiddenPolicies.UnloadWhenIdle)
             return;
@@ -1690,9 +1716,9 @@ public sealed partial class WebFlyoutWindow : Window
     }
 
     /// <summary>Best-effort memory hint. Never worth failing a dismissal over.</summary>
-    private void TrySetMemoryTarget(CoreWebView2MemoryUsageTargetLevel level)
+    private void TrySetMemoryTarget(WebView2? view, CoreWebView2MemoryUsageTargetLevel level)
     {
-        var core = _webView?.CoreWebView2;
+        var core = view?.CoreWebView2;
         if (core == null) return;
 
         try
@@ -1705,9 +1731,9 @@ public sealed partial class WebFlyoutWindow : Window
         }
     }
 
-    private async Task SuspendWebViewAsync()
+    private async Task SuspendWebViewAsync(WebView2? view)
     {
-        var core = _webView?.CoreWebView2;
+        var core = view?.CoreWebView2;
         if (core == null) return;
 
         try
@@ -1747,9 +1773,18 @@ public sealed partial class WebFlyoutWindow : Window
         if (_isFullScreen) ApplyFullScreen(false);
 
         var webView = _webView;
+
+        // In tabs mode the active browser is itself one of the tabs, so CloseAllTabs closes it and
+        // closing it again below would be a second Close on a dead control — the class of mistake
+        // that takes the process with it rather than throwing.
+        bool activeIsTab = webView != null && _tabs.ContainsValue(webView);
+
         _webView = null;
         _navigatedUrl = "";
         _revealOnNavigationCompleted = false;
+
+        CloseAllTabs();
+        if (activeIsTab) webView = null;
 
         // A permission request whose deferral is never completed leaves the page waiting for an
         // answer that can no longer be given.
@@ -1759,18 +1794,104 @@ public sealed partial class WebFlyoutWindow : Window
         // whole process rather than to this launcher — see ForgetNotifications.
         ForgetNotifications();
 
-        try
+        if (webView != null)
         {
-            _contentHost.Children.Remove(webView);
-            webView.Close();
-        }
-        catch (Exception ex)
-        {
-            Logger.Warn(ex, "Closing WebView2 failed for launcher {Name}", _launcher.Name);
+            try
+            {
+                _contentHost.Children.Remove(webView);
+                webView.Close();
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn(ex, "Closing WebView2 failed for launcher {Name}", _launcher.Name);
+            }
         }
 
         SetStatus("Loading…", busy: true, showRetry: false);
         UpdateNavigationButtons();   // the history went with the browser
+    }
+
+    // ── Tabs ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Brings the tab for <paramref name="url"/> to the front, creating it if this is its first
+    /// showing.
+    /// </summary>
+    /// <returns>
+    /// True when the switch has been handled here. False only when there is no tab yet and one has
+    /// to be built the ordinary way, so the caller carries on into <see cref="CreateWebViewAsync"/>.
+    /// </returns>
+    /// <remarks>
+    /// <para>Switching is a visibility change and nothing else. The outgoing tab is collapsed —
+    /// which stops it rendering, exactly as a background tab in a browser — but is deliberately
+    /// <b>not</b> suspended: suspending would freeze its scripts, and a launcher whose bookmarks are
+    /// tabs is one where the other tabs are expected to keep receiving. The launcher's hidden policy
+    /// still governs all of them together when the whole flyout goes away.</para>
+    /// <para><c>_navigatedUrl</c> is set from the tab rather than from a navigation, because in this
+    /// mode a tab only ever shows the one address, and that is what stops the reload-on-show check
+    /// below deciding a switch was a navigation.</para>
+    /// </remarks>
+    private async Task<bool> ActivateTabAsync(string url)
+    {
+        if (_tabs.TryGetValue(url, out var existing))
+        {
+            foreach (var (key, tab) in _tabs)
+                tab.Visibility = string.Equals(key, url, StringComparison.OrdinalIgnoreCase)
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+
+            _webView = existing;
+            _navigatedUrl = url;
+
+            ResumeWebView();
+            ApplyZoom();
+            UpdateNavigationButtons();
+            HideStatus();
+            return true;
+        }
+
+        // First showing of this bookmark. Everything already open stays open behind it.
+        foreach (var tab in _tabs.Values)
+            tab.Visibility = Visibility.Collapsed;
+
+        _webView = null;
+        _navigatedUrl = "";
+
+        await CreateWebViewAsync();
+        return true;
+    }
+
+    /// <summary>Files a freshly created browser under the bookmark it was made for.</summary>
+    private void RegisterTab(string url, WebView2 webView)
+    {
+        if (!TabsEnabled || string.IsNullOrEmpty(url)) return;
+        _tabs[url] = webView;
+    }
+
+    /// <summary>Closes every tab. Used by the unload path, which takes the whole launcher down.</summary>
+    private void CloseAllTabs()
+    {
+        foreach (var tab in _tabs.Values)
+        {
+            try
+            {
+                _contentHost.Children.Remove(tab);
+                tab.Close();
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn(ex, "Closing a tab failed for launcher {Name}", _launcher.Name);
+            }
+        }
+
+        _tabs.Clear();
+    }
+
+    /// <summary>Every live browser this launcher owns — its tabs, or its single one.</summary>
+    private IEnumerable<WebView2> LiveWebViews()
+    {
+        if (_tabs.Count > 0) return _tabs.Values;
+        return _webView == null ? [] : [_webView];
     }
 
     // ── Content ─────────────────────────────────────────────────────
@@ -1789,6 +1910,10 @@ public sealed partial class WebFlyoutWindow : Window
                 busy: false, showRetry: false);
             return;
         }
+
+        // Tabs mode answers "show this bookmark" by switching browsers rather than navigating one,
+        // which is the whole point: nothing is torn down, so nothing loses its place.
+        if (TabsEnabled && await ActivateTabAsync(url)) return;
 
         if (_webView == null)
         {
@@ -1831,6 +1956,12 @@ public sealed partial class WebFlyoutWindow : Window
         Grid.SetRow(webView, 1);   // row 0 belongs to the prompt bar
         _contentHost.Children.Insert(0, webView);
         _webView = webView;
+
+        // Filed under the address it is being built for, so a later switch back finds it rather
+        // than building a second one. Read before the awaits below, since the active bookmark can
+        // change while a browser is starting.
+        string tabKey = NormalizeUrl(CurrentTargetUrl());
+        RegisterTab(tabKey, webView);
 
         try
         {

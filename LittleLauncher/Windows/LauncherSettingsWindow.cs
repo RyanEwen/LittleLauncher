@@ -953,6 +953,30 @@ public sealed class LauncherSettingsWindow : Window
             Margin = new Thickness(0, 12, 0, 4),
         };
 
+        // ── Tabs ────────────────────────────────────────────────
+        var tabsToggle = new ToggleSwitch
+        {
+            IsOn = launcher.WebBookmarksAsTabs,
+            OnContent = "",
+            OffContent = "",
+            MinWidth = 0,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        tabsToggle.Toggled += (_, _) =>
+        {
+            launcher.WebBookmarksAsTabs = tabsToggle.IsOn;
+            Persist();
+
+            // The shape of the content changes, not just its settings: the flyout has to drop
+            // whatever it was holding and rebuild under the new rule.
+            WebFlyoutWindow.ReloadProfile(launcher.Id);
+        };
+
+        var tabsRow = BuildRow("Treat as Tabs",
+            "Keep each bookmark loaded in its own tab, so switching never loses your place — at the cost of one browser per bookmark",
+            tabsToggle);
+        tabsRow.Margin = new Thickness(0, 12, 0, 0);
+
         // ── Bar appearance ──────────────────────────────────────
         // Kept here rather than in Advanced: it is a property of the bar, and Advanced is shown for
         // single-address launchers too, where a bookmark-bar option means nothing at all.
@@ -980,6 +1004,7 @@ public sealed class LauncherSettingsWindow : Window
         body.Children.Add(addRow);
         body.Children.Add(defaultLabel);
         body.Children.Add(defaultCombo);
+        body.Children.Add(tabsRow);
         body.Children.Add(iconsOnlyRow);
 
         Rebuild();

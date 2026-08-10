@@ -577,6 +577,7 @@ public sealed partial class WebFlyoutWindow
             _liveNotifications.Remove(_liveNotifications.Keys.First());
 
         _liveNotifications[key] = notification;
+        if (!string.IsNullOrEmpty(tag)) RememberNotificationSource(tag, sender);
 
         try
         {

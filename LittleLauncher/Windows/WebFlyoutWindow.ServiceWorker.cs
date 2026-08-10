@@ -45,8 +45,16 @@ public sealed partial class WebFlyoutWindow
     /// <summary>Marks the inner request for the original worker script, so it is not wrapped twice.</summary>
     private const string OriginalScriptMarker = "__llsw";
 
-    /// <summary>Worker scripts this launcher has been told about, and so wraps when they are fetched.</summary>
-    private readonly HashSet<string> _serviceWorkerScripts = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>
+    /// Worker scripts each browser has been told about, and so wraps when they are fetched.
+    /// </summary>
+    /// <remarks>
+    /// Keyed by browser, not by URL alone. A resource filter belongs to one <c>CoreWebView2</c>, so
+    /// with tabs on, two tabs on the same site share a worker script URL — and a flat set would see
+    /// the second as already known and never give that tab its filter, leaving one tab bridged and
+    /// the other silently not.
+    /// </remarks>
+    private readonly Dictionary<CoreWebView2, HashSet<string>> _serviceWorkerScripts = new();
 
     /// <summary>
     /// Action buttons a notification declared, keyed by its tag, waiting for the notification
@@ -62,6 +70,18 @@ public sealed partial class WebFlyoutWindow
 
     /// <summary>Windows caps a toast at five buttons; Chromium reports two, so two is the honest number.</summary>
     private const int MaxNotificationActions = 2;
+
+    /// <summary>
+    /// Which browser raised the notification behind each toast tag, so a clicked button goes back
+    /// to the page that will understand it.
+    /// </summary>
+    /// <remarks>
+    /// With tabs on, the notification that produced a toast is very often <b>not</b> the tab on
+    /// screen — that is the point of keeping the others loaded. Posting the action to the active
+    /// browser would hand a reply for one conversation to whichever page happened to be in front.
+    /// Bounded, because a toast the user ignores reports nothing back.
+    /// </remarks>
+    private readonly Dictionary<string, CoreWebView2> _notificationSources = new(StringComparer.Ordinal);
 
     // ── The worker-scope shim ───────────────────────────────────────
 
@@ -262,7 +282,10 @@ public sealed partial class WebFlyoutWindow
         {
             string? tag = message?["tag"]?.GetValue<string>();
             if (!string.IsNullOrEmpty(tag) && message?["actions"] is JsonArray actions)
+            {
                 _pendingActions[tag] = (JsonArray)actions.DeepClone();
+                RememberNotificationSource(tag, sender);
+            }
         }
     }
 
@@ -275,7 +298,11 @@ public sealed partial class WebFlyoutWindow
     private void WatchServiceWorkerScript(CoreWebView2 core, string url)
     {
         if (url.Contains(OriginalScriptMarker, StringComparison.Ordinal)) return;
-        if (!_serviceWorkerScripts.Add(url))
+
+        if (!_serviceWorkerScripts.TryGetValue(core, out var watched))
+            _serviceWorkerScripts[core] = watched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (!watched.Add(url))
         {
             AcknowledgeServiceWorkerScript(core, url);
             return;
@@ -317,7 +344,7 @@ public sealed partial class WebFlyoutWindow
         // The inner request for the real script. Letting it through untouched is the whole point:
         // it is the browser's own fetch, with the profile's cookies on it.
         if (uri.Contains(OriginalScriptMarker, StringComparison.Ordinal)) return;
-        if (!_serviceWorkerScripts.Contains(uri)) return;
+        if (!_serviceWorkerScripts.TryGetValue(sender, out var watched) || !watched.Contains(uri)) return;
 
         // Building the response body is asynchronous, so the request has to be held open — a
         // handler that returns without either a response or a deferral has declined to interfere.
@@ -458,9 +485,21 @@ public sealed partial class WebFlyoutWindow
     /// Nothing happens if the browser has gone: the notification the click refers to went with it,
     /// and the launcher opening is the only sensible remainder — which the caller does anyway.
     /// </remarks>
+    /// <summary>Notes which browser a toast tag belongs to, keeping the map bounded.</summary>
+    private void RememberNotificationSource(string tag, CoreWebView2 core)
+    {
+        while (_notificationSources.Count > 64)
+            _notificationSources.Remove(_notificationSources.Keys.First());
+
+        _notificationSources[tag] = core;
+    }
+
     private void DispatchNotificationAction(string tag, string action, string reply)
     {
-        var core = _webView?.CoreWebView2;
+        // The tab that raised it, not the one on screen. Falling back to the active browser covers
+        // the single-browser case and a tag whose source has since been closed.
+        if (!_notificationSources.TryGetValue(tag, out var core) || core == null)
+            core = _webView?.CoreWebView2;
         if (core == null) return;
 
         try

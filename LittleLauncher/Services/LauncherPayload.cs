@@ -266,6 +266,7 @@ internal static class LauncherPayload
         // ── Bookmark bar ────────────────────────────────────────────
         existing.WebUseBookmarks = downloaded.WebUseBookmarks;
         existing.WebBookmarkIconsOnly = downloaded.WebBookmarkIconsOnly;
+        existing.WebBookmarksAsTabs = downloaded.WebBookmarksAsTabs;
         existing.WebDefaultBookmarkUrl = downloaded.WebDefaultBookmarkUrl;
 
         // IconPath travels with the bookmark even though it is a local path: it is derived from

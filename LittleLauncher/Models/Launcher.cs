@@ -444,6 +444,21 @@ public partial class Launcher : ObservableObject
     public partial bool WebLockSize { get; set; }
 
     /// <summary>
+    /// Keep every bookmark in its own live browser, so switching between them is a switch rather
+    /// than a navigation.
+    /// </summary>
+    /// <remarks>
+    /// <para>Off (the default), a bar-mode launcher has one browser and clicking a bookmark
+    /// navigates it — cheap, and correct for a bar of pages you glance at. On, each bookmark keeps
+    /// its own: scroll position, a half-typed message, an open thread and a signed-in session all
+    /// survive flipping to another bookmark and back, exactly as browser tabs do.</para>
+    /// <para>The cost is the honest one: N browsers rather than one, so it is opt-in per launcher
+    /// and lives in Advanced. The launcher's hidden policy still governs all of them together.</para>
+    /// </remarks>
+    [ObservableProperty]
+    public partial bool WebBookmarksAsTabs { get; set; }
+
+    /// <summary>
     /// Show only icons in the bookmark bar, without their labels.
     /// </summary>
     /// <remarks>
