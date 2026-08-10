@@ -1322,6 +1322,12 @@ public sealed class LauncherSettingsWindow : Window
             launcher.WebAllowAllPermissions = trustToggle.IsOn;
             SettingsManager.SaveSettings();
             Services.AutoSyncService.NotifyLaunchersChanged();
+
+            // Trusting the site writes its grants into the profile so the page can actually see
+            // them, so untrusting it has to take them back out — otherwise the launcher would keep
+            // silently allowing everything with the toggle off. See WebFlyoutWindow.Permissions.
+            if (!trustToggle.IsOn)
+                _ = WebFlyoutWindow.ClearOnTrustDisabledAsync(launcher.Id);
         };
         var trustRow = BuildRow("Trust This Site",
             "Give this launcher's pages the camera, microphone, location and notifications without asking",

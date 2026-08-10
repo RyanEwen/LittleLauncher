@@ -124,6 +124,12 @@ host, so it is shown nowhere and dropped in silence. Since that persistent API i
 messaging site actually uses, a document-created script rewrites it in the page to the flavour the
 host can see — tag replacement and `getNotifications()` included.
 
+A notification object is owned by the browser that raised it, and calling into one after that
+browser has closed is a fail-fast that kills the app rather than throwing. The handler therefore
+finishes with the notification before it builds the toast — `AppNotificationManager.Show()` pumps
+the message loop, and the idle unload can run inside it — and tracked notifications are dropped when
+the browser unloads.
+
 See [.claude/docs/web-launchers.md](.claude/docs/web-launchers.md) for the WinUI WebView2 limits
 worked around (no controller access, so zoom is CSS; focus-loss must be re-verified against
 `GetForegroundWindow` because the browser's HWNDs are children of the window).

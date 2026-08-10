@@ -171,7 +171,16 @@ public sealed partial class WebFlyoutWindow
         if (_launcher.WebAllowAllPermissions)
         {
             e.State = CoreWebView2PermissionState.Allow;
-            e.SavesInProfile = false;   // the toggle is the decision — see Launcher.WebAllowAllPermissions
+
+            // Saved, like any other answer. Granting without recording looks equivalent — the page
+            // asked, the page was allowed — but it is not: navigator.permissions.query() and
+            // Notification.permission read the stored setting and never see the grant, so an app
+            // that checks before asking believes it has nothing. Teams then shows "we can't access
+            // your microphone" over a working microphone, and offers to turn on notifications that
+            // are already on, every time the browser restarts. Turning the toggle off clears these
+            // again (ClearOnTrustDisabledAsync), which is what keeps "the toggle is the decision"
+            // true without lying to the page.
+            e.SavesInProfile = true;
             OnPermissionGranted(e.PermissionKind);
             return;
         }
@@ -322,6 +331,17 @@ public sealed partial class WebFlyoutWindow
         return true;
     }
 
+    /// <summary>
+    /// Clears the grants "Trust This Site" made, for a launcher that has just stopped trusting it.
+    /// </summary>
+    /// <remarks>
+    /// The toggle is still the decision — this is what makes that true now that the grants are
+    /// written into the profile. Without it, switching Trust off would leave a profile full of
+    /// silent allows behind and the launcher would never ask about anything again.
+    /// </remarks>
+    internal static Task<bool> ClearOnTrustDisabledAsync(string launcherId) =>
+        ResetSitePermissionsAsync(launcherId);
+
     private static async Task ClearPermissionsAsync(CoreWebView2 core)
     {
         try
@@ -461,6 +481,9 @@ public sealed partial class WebFlyoutWindow
     /// <para>The page's own callbacks are driven from the toast: <c>ReportShown</c> as soon as
     /// Windows accepts it, <c>ReportClicked</c> when the toast is activated. Without those the
     /// page believes its notification never appeared.</para>
+    /// <para><b>Every touch of the notification happens before the toast is built</b>, and the rest
+    /// of the method must not reach back to it. See <see cref="ForgetNotifications"/> — getting this
+    /// order wrong takes the whole process down.</para>
     /// </remarks>
     private void OnNotificationReceived(CoreWebView2 sender, CoreWebView2NotificationReceivedEventArgs e)
     {
@@ -469,23 +492,46 @@ public sealed partial class WebFlyoutWindow
 
         string key = $"{_launcher.Id}:{++_notificationSequence}";
 
+        // Read what the toast needs, subscribe, and report it shown — all of it now, while the
+        // browser is certainly still alive. Nothing below this block may touch `notification`.
+        string title, body, tag;
+        try
+        {
+            title = string.IsNullOrWhiteSpace(notification.Title) ? _launcher.Name : notification.Title;
+            body = notification.Body;
+            tag = notification.Tag;
+
+            notification.CloseRequested += (_, _) => _liveNotifications.Remove(key);
+            notification.ReportShown();
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn(ex, "Reporting a page notification failed for launcher {Name}", _launcher.Name);
+            return;
+        }
+
+        while (_liveNotifications.Count >= MaxTrackedNotifications)
+            _liveNotifications.Remove(_liveNotifications.Keys.First());
+
+        _liveNotifications[key] = notification;
+
         try
         {
             var builder = new Microsoft.Windows.AppNotifications.Builder.AppNotificationBuilder()
                 .AddArgument("launcher", _launcher.Id)
                 .AddArgument("webNotification", key)
-                .AddText(string.IsNullOrWhiteSpace(notification.Title) ? _launcher.Name : notification.Title);
+                .AddText(title);
 
-            if (!string.IsNullOrWhiteSpace(notification.Body))
-                builder.AddText(notification.Body);
+            if (!string.IsNullOrWhiteSpace(body))
+                builder.AddText(body);
 
             // A tag means "this replaces the one I sent before" — how a chat app keeps one entry
             // per conversation instead of a stack of them. Windows does that replacement by
             // tag+group, so the group is the launcher: two launchers on the same site would
             // otherwise collide on a tag as generic as a thread id.
-            if (!string.IsNullOrWhiteSpace(notification.Tag))
+            if (!string.IsNullOrWhiteSpace(tag))
             {
-                builder.SetTag(ToastIdentifier(notification.Tag));
+                builder.SetTag(ToastIdentifier(tag));
                 builder.SetGroup(ToastIdentifier(_launcher.Id));
             }
 
@@ -497,19 +543,39 @@ public sealed partial class WebFlyoutWindow
                 builder.SetAppLogoOverride(new Uri(iconPath));
 
             Microsoft.Windows.AppNotifications.AppNotificationManager.Default.Show(builder.BuildNotification());
-
-            while (_liveNotifications.Count >= MaxTrackedNotifications)
-                _liveNotifications.Remove(_liveNotifications.Keys.First());
-
-            _liveNotifications[key] = notification;
-            notification.CloseRequested += (_, _) => _liveNotifications.Remove(key);
-            notification.ReportShown();
         }
         catch (Exception ex)
         {
             _liveNotifications.Remove(key);
             Logger.Warn(ex, "Showing a page notification failed for launcher {Name}", _launcher.Name);
         }
+    }
+
+    /// <summary>
+    /// Drops every tracked notification belonging to this launcher, because its browser is going
+    /// away and they do not outlive it.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>This is a crash fix, not tidying.</b> A <see cref="CoreWebView2Notification"/> is
+    /// owned by the <c>CoreWebView2</c> that raised it. Calling anything on one after that browser
+    /// has been closed — <c>ReportShown</c>, <c>ReportClicked</c>, even leaving a
+    /// <c>CloseRequested</c> subscription attached — takes the **whole process** down with a
+    /// WebView2 fail-fast, which no <c>try</c>/<c>catch</c> can intercept: the app simply
+    /// disappears with nothing in the log.</para>
+    /// <para>Two paths reached a dead notification, and both are now closed. A toast clicked after
+    /// the launcher unloaded called <c>ReportClicked</c> on one — the entries used to live in a
+    /// static dictionary for the life of the app. And <c>AppNotificationManager.Show()</c> is a
+    /// WinRT call on this STA thread, so it pumps the message loop: the idle-unload timer, a
+    /// dismissal, or a profile reload could run *inside* it and close the browser while
+    /// <see cref="OnNotificationReceived"/> was still on the stack, with <c>ReportShown</c> still
+    /// to come. Hence the ordering rule in that method — the notification is finished with before
+    /// the toast is started.</para>
+    /// </remarks>
+    private void ForgetNotifications()
+    {
+        string prefix = _launcher.Id + ":";
+        foreach (string key in _liveNotifications.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal)).ToList())
+            _liveNotifications.Remove(key);
     }
 
     /// <summary>
@@ -543,13 +609,24 @@ public sealed partial class WebFlyoutWindow
             key != null &&
             _liveNotifications.Remove(key, out var notification))
         {
-            try
+            // Only while the browser that raised it is still the live one. A notification outlives
+            // its CoreWebView2 as a managed object but not as a usable one, and calling into a dead
+            // one is a fail-fast that kills the app — see ForgetNotifications. A toast sitting in
+            // the Action Center long enough for the launcher to unload is the ordinary case here,
+            // not an edge case.
+            bool browserAlive = Instances.TryGetValue(launcherId, out var source) &&
+                                source._webView?.CoreWebView2 != null;
+
+            if (browserAlive)
             {
-                notification.ReportClicked();
-            }
-            catch (Exception ex)
-            {
-                NLog.LogManager.GetCurrentClassLogger().Debug(ex, "Reporting a notification click failed");
+                try
+                {
+                    notification.ReportClicked();
+                }
+                catch (Exception ex)
+                {
+                    NLog.LogManager.GetCurrentClassLogger().Debug(ex, "Reporting a notification click failed");
+                }
             }
         }
 

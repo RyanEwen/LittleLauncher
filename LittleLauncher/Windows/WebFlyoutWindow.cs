@@ -1560,6 +1560,10 @@ public sealed partial class WebFlyoutWindow : Window
         // answer that can no longer be given.
         CancelPendingPermissions();
 
+        // Its notifications do not outlive it either, and touching one that does is fatal to the
+        // whole process rather than to this launcher — see ForgetNotifications.
+        ForgetNotifications();
+
         try
         {
             _contentHost.Children.Remove(webView);

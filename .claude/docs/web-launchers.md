@@ -369,9 +369,24 @@ worded in `DescribePermission`.
 - **Answers are saved into the launcher's WebView2 profile** (`SavesInProfile`), so they are per
   launcher like its cookies, and launchers on the shared profile answer once between them.
 
-`Launcher.WebAllowAllPermissions` ("Trust This Site" in Advanced) grants everything without asking.
-It deliberately sets `SavesInProfile = false`: the toggle *is* the decision, so turning it off must
-return the launcher to asking rather than leave a profile full of silent grants behind.
+`Launcher.WebAllowAllPermissions` ("Trust This Site" in Advanced) grants everything without asking —
+and **saves those grants into the profile like any other answer**. It used to set
+`SavesInProfile = false` on the grounds that the toggle *is* the decision, which looks equivalent
+and is not:
+
+- `navigator.permissions.query({name: 'microphone'})` and `Notification.permission` **read the
+  stored setting**. Neither raises `PermissionRequested`, so an unsaved grant is invisible to them.
+- An app that checks before asking therefore believes it has nothing. Teams shows "we can't access
+  your microphone" over a working microphone and offers to switch on notifications that are already
+  on — every time the browser restarts, since nothing was written. Measured: with
+  `SavesInProfile = false` a fresh browser reports `prompt`/`default` for everything; with it true
+  the next start reports `granted`.
+- It also broke the notification bridge on exactly the launchers most likely to want it: with
+  `Notification.permission` stuck at `default`, `new Notification(...)` displays nothing, so the
+  shim had nothing to hand the host.
+
+Turning the toggle off calls `ClearOnTrustDisabledAsync`, which clears the stored answers again.
+That is what keeps "the toggle is the decision" true without lying to the page.
 
 **Reset Site Permissions** undoes stored answers — without it, a mistaken Block could only be
 cleared by wiping the whole profile, which also signs the launcher out.
@@ -396,6 +411,31 @@ driven from it — `ReportShown` when Windows accepts the toast, `ReportClicked`
   Windows would have to fetch itself, and for a dashboard behind a login it would fetch a redirect.
 - `_liveNotifications` is **capped**, not trusted to drain: a toast the user simply ignores reports
   nothing back, so entries would otherwise accumulate for the life of the app.
+
+#### A notification must never outlive its browser — this one kills the process
+
+`CoreWebView2Notification` is owned by the `CoreWebView2` that raised it. Calling anything on one
+after that browser has been closed is a **WebView2 fail-fast**: the app vanishes with nothing in the
+log, and the `try`/`catch` sitting right around the call cannot intercept it (it is an access
+violation, not a `COMException`). It shipped in v1.29.0 and killed the app roughly hourly.
+
+Two paths reached a dead notification, and both are closed now:
+
+- **`AppNotificationManager.Show()` pumps the message loop.** It is a WinRT call on the STA UI
+  thread, so while it runs the dispatcher can deliver the idle-unload tick, a dismissal or a profile
+  reload — any of which calls `UnloadWebView` and closes the browser. The handler then carried on to
+  `ReportShown()` on a dead object. **So `OnNotificationReceived` now finishes with the notification
+  first** — read `Title`/`Body`/`Tag`, subscribe to `CloseRequested`, call `ReportShown` — and only
+  then builds and shows the toast from the cached values. Nothing after that block may touch it.
+  This ordering is the fix; keep it.
+- **A toast clicked after the launcher unloaded** called `ReportClicked()` on one, because the
+  entries lived in a static dictionary for the life of the app. `UnloadWebView` now calls
+  `ForgetNotifications()`, and `HandleNotificationActivation` additionally checks that the
+  launcher's browser is still live before reporting. A toast outliving its browser in the Action
+  Center is the ordinary case, not an edge case.
+
+Reproducing it needs the teardown to land *inside* the pump, which is why it looked random: 400
+notifications with repeated tags, GC pressure and re-entrant dispatch all survive fine on their own.
 
 #### WebView2 only reports *non-persistent* notifications — hence the bridge
 
