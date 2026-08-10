@@ -7,6 +7,7 @@ using Microsoft.Web.WebView2.Core;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 
 namespace LittleLauncher.Windows;
@@ -69,101 +70,6 @@ public sealed partial class WebFlyoutWindow
     /// cap is what a click can still reach; older toasts just open the launcher without telling the
     /// page they were clicked.
     /// </remarks>
-    private static readonly Dictionary<string, TrackedNotification> _liveNotifications = [];
-
-    /// <summary>A notification we are holding, with the handler needed to let go of it cleanly.</summary>
-    private sealed record TrackedNotification(
-        CoreWebView2Notification Notification,
-        global::Windows.Foundation.TypedEventHandler<CoreWebView2Notification, object> CloseHandler);
-
-    /// <summary>
-    /// Lets go of a WebView2 object <b>here, on the UI thread</b>, instead of leaving it to the
-    /// garbage collector.
-    /// </summary>
-    /// <remarks>
-    /// <para><b>This is the fix for the crash that killed the app roughly hourly.</b> A
-    /// <see cref="CoreWebView2Notification"/> and its event args are COM objects owning a mojo
-    /// <c>Remote</c> bound to the browser's own sequence. Mojo <c>CHECK</c>s that the remote is
-    /// destroyed on that sequence, and a failed <c>CHECK</c> is a breakpoint, not an exception — it
-    /// takes the process with it and no <c>try</c>/<c>catch</c> can see it. Captured under a
-    /// debugger, the stack was unambiguous:</para>
-    /// <code>
-    /// Microsoft_Web_WebView2_Core!DllGetActivationFactory      (CsWinRT releasing an RCW)
-    ///   RuntimeClassImpl::Release
-    ///     NotificationReceivedEventArgs::~NotificationReceivedEventArgs
-    ///       Notification::~Notification
-    ///         mojo::Remote&lt;EmbeddedBrowser&gt;::reset
-    ///           mojo::InterfaceEndpointClient::~...   brk #0xF000
-    /// </code>
-    /// <para>Nothing was using the object: it was being <i>collected</i>. CsWinRT wrappers release
-    /// their pointer on whichever thread finalizes them, and unlike the old built-in RCWs they do
-    /// not marshal that release back to the apartment that created it — so a notification the GC
-    /// happened to pick up on a background thread killed the app. That is why it struck at random,
-    /// left nothing in the log, and got worse the more notifications arrived; and why clicking a
-    /// toast was a reliable way to trigger it, since the click drops the last reference and hands
-    /// the object straight to the collector.</para>
-    /// <para>So every one of these is released explicitly, on the thread that made it. Disposing
-    /// the projection releases our reference only — the browser holds its own — and suppresses the
-    /// finalizer, which is the half that was doing the damage.</para>
-    /// </remarks>
-    /// <summary>Whether the release path has been reported yet this session. See below.</summary>
-    private static bool _releasePathLogged;
-
-    private static void ReleaseWebViewObject(object? projected)
-    {
-        if (projected == null) return;
-
-        try
-        {
-            // Two shapes, because the app has both WebView2 assemblies on hand — the CsWinRT
-            // projection and the plain .NET wrapper — and which one a given type comes from is not
-            // obvious from the call site. A silent `is` miss here is indistinguishable from a fix
-            // that works, which is exactly the trap the previous attempt fell into, so the path
-            // taken is reported once per session.
-            if (projected is WinRT.IWinRTObject winrt)
-            {
-                winrt.NativeObject.Dispose();
-                ReportReleasePath("CsWinRT projection", projected);
-                return;
-            }
-
-            if (projected is IDisposable disposable)
-            {
-                disposable.Dispose();
-                ReportReleasePath("IDisposable", projected);
-                return;
-            }
-
-            // Nothing to dispose: this object will be released by the finalizer, on the finalizer
-            // thread, which is the thing that kills the process.
-            ReportReleasePath("NONE — object will be finalized", projected);
-        }
-        catch (Exception ex)
-        {
-            NLog.LogManager.GetCurrentClassLogger().Debug(ex, "Releasing a WebView2 object failed");
-        }
-    }
-
-    private static void ReportReleasePath(string path, object projected)
-    {
-        if (_releasePathLogged) return;
-        _releasePathLogged = true;
-
-        NLog.LogManager.GetCurrentClassLogger().Info(
-            "WebView2 release path for {Type}: {Path}", projected.GetType().FullName, path);
-    }
-
-    /// <summary>Detaches from a tracked notification and releases it on this thread.</summary>
-    private static void ReleaseTracked(TrackedNotification tracked)
-    {
-        try { tracked.Notification.CloseRequested -= tracked.CloseHandler; }
-        catch (Exception ex) { NLog.LogManager.GetCurrentClassLogger().Debug(ex, "Detaching CloseRequested failed"); }
-
-        ReleaseWebViewObject(tracked.Notification);
-    }
-
-    private const int MaxTrackedNotifications = 64;
-
     private static int _notificationSequence;
 
     /// <summary>True while the flyout is asking something. Pins it open, like an owned window.</summary>
@@ -249,6 +155,36 @@ public sealed partial class WebFlyoutWindow
         _promptBar!.Visibility = Visibility.Collapsed;
         answered.OnAnswered(accepted);
         ShowNextPrompt();
+    }
+
+    /// <summary>
+    /// Lets go of a WebView2 object here, on the thread that received it, instead of leaving it to
+    /// the garbage collector.
+    /// </summary>
+    /// <remarks>
+    /// <para>Releasing a WebView2 object on the finalizer thread runs its native destructor there,
+    /// and objects owning a mojo <c>Remote</c> <c>CHECK</c> that this happens on the sequence they
+    /// were bound to. A failed <c>CHECK</c> is a breakpoint, so the process dies and no
+    /// <c>try</c>/<c>catch</c> sees it.</para>
+    /// <para><b>This is a mitigation, not a guarantee</b>, and the notification path proved it: a
+    /// CsWinRT wrapper keeps an <c>IObjectReference</c> per queried interface, so disposing the
+    /// primary one still leaves others for the finalizer. Where an object type is known to be
+    /// dangerous, the answer is not to be handed it at all — see
+    /// <see cref="NotificationBridgeScript"/>.</para>
+    /// </remarks>
+    private static void ReleaseWebViewObject(object? projected)
+    {
+        if (projected == null) return;
+
+        try
+        {
+            if (projected is WinRT.IWinRTObject winrt) { winrt.NativeObject.Dispose(); return; }
+            if (projected is IDisposable disposable) disposable.Dispose();
+        }
+        catch (Exception ex)
+        {
+            NLog.LogManager.GetCurrentClassLogger().Debug(ex, "Releasing a WebView2 object failed");
+        }
     }
 
     // ── Permissions ─────────────────────────────────────────────────
@@ -538,58 +474,125 @@ public sealed partial class WebFlyoutWindow
     /// <para>It never throws away the real call: anything unexpected falls back to the original
     /// method, so a page on a future WebView2 that does support this is left exactly as it was.</para>
     /// </remarks>
+    /// <summary>
+    /// Replaces the page's <c>Notification</c> with one that reports to the host instead of asking
+    /// the browser for a real one.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>This exists to keep WebView2 notification objects out of the process entirely.</b>
+    /// Handling <c>NotificationReceived</c> means being handed a
+    /// <c>CoreWebView2NotificationReceivedEventArgs</c> and its <c>CoreWebView2Notification</c>,
+    /// and those cannot be let go of safely: their native destructors tear down a mojo
+    /// <c>Remote</c> bound to the browser's sequence, mojo <c>CHECK</c>s that it happens on that
+    /// sequence, and a failed <c>CHECK</c> is a breakpoint that takes the process down. Releasing
+    /// them by hand does not solve it — CsWinRT keeps an <c>IObjectReference</c> per queried
+    /// interface and disposing the primary one still leaves others for the finalizer. Three
+    /// separate attempts at disposing our way out of it were caught under a debugger doing exactly
+    /// that, on the .NET Finalizer thread.</para>
+    /// <para>So the page never creates one. Everything the toast needs travels as a plain web
+    /// message, which is a string, and the events the page expects are raised back from the host.
+    /// The permission API is left completely alone — it is delegated to the real implementation,
+    /// because that is what pages check before they decide they are allowed to notify.</para>
+    /// <para><b>The icon is fetched here, in the page</b>, and sent as a data URL. That is the whole
+    /// reason it can be the right icon: a message notification's icon is the sender's avatar, behind
+    /// the same login as the page, so the host fetching it would get a redirect while the page gets
+    /// the image.</para>
+    /// </remarks>
     private const string NotificationBridgeScript = """
         (function () {
-            if (!window.ServiceWorkerRegistration || !window.Notification) return;
+            if (!window.Notification || window.Notification.__littleLauncher) return;
+            if (!window.chrome || !window.chrome.webview) return;
 
-            var proto = ServiceWorkerRegistration.prototype;
-            var original = proto.showNotification;
-            if (!original || original.__littleLauncherShim) return;
+            var Native = window.Notification;
+            var live = new Map();
+            var seq = 0;
 
-            var live = [];
+            function post(m) { try { window.chrome.webview.postMessage(JSON.stringify(m)); } catch (e) { } }
 
-            function shim(title, options) {
-                try {
-                    var o = options || {};
-
-                    // A persistent notification replaces any earlier one with the same tag.
-                    if (o.tag) {
-                        for (var i = live.length - 1; i >= 0; i--) {
-                            if (live[i].tag === o.tag) {
-                                try { live[i].close(); } catch (e) { }
-                                live.splice(i, 1);
-                            }
-                        }
-                    }
-
-                    var n = new Notification(title, {
-                        body: o.body, icon: o.icon, badge: o.badge, image: o.image,
-                        tag: o.tag, data: o.data, dir: o.dir, lang: o.lang,
-                        silent: o.silent, timestamp: o.timestamp,
-                        requireInteraction: o.requireInteraction
-                    });
-
-                    n.addEventListener('close', function () {
-                        var j = live.indexOf(n);
-                        if (j >= 0) live.splice(j, 1);
-                    });
-
-                    live.push(n);
-                    while (live.length > 64) live.shift();
-
-                    return Promise.resolve();
-                } catch (e) {
-                    return original.apply(this, arguments);
-                }
+            // Fetched in page context so cookies apply; a host-side fetch of an avatar behind a
+            // login gets a redirect. Capped, because this rides a web message.
+            function iconDataUrl(url) {
+                if (!url) return Promise.resolve('');
+                return fetch(url, { credentials: 'include' })
+                    .then(function (r) { return r.ok ? r.blob() : null; })
+                    .then(function (b) {
+                        if (!b || b.size > 400 * 1024) return '';
+                        return new Promise(function (res) {
+                            var fr = new FileReader();
+                            fr.onload = function () { res(fr.result); };
+                            fr.onerror = function () { res(''); };
+                            fr.readAsDataURL(b);
+                        });
+                    })
+                    .catch(function () { return ''; });
             }
 
-            shim.__littleLauncherShim = true;
-            proto.showNotification = shim;
+            function LLNotification(title, options) {
+                var o = options || {};
+                var self = this;
 
-            proto.getNotifications = function (filter) {
-                var tag = (filter || {}).tag;
-                return Promise.resolve(tag ? live.filter(function (n) { return n.tag === tag; }) : live.slice());
+                this.title = String(title == null ? '' : title);
+                this.body = o.body || '';
+                this.tag = o.tag || ('__ll-' + (++seq) + '-' + Date.now().toString(36));
+                this.data = o.data;
+                this.icon = o.icon || '';
+                this.dir = o.dir || 'auto';
+                this.lang = o.lang || '';
+                this.silent = !!o.silent;
+                this.onclick = null; this.onshow = null; this.onclose = null; this.onerror = null;
+
+                // Same tag replaces, as the platform would.
+                var previous = live.get(this.tag);
+                if (previous) { try { previous.close(); } catch (e) { } }
+                live.set(this.tag, this);
+
+                iconDataUrl(this.icon).then(function (icon) {
+                    post({
+                        __ll: 'notify', tag: self.tag, title: self.title, body: self.body,
+                        icon: icon, silent: self.silent, actions: o.actions || []
+                    });
+                });
+            }
+
+            LLNotification.prototype.close = function () {
+                if (!live.has(this.tag)) return;
+                live.delete(this.tag);
+                post({ __ll: 'notifyClose', tag: this.tag });
+                if (typeof this.onclose === 'function') this.onclose.call(this, new Event('close'));
             };
+            LLNotification.prototype.addEventListener = function (type, fn) {
+                this['on' + type] = fn;
+            };
+            LLNotification.prototype.removeEventListener = function (type) {
+                this['on' + type] = null;
+            };
+
+            // Permission is the real thing's business, not ours.
+            LLNotification.requestPermission = function () { return Native.requestPermission.apply(Native, arguments); };
+            Object.defineProperty(LLNotification, 'permission', { get: function () { return Native.permission; } });
+            Object.defineProperty(LLNotification, 'maxActions', { get: function () { return Native.maxActions || 2; } });
+            LLNotification.__littleLauncher = true;
+            LLNotification.__native = Native;
+
+            window.Notification = LLNotification;
+
+            window.chrome.webview.addEventListener('message', function (ev) {
+                var d = ev.data;
+                try { if (typeof d === 'string') d = JSON.parse(d); } catch (e) { return; }
+                if (!d || !d.__ll || !d.tag) return;
+
+                var n = live.get(d.tag);
+                if (!n) return;
+
+                if (d.__ll === 'notifyShown' && typeof n.onshow === 'function') {
+                    n.onshow.call(n, new Event('show'));
+                } else if (d.__ll === 'notifyClicked') {
+                    if (typeof n.onclick === 'function') n.onclick.call(n, new Event('click'));
+                } else if (d.__ll === 'notifyClosed') {
+                    live.delete(d.tag);
+                    if (typeof n.onclose === 'function') n.onclose.call(n, new Event('close'));
+                }
+            });
         })();
         """;
 
@@ -642,125 +645,111 @@ public sealed partial class WebFlyoutWindow
     /// of the method must not reach back to it. See <see cref="ForgetNotifications"/> — getting this
     /// order wrong takes the whole process down.</para>
     /// </remarks>
-    private void OnNotificationReceived(CoreWebView2 sender, CoreWebView2NotificationReceivedEventArgs e)
+    /// <summary>
+    /// Shows a toast for a notification the page reported over the bridge.
+    /// </summary>
+    /// <remarks>
+    /// Everything arrives as JSON — no WebView2 objects are involved, which is the point; see
+    /// <see cref="NotificationBridgeScript"/>. The icon is whatever the page sent: for a chat app
+    /// that is the sender's avatar, which is what the notification is actually about, so it leads
+    /// and the launcher's own icon is only the fallback.
+    /// </remarks>
+    private void ShowNotificationToast(JsonNode message)
     {
-        var notification = e.Notification;
-        e.Handled = true;
+        string tag = message["tag"]?.GetValue<string>() ?? "";
+        if (string.IsNullOrEmpty(tag)) return;
 
-        string key = $"{_launcher.Id}:{++_notificationSequence}";
-
-        // Read what the toast needs, subscribe, and report it shown — all of it now, while the
-        // browser is certainly still alive. Nothing below this block may touch `notification`.
-        string title, body, tag;
-        global::Windows.Foundation.TypedEventHandler<CoreWebView2Notification, object> closeHandler =
-            (_, _) => ForgetNotification(key);
-
-        try
-        {
-            title = string.IsNullOrWhiteSpace(notification.Title) ? _launcher.Name : notification.Title;
-            body = notification.Body;
-            tag = notification.Tag;
-
-            notification.CloseRequested += closeHandler;
-            notification.ReportShown();
-        }
-        catch (Exception ex)
-        {
-            Logger.Warn(ex, "Reporting a page notification failed for launcher {Name}", _launcher.Name);
-            ReleaseWebViewObject(notification);
-            ReleaseWebViewObject(e);
-            return;
-        }
-
-        while (_liveNotifications.Count >= MaxTrackedNotifications)
-            ForgetNotification(_liveNotifications.Keys.First());
-
-        _liveNotifications[key] = new TrackedNotification(notification, closeHandler);
-        if (!string.IsNullOrEmpty(tag)) RememberNotificationSource(tag, sender);
+        string title = message["title"]?.GetValue<string>() ?? "";
+        string body = message["body"]?.GetValue<string>() ?? "";
+        string icon = message["icon"]?.GetValue<string>() ?? "";
 
         try
         {
             var builder = new Microsoft.Windows.AppNotifications.Builder.AppNotificationBuilder()
                 .AddArgument("launcher", _launcher.Id)
-                .AddArgument("webNotification", key)
-                .AddText(title);
+                .AddArgument("webNotification", tag)
+                .AddText(string.IsNullOrWhiteSpace(title) ? _launcher.Name : title);
 
             if (!string.IsNullOrWhiteSpace(body))
                 builder.AddText(body);
 
-            // A tag means "this replaces the one I sent before" — how a chat app keeps one entry
-            // per conversation instead of a stack of them. Windows does that replacement by
-            // tag+group, so the group is the launcher: two launchers on the same site would
-            // otherwise collide on a tag as generic as a thread id.
-            if (!string.IsNullOrWhiteSpace(tag))
+            builder.SetTag(ToastIdentifier(tag));
+            builder.SetGroup(ToastIdentifier(_launcher.Id));
+
+            // The notification's own icon first — an avatar, usually — circle-cropped the way every
+            // other messaging app shows one. The launcher icon is what is left when there is none.
+            string? avatar = SaveNotificationIcon(tag, icon);
+            if (avatar != null)
             {
-                builder.SetTag(ToastIdentifier(tag));
-                builder.SetGroup(ToastIdentifier(_launcher.Id));
+                builder.SetAppLogoOverride(new Uri(avatar),
+                    Microsoft.Windows.AppNotifications.Builder.AppNotificationImageCrop.Circle);
+            }
+            else
+            {
+                string? launcherIcon = MainWindow.EnsureToastIconSaved(_launcher);
+                if (launcherIcon != null && System.IO.File.Exists(launcherIcon))
+                    builder.SetAppLogoOverride(new Uri(launcherIcon));
             }
 
-            // The launcher's own icon, not the notification's: notification.IconUri is a page URL
-            // that Windows would have to fetch itself, and for a self-hosted dashboard behind a
-            // login it would fetch a redirect.
-            //
-            // Resolved the way every other surface resolves it, rather than reading the adopted
-            // page icon directly. That file only exists for a web launcher nobody has chosen an
-            // icon for, so a launcher wearing a custom image or a glyph had nothing at that path
-            // and Windows fell back to Little Launcher's own logo — every toast showed the app's
-            // icon instead of the site's, upscaled from the small manifest logo and blurry with it.
-            string? iconPath = MainWindow.EnsureToastIconSaved(_launcher);
-            if (iconPath != null && System.IO.File.Exists(iconPath))
-                builder.SetAppLogoOverride(new Uri(iconPath));
-
-            AddNotificationActions(builder, tag);
+            if (message["actions"] is JsonArray actions && actions.Count > 0)
+            {
+                _pendingActions[tag] = (JsonArray)actions.DeepClone();
+                AddNotificationActions(builder, tag);
+            }
 
             Microsoft.Windows.AppNotifications.AppNotificationManager.Default.Show(builder.BuildNotification());
+            PostNotificationEvent("notifyShown", tag);
         }
         catch (Exception ex)
         {
-            ForgetNotification(key);
             Logger.Warn(ex, "Showing a page notification failed for launcher {Name}", _launcher.Name);
         }
-
-        // The args are finished with the moment this handler returns, and leaving them for the
-        // collector is precisely what was killing the app — the captured stack starts in their
-        // destructor. The notification itself lives on in _liveNotifications with its own
-        // reference, so releasing these does not take it away.
-        ReleaseWebViewObject(e);
     }
 
-    /// <summary>Stops tracking one notification and releases it here rather than leaving it to the GC.</summary>
-    private static void ForgetNotification(string key)
+    /// <summary>Writes the page-supplied icon to disk, or null when there was not a usable one.</summary>
+    private string? SaveNotificationIcon(string tag, string dataUrl)
     {
-        if (_liveNotifications.Remove(key, out var tracked))
-            ReleaseTracked(tracked);
+        if (string.IsNullOrEmpty(dataUrl)) return null;
+
+        int comma = dataUrl.IndexOf(',', StringComparison.Ordinal);
+        if (comma < 0 || !dataUrl.StartsWith("data:", StringComparison.Ordinal)) return null;
+
+        try
+        {
+            byte[] bytes = Convert.FromBase64String(dataUrl[(comma + 1)..]);
+            if (bytes.Length == 0) return null;
+
+            string path = System.IO.Path.Combine(
+                MainWindow.GetPhysicalAppDataDir(), $"notif-icon-{_launcher.Id}-{ToastIdentifier(tag)}.png");
+            System.IO.File.WriteAllBytes(path, bytes);
+            return path;
+        }
+        catch (Exception ex)
+        {
+            Logger.Debug(ex, "Saving a notification icon failed for launcher {Name}", _launcher.Name);
+            return null;
+        }
     }
 
-    /// <summary>
-    /// Drops every tracked notification belonging to this launcher, because its browser is going
-    /// away and they do not outlive it.
-    /// </summary>
-    /// <remarks>
-    /// <para><b>This is a crash fix, not tidying.</b> A <see cref="CoreWebView2Notification"/> is
-    /// owned by the <c>CoreWebView2</c> that raised it. Calling anything on one after that browser
-    /// has been closed — <c>ReportShown</c>, <c>ReportClicked</c>, even leaving a
-    /// <c>CloseRequested</c> subscription attached — takes the **whole process** down with a
-    /// WebView2 fail-fast, which no <c>try</c>/<c>catch</c> can intercept: the app simply
-    /// disappears with nothing in the log.</para>
-    /// <para>Two paths reached a dead notification, and both are now closed. A toast clicked after
-    /// the launcher unloaded called <c>ReportClicked</c> on one — the entries used to live in a
-    /// static dictionary for the life of the app. And <c>AppNotificationManager.Show()</c> is a
-    /// WinRT call on this STA thread, so it pumps the message loop: the idle-unload timer, a
-    /// dismissal, or a profile reload could run *inside* it and close the browser while
-    /// <see cref="OnNotificationReceived"/> was still on the stack, with <c>ReportShown</c> still
-    /// to come. Hence the ordering rule in that method — the notification is finished with before
-    /// the toast is started.</para>
-    /// </remarks>
-    private void ForgetNotifications()
+    /// <summary>Tells the page what became of one of its notifications.</summary>
+    private void PostNotificationEvent(string kind, string tag)
     {
-        string prefix = _launcher.Id + ":";
-        foreach (string key in _liveNotifications.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal)).ToList())
-            ForgetNotification(key);
+        var core = _webView?.CoreWebView2;
+        if (core == null) return;
+
+        try
+        {
+            core.PostWebMessageAsJson(
+                new JsonObject { ["__ll"] = kind, ["tag"] = tag }.ToJsonString());
+        }
+        catch (Exception ex)
+        {
+            Logger.Debug(ex, "Posting a notification event failed for launcher {Name}", _launcher.Name);
+        }
     }
+
+
+
 
     /// <summary>
     /// Makes a page-supplied string safe to use as a Windows toast tag or group.
@@ -794,33 +783,13 @@ public sealed partial class WebFlyoutWindow
         // replying from the toast.
         if (TryDeliverAction(launcherId, arguments, reply)) return true;
 
-        if (arguments.TryGetValue("webNotification", out string? key) &&
-            key != null &&
-            _liveNotifications.Remove(key, out var tracked))
+        // Clicked: tell the page, which raises onclick on the object it handed us. Nothing here
+        // touches a WebView2 notification object, because none is ever created — see
+        // NotificationBridgeScript.
+        if (arguments.TryGetValue("webNotification", out string? tag) && !string.IsNullOrEmpty(tag) &&
+            Instances.TryGetValue(launcherId, out var source))
         {
-            // Only while the browser that raised it is still the live one. A notification outlives
-            // its CoreWebView2 as a managed object but not as a usable one, and calling into a dead
-            // one is a fail-fast that kills the app — see ForgetNotifications. A toast sitting in
-            // the Action Center long enough for the launcher to unload is the ordinary case here,
-            // not an edge case.
-            bool browserAlive = Instances.TryGetValue(launcherId, out var source) &&
-                                source._webView?.CoreWebView2 != null;
-
-            if (browserAlive)
-            {
-                try
-                {
-                    tracked.Notification.ReportClicked();
-                }
-                catch (Exception ex)
-                {
-                    NLog.LogManager.GetCurrentClassLogger().Debug(ex, "Reporting a notification click failed");
-                }
-            }
-
-            // Released here, on the dispatcher thread this runs on. Dropping the reference and
-            // walking away is what made clicking a toast the most reliable way to kill the app.
-            ReleaseTracked(tracked);
+            source.PostNotificationEvent("notifyClicked", tag);
         }
 
         var owner = MainWindow.Current;

@@ -494,96 +494,44 @@ driven from it — `ReportShown` when Windows accepts the toast, `ReportClicked`
 - `_liveNotifications` is **capped**, not trusted to drain: a toast the user simply ignores reports
   nothing back, so entries would otherwise accumulate for the life of the app.
 
-#### Release WebView2 objects yourself — the GC cannot
+#### Never handle `NotificationReceived` — the objects cannot be released safely
 
-**This is what was killing the app roughly hourly, and it is not a use-after-free.** A
-`CoreWebView2Notification` and its event args are COM objects owning a mojo `Remote` bound to the
-browser's own sequence. Mojo `CHECK`s that the remote is destroyed on that sequence, and a failed
-`CHECK` is a breakpoint rather than an exception — it takes the process down and no `try`/`catch`
-sees it. Captured under `cdb`, the stack was unambiguous:
+**This is the crash that killed the app repeatedly, and the reason the notification path looks the
+way it does.** Handling `NotificationReceived` means being handed a
+`CoreWebView2NotificationReceivedEventArgs` and its `CoreWebView2Notification`. Their native
+destructors tear down a mojo `Remote` bound to the browser's sequence; mojo `CHECK`s that this
+happens on that sequence, and a failed `CHECK` is a breakpoint — the process dies and no
+`try`/`catch` sees it. Captured under `cdb`:
 
 ```
-Microsoft_Web_WebView2_Core!DllGetActivationFactory      (CsWinRT releasing an RCW)
-  RuntimeClassImpl::Release
-    NotificationReceivedEventArgs::~NotificationReceivedEventArgs
-      Notification::~Notification
-        mojo::Remote<EmbeddedBrowser>::reset
-          mojo::InterfaceEndpointClient::~...   brk #0xF000
+.NET Finalizer thread
+  WinRT.IObjectReference.Finalize()
+    → NotificationReceivedEventArgs::~NotificationReceivedEventArgs
+      → Notification::~Notification → mojo::Remote::reset → brk #0xF000
 ```
 
-Nothing was *using* the object — it was being **collected**. CsWinRT wrappers release their pointer
-on whichever thread finalizes them and, unlike the old built-in RCWs, do not marshal that release
-back to the apartment that created it. So a notification the GC happened to pick up on a background
-thread killed the app. That explains everything the symptom did: it struck at random, left nothing
-in the log, got worse the more notifications arrived, and **clicking a toast was the most reliable
-trigger** — the click drops the last reference and hands the object straight to the collector.
+**Disposing them does not fix it, and three separate attempts proved that.** A CsWinRT wrapper keeps
+an `IObjectReference` per queried interface, so `NativeObject.Dispose()` releases the primary one and
+leaves the rest for the finalizer — and one is enough. The stack above was captured on a build that
+was already disposing both objects on the UI thread. Symptoms that make it recognisable: random
+timing, nothing in the log, worse the more notifications arrive, and clicking a toast as the most
+reliable trigger, because the click drops the last reference.
 
-`ReleaseWebViewObject` therefore disposes the projection explicitly, on the thread that made it,
-everywhere one of these is finished with: the event args at the end of the handler, and the
-notification on close, on eviction, on unload and after a click. Disposing releases *our* reference
-only — the browser keeps its own — and suppresses the finalizer, which is the half doing the damage.
+So the objects are never created. `NotificationBridgeScript` replaces `window.Notification` in the
+page with a shim that posts everything to the host as a plain web message — a string — and raises
+`onshow` / `onclick` / `onclose` back from the host. `NotificationReceived` is deliberately not
+subscribed at all.
 
-**Treat this as a rule for any WebView2 object held past the handler that delivered it**, not a
-notification quirk. The safe pattern is: hold it if you must, then release it deliberately on the UI
-thread.
-
-#### A notification must never outlive its browser — this one kills the process
-
-`CoreWebView2Notification` is owned by the `CoreWebView2` that raised it. Calling anything on one
-after that browser has been closed is a **WebView2 fail-fast**: the app vanishes with nothing in the
-log, and the `try`/`catch` sitting right around the call cannot intercept it (it is an access
-violation, not a `COMException`). It shipped in v1.29.0 and killed the app roughly hourly.
-
-Two paths reached a dead notification, and both are closed now:
-
-- **`AppNotificationManager.Show()` pumps the message loop.** It is a WinRT call on the STA UI
-  thread, so while it runs the dispatcher can deliver the idle-unload tick, a dismissal or a profile
-  reload — any of which calls `UnloadWebView` and closes the browser. The handler then carried on to
-  `ReportShown()` on a dead object. **So `OnNotificationReceived` now finishes with the notification
-  first** — read `Title`/`Body`/`Tag`, subscribe to `CloseRequested`, call `ReportShown` — and only
-  then builds and shows the toast from the cached values. Nothing after that block may touch it.
-  This ordering is the fix; keep it.
-- **A toast clicked after the launcher unloaded** called `ReportClicked()` on one, because the
-  entries lived in a static dictionary for the life of the app. `UnloadWebView` now calls
-  `ForgetNotifications()`, and `HandleNotificationActivation` additionally checks that the
-  launcher's browser is still live before reporting. A toast outliving its browser in the Action
-  Center is the ordinary case, not an edge case.
-
-Reproducing it needs the teardown to land *inside* the pump, which is why it looked random: 400
-notifications with repeated tags, GC pressure and re-entrant dispatch all survive fine on their own.
-
-#### WebView2 only reports *non-persistent* notifications — hence the bridge
-
-This is the single fact that decides whether any of this works, and it is easy to miss because
-nothing fails loudly.
-
-`ICoreWebView2_24::add_NotificationReceived` fires for `new Notification(...)` **only**. A
-notification raised through `ServiceWorkerRegistration.showNotification()` — the *persistent* API —
-is created inside Chromium, resolves its promise, is returned by the page's own
-`getNotifications()`, and **is never surfaced to the host at all**. It is displayed nowhere and
-dropped in silence. Measured against a probe host on WebView2 151.0.4129.72: page-context
-`new Notification` raised the event, `registration.showNotification` raised nothing, and the page
-could not tell the difference.
-
-That would leave every messaging launcher permanently silent, because the persistent API is the one
-real apps use — WhatsApp Web, Discord, Messenger, Google Messages, Teams and Home Assistant all
-register service workers that call `showNotification`. So `NotificationBridgeScript`
-(`InstallNotificationBridgeAsync`) rewrites `ServiceWorkerRegistration.prototype.showNotification`
-in the page to construct a non-persistent notification instead, which the host does see.
-
-- **It is awaited before the first `Navigate`.** A document-created script added after the
-  navigation has started misses the one page the flyout was opened to show.
-- **It reimplements the two behaviours a page can observe**: a repeated `tag` closes the earlier
-  notification, and `getNotifications()` returns what is still on screen. Chat apps use both to keep
-  one entry per conversation and to clear it when the thread is read.
-- **It falls back to the original method on any error**, so a future WebView2 that supports this
-  natively is left alone.
-- **The toast honours the tag too** — `SetTag` plus `SetGroup` on the launcher id, so Windows
-  replaces rather than stacks, and two launchers on the same site cannot collide on a thread id.
-  `ToastIdentifier` hashes anything over the 64-character limit.
-
-Document-created scripts run in document contexts only, so this half of the bridge cannot reach the
-worker. `WebFlyoutWindow.ServiceWorker.cs` does — see below.
+- **The permission API is delegated untouched** to the real implementation. Pages check
+  `Notification.permission` before deciding they may notify, and a shim that answered that itself
+  would be lying about something the browser actually owns.
+- **The icon is fetched in the page** and sent as a data URL. That is what makes it the *right*
+  icon: a message notification's icon is the sender's avatar, behind the same login as the page, so
+  a host-side fetch gets a redirect where the page gets the image. The avatar leads, circle-cropped
+  as every messaging app shows one; the launcher's own icon is only the fallback.
+- `ReleaseWebViewObject` still exists for other event args and is worth keeping, but treat it as a
+  mitigation rather than a guarantee — per the interface-reference problem above, the only reliable
+  answer for a dangerous type is not to be handed it.
 
 ### Reaching the service worker
 

@@ -281,6 +281,10 @@ public sealed partial class WebFlyoutWindow
             string? url = message?["url"]?.GetValue<string>();
             if (!string.IsNullOrEmpty(url)) WatchServiceWorkerScript(sender, url);
         }
+        else if (kind == "notify")
+        {
+            ShowNotificationToast(message!);
+        }
         else if (kind == "actions")
         {
             string? tag = message?["tag"]?.GetValue<string>();

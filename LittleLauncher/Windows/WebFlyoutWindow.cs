@@ -1817,10 +1817,6 @@ public sealed partial class WebFlyoutWindow : Window
         // answer that can no longer be given.
         CancelPendingPermissions();
 
-        // Its notifications do not outlive it either, and touching one that does is fatal to the
-        // whole process rather than to this launcher — see ForgetNotifications.
-        ForgetNotifications();
-
         if (webView != null)
         {
             try
@@ -2125,7 +2121,10 @@ public sealed partial class WebFlyoutWindow : Window
         // unhandled request falls back to WebView2's browser-sized prompt. See
         // WebFlyoutWindow.Permissions.cs.
         core.PermissionRequested += OnPermissionRequested;
-        core.NotificationReceived += OnNotificationReceived;
+
+        // NotificationReceived is deliberately NOT handled. Being handed its event args means being
+        // handed WebView2 objects that cannot be released safely from managed code — see
+        // NotificationBridgeScript. The page reports its notifications over the bridge instead.
 
         ApplyPendingPermissionReset(core);
 
