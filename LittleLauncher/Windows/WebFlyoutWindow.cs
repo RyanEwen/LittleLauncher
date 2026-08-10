@@ -628,7 +628,24 @@ public sealed partial class WebFlyoutWindow : Window
 
         SetWindowPos(_hwnd, IntPtr.Zero, left, top, right - left, bottom - top,
             SWP_NOZORDER | SWP_NOACTIVATE);
+
+        // In bar mode the root grid is held at a fixed height so that *expanding* is a pure reveal
+        // rather than a reflow. That height was only recomputed when the drag ended, so the window
+        // grew while the page stayed the size it started at — the drag showed empty space instead
+        // of more page, and there was no way to judge the size until letting go. A manual resize
+        // has no reveal to protect, so the height tracks the window as it is dragged.
+        StretchRootDuringResize(bottom - top, scale);
+
         e.Handled = true;
+    }
+
+    /// <summary>Keeps bar mode's fixed root height in step with a drag in progress.</summary>
+    private void StretchRootDuringResize(int windowHeightPixels, double scale)
+    {
+        if (!IsBarMode || _isMaximized || _isFullScreen) return;
+        if (!_isExpanded) return;   // a collapsed bar is its own height and is not being revealed
+
+        _root.Height = Math.Max(1, windowHeightPixels / (scale <= 0 ? 1 : scale));
     }
 
     private void Grip_PointerReleased(object sender, PointerRoutedEventArgs e)
