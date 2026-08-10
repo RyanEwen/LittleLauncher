@@ -55,13 +55,18 @@
 
 ## Overview
 
-Little Launcher lives in the Windows system tray and/or taskbar. Clicking its icon opens a flyout with app and website shortcuts. It also synchronises your settings — through OneDrive, Google Drive, a network file share, another folder, or your own SSH/SFTP server — so you can keep your launcher configuration in sync across machines.
+Little Launcher lives in the Windows system tray and/or taskbar. Clicking its icon opens a flyout — either a grid of app and website shortcuts, or a web page in its own right. It also synchronises your settings — through OneDrive, Google Drive, WebDAV, a network file share, another folder, or your own SSH/SFTP server — so you can keep your launcher configuration in sync across machines.
 
 **Key features:**
 
 - **Multiple launchers** — define multiple named launchers, each with its own icon and items.
-- **Web launchers** — point a launcher at a URL instead of a list of shortcuts, and its tray icon opens that page itself: a Home Assistant dashboard, a webmail inbox, a status board, one click away. It stays signed in between restarts, and while it is closed the page is suspended and then unloaded entirely, so a hidden dashboard uses no CPU, network or memory. When you want a proper look at it, the header's maximize button fills the screen for as long as the flyout is open, and it goes back to its usual size the next time you open it.
-- **Camera, microphone and notifications for web launchers** — a page that needs your camera, microphone, location or the ability to send notifications asks in the flyout, and the answer is remembered for that launcher. Its notifications arrive as ordinary Windows notifications, and clicking one opens the launcher that sent it.
+- **Web launchers** — point a launcher at a web page instead of a list of shortcuts, and its tray icon opens that page itself: a Home Assistant dashboard, webmail, Teams, WhatsApp, a status board, one click away. Each keeps its own sign-in between restarts, so two launchers can be signed in to the same site as different people — or share one profile if you would rather sign in once.
+- **A bar of pages, or a set of tabs** — a web launcher can hold several bookmarks instead of one address, shown as a browser-style bar along the bottom that expands onto whichever you pick. Turn on **Treat as Tabs** and each one keeps its own live page, so switching never loses your scroll position, your place in a thread, or a half-typed message.
+- **Costs nothing while you are not looking at it** — a dismissed web launcher stops rendering, is suspended, and is then unloaded entirely, so a hidden dashboard uses no CPU, network or memory. Launchers you want to keep receiving are the exception, and they say so.
+- **Real Windows notifications, with buttons and replies** — a web launcher's notifications arrive as ordinary Windows notifications rather than being lost inside a page nobody is looking at. Action buttons work, and a site that offers a reply box gives you one in the notification itself — typing a reply there does exactly what typing it in the app does. Clicking a notification opens the launcher it came from.
+- **Set up once, not every morning** — launchers set to keep running are opened quietly in the background when Little Launcher starts, so their notifications work from the moment you sign in, without you clicking each tray icon to wake it up.
+- **Site permissions asked in the flyout** — a page that wants your camera, microphone or location asks in a bar inside the flyout rather than a browser-sized prompt, and the answer is remembered for that launcher alone. A launcher you trust can skip the asking entirely.
+- **Sized and placed how you want it** — drag the edges to resize, pin it open, anchor it to a corner or edge instead of the tray, set a zoom level, or lock a size in so a stray drag cannot change it. The header's maximize fills the screen for as long as the flyout is open, then goes back to its usual size next time.
 - **Application & website shortcuts** — launch any executable or URL with one click from the flyout.
 - **Manual icon picker** — choose item icons from Fluent glyphs, emojis, bundled app icons, uploaded images, or the selfh.st icon catalog.
 - **View modes** — choose between list view, icon grid view, or a compact tray-sized small-icon grid with no labels.
@@ -75,6 +80,7 @@ Little Launcher lives in the Windows system tray and/or taskbar. Clicking its ic
 - **Shared launchers** — share a single launcher with someone else: create a **OneDrive link** to send them, publish it to a **WebDAV** server, put it on **SFTP**, or drop it in a shared folder. The owner chooses whether subscribers can edit it or only receive it, and that choice travels with the share rather than being something the subscriber has to guess.
 - **Export & import** — back up and restore items locally via JSON.
 - **Bookmark import** — import bookmarks directly from Chrome, Edge, Firefox, or any browser's exported HTML bookmarks file into a launcher.
+- **Pick a web address from your bookmarks** — a web launcher's address, and the bookmarks in its bar, can be chosen from a searchable list of what you have already bookmarked in Chrome, Edge or Firefox, rather than typed from memory.
 - **Update paths per install type** — unpackaged/WiX installs update via GitHub Releases + MSI, while Microsoft Store installs can check for and apply updates through the Store from inside the app.
 
 ## Install
