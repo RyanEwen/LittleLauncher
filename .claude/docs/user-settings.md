@@ -140,7 +140,24 @@ model default, which would have flipped it on for every existing launcher.
   the Bookmarks section rather than Advanced, because Advanced is shown for single-address
   launchers too. It is part of the bar's rebuild signature, so toggling it re-renders
   rather than handing back buttons built for the other mode
-- `WebPinFlyout` (`bool`) — stay open when focus is lost
+- `WebPinFlyout` (`bool`) — **two readings, one flag.** As a flyout: stay open when focus is lost.
+  Under `WebRegularWindow`: keep the window always on top. Each is meaningless in the other mode —
+  a flyout is always-on-top by nature, a regular window never self-dismisses — so a second property
+  would only ever be inert wherever the launcher actually is. The header's pin button toggles it and
+  re-labels itself for the current mode
+- `WebTaskbarClickCloses` (`bool`) — under `WebRegularWindow`, close on a taskbar-button click
+  instead of minimizing. Defaults `false` (minimize), which is both what an ordinary app window does
+  and the direction that survives `WhenWritingDefault`
+- `PinAumid` (`string`) — the AppUserModelID stamped on this launcher's pinned taskbar button,
+  written at pin time. **Not web-specific** despite sitting with the web settings: any launcher can
+  be pinned, and only regular-window mode happens to read it today. It exists because the AUMID
+  cannot be recovered afterwards for every pin — see [web-launchers.md](web-launchers.md)
+- `WebRegularWindow` (`bool`) — present the launcher as an ordinary app window instead of a flyout:
+  taskbar button (with the running indicator on its pin), task-switcher entry, not always on top,
+  and no dismiss-on-focus-loss. Defaults `false`. **It is deliberately one setting naming a window
+  kind rather than a "show in taskbar" toggle** — the taskbar button and the Alt-Tab entry are the
+  same switch and cannot be separated, which was measured four ways; see
+  [web-launchers.md](web-launchers.md)
 - `WebAllowAllPermissions` (`bool`) — grant camera, microphone, location and notifications without
   asking. Defaults `false` (ask), which is both the safe direction and the only one that survives
   `WhenWritingDefault`. A request answered by this toggle is **not** saved into the WebView2

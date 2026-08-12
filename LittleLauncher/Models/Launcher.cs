@@ -348,6 +348,62 @@ public partial class Launcher : ObservableObject
     public partial bool WebPinFlyout { get; set; }
 
     /// <summary>
+    /// Present this web launcher as an ordinary app window rather than as a flyout.
+    /// </summary>
+    /// <remarks>
+    /// <para>Turns off the three things that make it a flyout — always-on-top, dismiss-on-focus-loss,
+    /// and being hidden from the taskbar and the task switcher — so it behaves like the application
+    /// the page usually is. Its pinned taskbar button then shows the running indicator while it is
+    /// open, and clicking that button closes it again.</para>
+    /// <para><b>The taskbar button is why the switcher entry comes with it, and it cannot be had
+    /// alone.</b> The shell derives the running indicator purely from whether a taskbar-eligible
+    /// window exists, and eligibility is <c>WS_EX_TOOLWINDOW</c>, which governs the taskbar and
+    /// both switchers together. Four ways round it were measured and all failed — see
+    /// <c>WebFlyoutWindow.TaskbarButton.cs</c>. That is the whole reason this is one opt-in setting
+    /// rather than a "show in taskbar" toggle: the two are the same switch, so the honest thing is
+    /// to name the window kind rather than a symptom of it.</para>
+    /// <para>Defaults <c>false</c>, which is both the flyout behaviour that shipped first and the
+    /// only direction that survives <c>WhenWritingDefault</c>.</para>
+    /// </remarks>
+    [ObservableProperty]
+    public partial bool WebRegularWindow { get; set; }
+
+    /// <summary>
+    /// In regular-window mode, close the window when its taskbar button is clicked rather than
+    /// minimizing it.
+    /// </summary>
+    /// <remarks>
+    /// Defaults <c>false</c> — minimize — because that is what every other app window does, and
+    /// regular-window mode exists precisely to behave like one. Closing is the option because a
+    /// launcher is cheap to reopen from the same button, so for some launchers the round trip is
+    /// more useful than a minimized window sitting in the taskbar. Meaningless unless
+    /// <see cref="WebRegularWindow"/> is on: a flyout has no taskbar button to click.
+    /// </remarks>
+    [ObservableProperty]
+    public partial bool WebTaskbarClickCloses { get; set; }
+
+    /// <summary>
+    /// The AppUserModelID stamped on this launcher's pinned taskbar button, empty when it has
+    /// never been pinned from a build that records this.
+    /// </summary>
+    /// <remarks>
+    /// <para>Minted by <c>LauncherSettingsWindow.PinToTaskbar_Click</c> and passed to the companion
+    /// exe, rather than minted inside the companion, purely so that it can be written down. A
+    /// window that wants to light the pinned button must carry the identical string, so somebody
+    /// has to remember it — and the companion exits immediately after pinning.</para>
+    /// <para><b>Do not go back to reading it out of the taskbar's pin store.</b> That was tried:
+    /// on a machine with eleven Little Launcher pins,
+    /// <c>HKCU\…\Explorer\Taskband\Favorites</c> and <c>FavoritesResolve</c> between them held the
+    /// AUMIDs of eight, and re-pinning the missing ones did not add them. Windows 11 keeps some
+    /// pins in a form that never embeds the string. A mismatch is not a quiet failure — the window
+    /// raises a second taskbar button beside the pin.</para>
+    /// <para>Not web-specific despite living beside the web settings: any launcher can be pinned.
+    /// It is only *read* by regular-window mode today.</para>
+    /// </remarks>
+    [ObservableProperty]
+    public partial string PinAumid { get; set; } = "";
+
+    /// <summary>
     /// Grant camera, microphone, location, notifications and the rest to this launcher's pages
     /// without asking.
     /// </summary>

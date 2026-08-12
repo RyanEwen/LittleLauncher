@@ -288,6 +288,82 @@ reveals something already on screen reads as broken.
   already calls it. **Never while the box has focus**: `HistoryChanged` fires freely on a
   single-page app, and overwriting a half-typed address is indistinguishable from a bug.
 
+## Regular-window mode, and why the taskbar and Alt-Tab are one switch
+
+`Launcher.WebRegularWindow` (Advanced → **Regular Window**, off by default) presents a web launcher
+as an ordinary app window: it drops always-on-top and dismiss-on-focus-loss, appears in the taskbar
+and both switchers, and — because its window carries the pinned shortcut's AUMID — lights the
+**running indicator on its own pinned button**. Clicking that button closes it again.
+
+**The setting names a window kind rather than a symptom, and that is not cosmetic.** The obvious
+label would be "show in taskbar", and it would be a promise the shell cannot keep: the running
+indicator is derived purely from whether the launcher's AUMID group owns a *taskbar-eligible*
+window, and eligibility is `WS_EX_TOOLWINDOW`, which governs the taskbar, Alt-Tab and Win+Tab
+together. Four ways round that were measured on Windows 11 and every one failed:
+
+| attempt | taskbar button | switcher |
+|---|---|---|
+| `ITaskbarList.AddTab` on the flyout, tool bit kept, AUMID stamped | ✗ — returns `S_OK`, does nothing | clean |
+| flyout clears `WS_EX_TOOLWINDOW` | ✓ | cluttered |
+| 1×1 off-screen proxy window, `WS_EX_APPWINDOW \| WS_EX_NOACTIVATE` | ✓ | cluttered — blank thumbnail |
+| the same proxy **owned** by a hidden tool window | ✓ | cluttered — `APPWINDOW` forces inclusion regardless of ownership |
+
+So a flyout cannot light its pin without also appearing in the switcher. Under this setting that
+stops being clutter and becomes correct: the window is no longer always-on-top, so there is finally
+a reason to Alt-Tab *to* it. **Do not re-litigate this by adding a taskbar-only toggle** — the
+proxy-window route is the one that looks like it should work and does not.
+
+Four things follow, each a guard rather than a convention:
+
+- **The tool bit is toggled on show and park, never dropped once at construction.** A dismissed
+  flyout is parked off the virtual screen, not hidden, so it stays visible in the Win32 sense for
+  the life of the app — made switcher-eligible once, it would sit in Alt-Tab forever, including for
+  every launcher preloaded at startup under `KeepRunning` that has never been opened.
+- **`ITaskbarList.AddTab` is required and is not redundant with the style change.** It does nothing
+  for a tool window, and *everything* for one that has just stopped being one: dropping the call
+  left a correctly-restyled window with no button at all, because the shell had not looked again.
+  The hide/restyle/show cycle the documentation suggests instead is unavailable here — `SW_HIDE` is
+  what makes WinUI drop the composition surfaces the park exists to protect.
+- **The window must be told it is minimizable, or the taskbar click does nothing at all.** A
+  flyout's `CreateForContextMenu` presenter is not minimizable, and the shell will not send
+  `SC_MINIMIZE` to a window that says it cannot be — so both possible behaviours, minimize *and*
+  the close that intercepts it, silently did nothing. `presenter.IsMinimizable` in regular-window
+  mode is what makes the click reach the window; it is not visible in `HandleTaskbarMinimize`,
+  which simply never ran. (`WS_SYSMENU` was tried alongside it and is **not** needed — measured.)
+- **What that click does is `Launcher.WebTaskbarClickCloses`** (Advanced → **Taskbar Click**, shown
+  only while Regular Window is on, since a flyout has no button to click). Default is minimize,
+  because that is what an ordinary app window does and this mode exists to be one; closing is the
+  option, because a launcher is cheap to reopen from the same button. Minimize is simply the
+  message reaching `DefWindowProc` unconsumed.
+- **The pin button changes meaning with the mode, deliberately reusing `WebPinFlyout`.** A flyout's
+  risk is vanishing when you click away, so pinning stops the dismissal; a regular window never
+  dismisses itself, so its risk is being buried and pinning keeps it on top. Each reading is
+  meaningless in the other mode, so a second flag would just be a setting that does nothing
+  wherever the launcher actually is. `SetTopmost` resolves it centrally — every caller is either
+  dropping topmost for a modal or restoring "the default", and the default is exactly what differs.
+- **The window needs an icon it never needed as a flyout.** A flyout has no title bar and appears
+  nowhere an icon is drawn; a regular window appears in two such places, and without
+  `ApplyWindowIcon` both show a blank placeholder. It uses the per-launcher `app-icon-{id}.ico` —
+  the same file the pinned shortcut points at, so the button and its pin agree.
+- **The pin's AUMID is recorded when the pin is made** (`Launcher.PinAumid`), minted by
+  `LauncherSettingsWindow.PinToTaskbar_Click` and passed to the companion as `--aumid`. The
+  companion used to mint it and then exit, so nothing remembered it.
+
+  **Two ways of recovering it afterwards were tried and both fail — do not go back to either.**
+  Reading the pinned `.lnk`'s property store is not possible at all: Windows 11 does not keep these
+  pins as shortcut files, and `User Pinned\TaskBar` held three unrelated apps on a machine showing
+  eleven Little Launcher pins. Scraping `HKCU\…\Explorer\Taskband\Favorites` /
+  `FavoritesResolve` works for *some* pins: on that same machine the two blobs between them held
+  eight of the eleven, with WhatsApp, Messenger and Web Launcher in neither, and re-pinning did not
+  add them. That scan survives only as a fallback for pins made before the app started recording.
+
+  **A mismatch is loud, not silent** — a window whose AUMID does not match its pin raises a
+  *second* taskbar button beside it. That is the symptom to recognise; it means the identity is
+  wrong, never that the feature is off.
+
+  Consequence for existing pins: a launcher pinned before this must be **re-pinned** once, unless
+  it happens to be one the registry scan can still find.
+
 ## Discoverability
 
 Two mechanisms, doing different jobs:
@@ -431,8 +507,8 @@ page updating itself, not a stale frame.
 ## Settings layout
 
 Launcher settings show only **Web Address** and **Flyout Size** for a web launcher. Zoom, When
-Hidden, Unload After, Reload On Open, Address Bar, Pin Open and Browsing Data live in a collapsed
-**Advanced** expander: they tune a launcher that already works, and putting all of them on one
+Hidden, Unload After, Reload On Open, Address Bar, Pin Open, Regular Window and Browsing Data live
+in a collapsed **Advanced** expander: they tune a launcher that already works, and putting all of them on one
 surface made the common case (paste a URL, pick a size) read as a form to fill in. Pin and Address
 Bar are safe to demote twice over — the flyout's own header has a button for each.
 

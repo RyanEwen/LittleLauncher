@@ -177,6 +177,7 @@ static class Program
         string? launcherId = null;
         string? launcherName = null;
         string? explicitIconPath = null;
+        string? explicitAumid = null;
         for (int i = 0; i < args.Length - 1; i++)
         {
             if (args[i] == "--launcher" || args[i] == "--layout")
@@ -185,6 +186,8 @@ static class Program
                 launcherName ??= args[i + 1];
             else if (args[i] == "--icon")
                 explicitIconPath ??= args[i + 1];
+            else if (args[i] == "--aumid")
+                explicitAumid ??= args[i + 1];
         }
 
         if (args.Length > 0 && args[0] == "--pin")
@@ -209,12 +212,19 @@ static class Program
 
             if (!string.IsNullOrEmpty(launcherId))
             {
-                // Use TickCount64 to ensure every pin attempt gets a unique AUMID,
-                // busting Windows' per-AUMID icon cache from any previous (possibly
-                // broken) pin. File size alone isn't enough — it stays the same if
-                // the icon content hasn't changed.
-                long pinStamp = Environment.TickCount64;
-                string aumid = $"LittleLauncher.Launcher.{launcherId}.{pinStamp}";
+                // --aumid is the main app telling us which identity it has recorded against this
+                // launcher. It must win: a window that wants to light this pinned button has to
+                // carry the identical string, and only the app side can remember it — this process
+                // exits as soon as the pin is made. Minting our own is the fallback for an older
+                // app calling a newer companion.
+                //
+                // Either way it carries a tick, for the original reason: every pin attempt needs a
+                // unique AUMID to bust Windows' per-AUMID icon cache from any previous (possibly
+                // broken) pin. File size alone isn't enough — it stays the same if the icon content
+                // hasn't changed.
+                string aumid = !string.IsNullOrEmpty(explicitAumid)
+                    ? explicitAumid
+                    : $"LittleLauncher.Launcher.{launcherId}.{Environment.TickCount64}";
                 SetCurrentProcessExplicitAppUserModelID(aumid);
 
                 string exePath = Path.Combine(AppContext.BaseDirectory, "LittleLauncherFlyout.exe");

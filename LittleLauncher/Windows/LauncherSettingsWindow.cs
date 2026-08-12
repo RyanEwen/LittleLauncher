@@ -1300,6 +1300,45 @@ public sealed class LauncherSettingsWindow : Window
         };
         var pinRow = BuildRow("Pin Open", "Stay on screen when you click elsewhere, instead of dismissing like a flyout", pinToggle);
 
+        // ── Regular window ──────────────────────────────────────
+        var regularToggle = new ToggleSwitch { IsOn = launcher.WebRegularWindow, OnContent = "", OffContent = "", MinWidth = 0 };
+        regularToggle.Toggled += (_, _) =>
+        {
+            launcher.WebRegularWindow = regularToggle.IsOn;
+            SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
+        };
+        // Names the window kind rather than any one symptom of it. "Show in taskbar" would be the
+        // obvious label and would be a promise the shell cannot keep: the taskbar button and the
+        // Alt-Tab entry are the same switch, so a launcher cannot have one without the other.
+        var regularRow = BuildRow("Regular Window",
+            "Behave like an ordinary app window: taskbar button, Alt-Tab entry, not always on top, and stays open until closed",
+            regularToggle);
+
+        // ── What the taskbar button's click does ────────────────
+        var clickCombo = new ComboBox { MinWidth = 200 };
+        clickCombo.Items.Add(new ComboBoxItem { Content = "Minimize it", Tag = false });
+        clickCombo.Items.Add(new ComboBoxItem { Content = "Close it", Tag = true });
+        clickCombo.SelectedIndex = launcher.WebTaskbarClickCloses ? 1 : 0;
+        clickCombo.SelectionChanged += (_, _) =>
+        {
+            if (clickCombo.SelectedItem is not ComboBoxItem { Tag: bool closes }) return;
+            launcher.WebTaskbarClickCloses = closes;
+            SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
+        };
+        var clickRow = BuildRow("Taskbar Click",
+            "What clicking this launcher's taskbar button does while it is open",
+            clickCombo);
+
+        // Only meaningful with Regular Window on — a flyout has no taskbar button to click — so it
+        // follows that toggle rather than sitting there inert. Shown and hidden rather than
+        // disabled: a greyed row still reads as a setting you are missing out on.
+        void UpdateClickVisibility() =>
+            clickRow.Visibility = launcher.WebRegularWindow ? Visibility.Visible : Visibility.Collapsed;
+        regularToggle.Toggled += (_, _) => UpdateClickVisibility();
+        UpdateClickVisibility();
+
         // ── Opening position ────────────────────────────────────
         var anchorCombo = new ComboBox { MinWidth = 200 };
         (string Label, int Value)[] anchors =
@@ -1485,7 +1524,7 @@ public sealed class LauncherSettingsWindow : Window
 
         // ── Advanced ────────────────────────────────────────────
         var advancedPanel = new StackPanel { Spacing = 12 };
-        foreach (var row in new[] { zoomRow, policyRow, idleRow, reloadRow, addressRow, pinRow, anchorRow, rememberRow, rememberSizeRow, trustRow, resetPermissionsRow, profileRow, clearRow })
+        foreach (var row in new[] { zoomRow, policyRow, idleRow, reloadRow, addressRow, pinRow, regularRow, clickRow, anchorRow, rememberRow, rememberSizeRow, trustRow, resetPermissionsRow, profileRow, clearRow })
             advancedPanel.Children.Add(row);
 
         var advanced = new Expander
@@ -1813,6 +1852,24 @@ public sealed class LauncherSettingsWindow : Window
 
         string iconArg = pinnedIconPath != null ? $" --icon \"{pinnedIconPath}\"" : "";
 
+        // Mint the pin's AUMID here rather than letting the companion do it, and record it on the
+        // launcher. It is the identity the taskbar groups the pinned button under, and a window
+        // that wants to light that button has to carry the identical string — so something has to
+        // remember it, and only this side can.
+        //
+        // The app used to read it back out of the taskbar's own pin store
+        // (HKCU\...\Explorer\Taskband). That works for some pins and not others: measured on a
+        // machine with eleven Little Launcher pins, those blobs held the AUMIDs of eight of them,
+        // and WhatsApp, Messenger and Web Launcher appeared in neither. Re-pinning did not add
+        // them. A window whose AUMID does not match its pin does not fail quietly — it raises a
+        // *second* taskbar button beside the pin, which is how that was noticed.
+        //
+        // Still stamped with a tick, for the reason the companion did it: the AUMID must be unique
+        // per pin attempt to bust Windows' per-AUMID icon cache.
+        launcher.PinAumid = $"LittleLauncher.Launcher.{launcher.Id}.{Environment.TickCount64}";
+        SettingsManager.SaveSettings();
+        Services.AutoSyncService.NotifyLaunchersChanged();
+
         // Minimize the settings window while the companion exe is running.
         // WinUI 3's ContentDialog aggressively reclaims focus, which can
         // dismiss the taskbar right-click context menu the user needs to
@@ -1828,7 +1885,7 @@ public sealed class LauncherSettingsWindow : Window
         var proc = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
         {
             FileName = flyoutExe,
-            Arguments = $"--pin --launcher {launcher.Id} --name \"{launcher.Name}\"{iconArg}",
+            Arguments = $"--pin --launcher {launcher.Id} --name \"{launcher.Name}\" --aumid {launcher.PinAumid}{iconArg}",
             UseShellExecute = false,
         });
 

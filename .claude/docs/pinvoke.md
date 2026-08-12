@@ -136,6 +136,25 @@ Helpers:
 - `SetWindowRelaunchProperties(hwnd, icon, command, displayName)` — sets all three relaunch PKEYs (currently unused — kept for future use)
 - `SetPropertyStoreString(store, key, value)` — low-level VT_LPWSTR setter (private)
 
+## ITaskbarList COM Section
+
+`GetTaskbarList()` caches the shell's `ITaskbarList` (CLSID `56FDF344-…`), used by
+regular-window mode to add and drop a web launcher's taskbar button.
+
+**`AddTab` is neither sufficient nor redundant, and both halves of that were measured:**
+
+- It returns `S_OK` and does **nothing** for a `WS_EX_TOOLWINDOW` window, even with a matching
+  `PKEY_AppUserModel_ID` stamped. It is not a way to give a tool window a taskbar button, however
+  much it looks like one.
+- It *is* required for a window that has just had the tool bit cleared — without it the window is
+  correctly restyled and still has no button, because the shell has not re-evaluated. The
+  documented alternative (hide, restyle, show) is unavailable in this app: `SW_HIDE` makes WinUI
+  release the composition surfaces that off-screen parking exists to preserve.
+
+Pair it with `SetWindowPos(… SWP_FRAMECHANGED)` after the style change. A null return from
+`GetTaskbarList()` is a normal outcome to handle — a taskbar button must never stop a flyout
+opening.
+
 ## IShellItemImageFactory COM Section
 
 The `#region shell32.dll` section includes `SHCreateItemFromParsingName` and the `IShellItemImageFactory` COM interface for extracting app icons from `shell:AppsFolder` items (used for PWA and Store app icons). The `#region gdi32.dll` section provides `DeleteObject` (HBITMAP cleanup), `GetObject` / `GetObjectDibSection` (reading bitmap metadata), `CreateCompatibleDC` / `DeleteDC` / `SelectObject` / `BitBlt` (blitting source HBITMAPs into controlled DIBs), and `CreateDIBSection` with `BITMAPINFO` (creating a top-down 32bpp DIB section with known pixel layout for reliable icon extraction).

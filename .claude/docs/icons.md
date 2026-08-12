@@ -129,7 +129,7 @@ The companion exe is deployed to `<AppDataDir>` by `EnsureFlyoutShortcut()` for 
 ### Pin identity (all builds)
 
 Pin identity comes **solely from relaunch properties** set on the companion exe's MessageBox HWND via a CBT hook:
-- `PKEY_AppUserModel_ID` = `LittleLauncher.Launcher.{guid}.{TickCount64}` — unique per pin attempt to bust Windows' per-AUMID icon cache
+- `PKEY_AppUserModel_ID` = `LittleLauncher.Launcher.{guid}.{TickCount64}` — unique per pin attempt to bust Windows' per-AUMID icon cache. **Minted by the main app and passed in as `--aumid`**, and stored on the launcher as `Launcher.PinAumid`; the companion only mints its own as a fallback for an older app. It has to be written down because a window that wants to light the pinned button must carry the identical string, and the companion exits the moment the pin is made — and the AUMID cannot be recovered afterwards for every pin (see [web-launchers.md](web-launchers.md))
 - `PKEY_AppUserModel_RelaunchCommand` = the companion exe path + `--launcher {guid}`
 - `PKEY_AppUserModel_RelaunchIconResource` = timestamped `app-icon-{id}-pin{tick}.ico` path (same path as `LoadImage` uses), written as an **icon resource reference — `"path,0"`, never a bare path**
 - `PKEY_AppUserModel_RelaunchDisplayNameResource` = `"Little Launcher - {name}"`

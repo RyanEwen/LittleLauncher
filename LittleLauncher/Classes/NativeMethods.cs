@@ -635,4 +635,70 @@ public static partial class NativeMethods
     }
 
     #endregion
+
+    #region Window messages — regular-window mode
+
+    internal const uint WM_SYSCOMMAND = 0x0112;
+    internal const int SC_MINIMIZE = 0xF020;
+    internal const int SC_CLOSE = 0xF060;
+
+    #endregion
+
+    #region ITaskbarList (COM)
+
+    /// <summary>
+    /// Tells the shell to add or drop a window's taskbar button.
+    /// </summary>
+    /// <remarks>
+    /// <b>Not sufficient on its own, and not redundant either.</b> Measured on Windows 11:
+    /// <c>AddTab</c> returns <c>S_OK</c> and does nothing at all for a <c>WS_EX_TOOLWINDOW</c>
+    /// window, even with a matching AUMID stamped — the style is what decides eligibility. But for
+    /// a window that has just *become* eligible, this is what makes the shell notice without the
+    /// hide/show cycle the documentation reaches for, which this app cannot do (<c>SW_HIDE</c>
+    /// makes WinUI drop the composition surfaces the off-screen park exists to protect). Dropping
+    /// the call left a correctly-restyled window with no button.
+    /// </remarks>
+    [ComImport]
+    [Guid("56FDF342-FD6D-11D0-958A-006097C9A090")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface ITaskbarList
+    {
+        [PreserveSig] int HrInit();
+        [PreserveSig] int AddTab(IntPtr hwnd);
+        [PreserveSig] int DeleteTab(IntPtr hwnd);
+        [PreserveSig] int ActivateTab(IntPtr hwnd);
+        [PreserveSig] int SetActiveAlt(IntPtr hwnd);
+    }
+
+    /// <summary>CLSID_TaskbarList.</summary>
+    [ComImport]
+    [Guid("56FDF344-FD6D-11D0-958A-006097C9A090")]
+    [ClassInterface(ClassInterfaceType.None)]
+    internal class TaskbarListClass { }
+
+    private static ITaskbarList? _taskbarList;
+
+    /// <summary>The shell's taskbar list, created once and kept. Null if it cannot be created.</summary>
+    /// <remarks>
+    /// Cached rather than created per call: this runs on every open and dismissal of a
+    /// regular-window launcher, and <c>HrInit</c> is the expensive half. A null return is a normal
+    /// outcome to handle, not an error to throw on.
+    /// </remarks>
+    internal static ITaskbarList? GetTaskbarList()
+    {
+        if (_taskbarList != null) return _taskbarList;
+
+        try
+        {
+            var list = (ITaskbarList)new TaskbarListClass();
+            if (list.HrInit() != 0) return null;
+            return _taskbarList = list;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    #endregion
 }

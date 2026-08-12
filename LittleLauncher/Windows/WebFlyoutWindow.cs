@@ -272,7 +272,13 @@ public sealed partial class WebFlyoutWindow : Window
         // has no non-client area at all, and the size is a setting rather than something dragged.
         var presenter = OverlappedPresenter.CreateForContextMenu();
         presenter.SetBorderAndTitleBar(false, false);
-        presenter.IsAlwaysOnTop = true;
+        presenter.IsAlwaysOnTop = !launcher.WebRegularWindow || launcher.WebPinFlyout;
+
+        // A context-menu presenter is not minimizable, and the shell will not send a minimize to a
+        // window that says it cannot be — so in regular-window mode a click on the taskbar button
+        // produced nothing at all, neither the minimize nor the close that is meant to intercept
+        // it. This is what makes that click reach the window in the first place.
+        presenter.IsMinimizable = launcher.WebRegularWindow;
         GetAppWindow().SetPresenter(presenter);
 
         SystemBackdrop = new DesktopAcrylicBackdrop();
@@ -864,10 +870,32 @@ public sealed partial class WebFlyoutWindow : Window
         }
     }
 
+    /// <summary>
+    /// Lets the window be minimized, which is what makes its taskbar button's click reach it.
+    /// </summary>
+    private void SetMinimizable(bool minimizable)
+    {
+        try
+        {
+            if (GetAppWindow().Presenter is OverlappedPresenter presenter)
+                presenter.IsMinimizable = minimizable;
+        }
+        catch (Exception ex)
+        {
+            Logger.Debug(ex, "Presenter unavailable while setting minimizable");
+        }
+    }
+
     private void SetTopmost(bool topmost)
     {
         try
         {
+            // A regular window is on top only when its pin says so — a flyout is always-on-top by
+            // nature, a window is not. Resolved here rather than at each caller: they are all
+            // either dropping it for a modal (false stays false) or restoring the default, and
+            // "the default" is exactly what differs between the two window kinds.
+            if (_launcher.WebRegularWindow) topmost = topmost && _launcher.WebPinFlyout;
+
             if (GetAppWindow().Presenter is OverlappedPresenter presenter)
                 presenter.IsAlwaysOnTop = topmost;
         }
@@ -893,15 +921,37 @@ public sealed partial class WebFlyoutWindow : Window
 
     private static string PinGlyph(bool pinned) => pinned ? "" : "";
 
-    private static string PinTooltip(bool pinned) =>
-        pinned ? "Unpin — close when focus is lost" : "Pin open";
+    /// <summary>
+    /// What the pin button promises, which depends on what kind of window this is.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Launcher.WebPinFlyout"/> is one stored flag with two readings, because the two
+    /// window kinds make "keep this in front of me" mean different things — and in each kind the
+    /// other reading is meaningless. A flyout's risk is that it vanishes when you click away, so
+    /// pinning stops the dismissal. A regular window never dismisses itself in the first place; its
+    /// risk is being buried, so pinning keeps it on top. Storing a second flag would mean carrying
+    /// a setting that does nothing in whichever mode the launcher is actually in.
+    /// </remarks>
+    private string PinTooltip(bool pinned) => _launcher.WebRegularWindow
+        ? (pinned ? "Turn off always on top" : "Keep always on top")
+        : (pinned ? "Unpin — close when focus is lost" : "Pin open");
 
-    /// <summary>Flips the launcher's pin state and re-labels the header button.</summary>
+    /// <summary>Flips the launcher's pin state, applies it, and re-labels the header button.</summary>
     private void TogglePin()
     {
         _launcher.WebPinFlyout = !_launcher.WebPinFlyout;
         SettingsManager.SaveSettings();
 
+        // In flyout mode this is read at dismissal time, so nothing needs applying. In regular
+        // window mode it is window state and has to be pushed now, or the button would report a
+        // change the window had not made.
+        SetTopmost(true);
+        UpdatePinButton();
+    }
+
+    /// <summary>Re-labels the pin button for the current state and window kind.</summary>
+    private void UpdatePinButton()
+    {
         if (_pinButton.Content is FontIcon icon)
             icon.Glyph = PinGlyph(_launcher.WebPinFlyout);
         ToolTipService.SetToolTip(_pinButton, PinTooltip(_launcher.WebPinFlyout));
@@ -1664,6 +1714,10 @@ public sealed partial class WebFlyoutWindow : Window
 
         _hasBeenShown = true;
 
+        // PROTOTYPE: light up the launcher's pinned taskbar button while the flyout is on screen.
+        // After the show, so the button appears with the window rather than ahead of it.
+        ApplyTaskbarButton(true);
+
         // Kicked off after the window is on screen so the panel (and its loading state) is
         // visible while the browser starts, rather than the click appearing to do nothing.
         // A collapsed bar starts nothing at all: the whole point is that opening the flyout
@@ -1757,6 +1811,10 @@ public sealed partial class WebFlyoutWindow : Window
     {
         _isOpen = false;
         ClearFade();
+
+        // PROTOTYPE: drop the taskbar button before the window goes off screen. The park leaves it
+        // visible in the Win32 sense, so nothing else would ever take the button away.
+        ApplyTaskbarButton(false);
 
         // A revealed address bar is temporary in the same way maximize is, and ends in the same
         // place: the next open is whatever the launcher's settings say, not what the last visit
@@ -2885,6 +2943,15 @@ public sealed partial class WebFlyoutWindow : Window
         ApplyZoom();
         ApplyAddressBarVisibility();
 
+        // Regular-window mode can have been switched on or off in the window that just closed, and
+        // all of it is window state rather than something re-read per open. The pin button's label
+        // goes with it: the same flag reads as "stay on top" in one mode and "stay open" in the
+        // other, so the tooltip is wrong until it is rebuilt.
+        SetTopmost(true);
+        UpdatePinButton();
+        SetMinimizable(_launcher.WebRegularWindow);
+        if (_isOpen) ApplyTaskbarButton(true);
+
         // CurrentTargetUrl, not WebUrl. This runs whenever the launcher changes — including
         // after a bookmark's favicon fetch completes — so reading the launcher's single address
         // here yanked an open bookmark over to it, and the arriving page's icon was then adopted
@@ -2966,6 +3033,12 @@ public sealed partial class WebFlyoutWindow : Window
         {
             // Activation came back — whatever was being watched for is resolved.
             StopForegroundWatch();
+
+            // WinUI replaces WM_SETICON as it initialises and activates the window, so the icon
+            // has to be re-asserted here rather than only when it was first applied. Cheap: two
+            // messages with handles that are already loaded, and a no-op until this launcher has
+            // run as a regular window.
+            PushWindowIcon();
             return;
         }
 
@@ -2973,7 +3046,10 @@ public sealed partial class WebFlyoutWindow : Window
         // same rule the item flyout applies to edit mode and its editors.
         // An open question pins the flyout too: a prompt that disappears when the user clicks
         // elsewhere is a request the page never gets an answer to.
-        if (_isShowing || !_isOpen || _launcher.WebPinFlyout || _isModalOpen || _isResizing || _isMovingWindow || _isFullScreen || IsPromptOpen) return;
+        // Regular-window mode pins it open for the same reason WebPinFlyout does, and more
+        // fundamentally: an ordinary app window that vanished the moment you clicked another one
+        // would not be an ordinary app window. Its taskbar button is how it gets closed instead.
+        if (_isShowing || !_isOpen || _launcher.WebPinFlyout || _launcher.WebRegularWindow || _isModalOpen || _isResizing || _isMovingWindow || _isFullScreen || IsPromptOpen) return;
 
         // The browser's own HWNDs are children of this window, so clicking into the page
         // deactivates the XAML window without the user having gone anywhere. Read the
@@ -2986,7 +3062,7 @@ public sealed partial class WebFlyoutWindow : Window
             // at one moment and acting on it at another is exactly how a pinned flyout ends up
             // dismissed anyway.
             if (!_isOpen || _isShowing || _isHiding) return;
-            if (_launcher.WebPinFlyout || _isModalOpen || _isResizing || _isMovingWindow || _isFullScreen || IsPromptOpen) return;
+            if (_launcher.WebPinFlyout || _launcher.WebRegularWindow || _isModalOpen || _isResizing || _isMovingWindow || _isFullScreen || IsPromptOpen) return;
 
             if (IsForegroundStillOurs())
             {
@@ -3112,6 +3188,9 @@ public sealed partial class WebFlyoutWindow : Window
             HideFlyout();
             return IntPtr.Zero;
         }
+
+        // In regular-window mode the taskbar button's click arrives as a minimize request.
+        if (HandleTaskbarMinimize(msg, wParam)) return IntPtr.Zero;
 
         return DefSubclassProc(hwnd, msg, wParam, lParam);
     }

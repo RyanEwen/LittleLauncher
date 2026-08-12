@@ -111,6 +111,13 @@ Advanced). Off, the header's link button reveals it for the rest of that visit â
 window state dropped on dismissal, exactly like maximize, so clicking it never rewrites the
 launcher.
 
+A web launcher can also stop being a flyout altogether: `Launcher.WebRegularWindow` (Advanced) drops
+always-on-top and dismiss-on-focus-loss and puts it in the taskbar and the task switcher, so its
+pinned button shows the running indicator and closes it when clicked. **The switcher entry cannot be
+declined** â€” taskbar eligibility is `WS_EX_TOOLWINDOW`, which governs both, and four ways round it
+were measured and failed; see [.claude/docs/web-launchers.md](.claude/docs/web-launchers.md). That
+is why the setting names a window kind rather than offering a taskbar-only toggle.
+
 Per-launcher WebView2 profiles live in `%AppData%\LittleLauncher\WebProfiles\{launcherId}`, which is
 what keeps a dashboard signed in across app restarts.
 
