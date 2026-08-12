@@ -114,6 +114,11 @@ model default, which would have flipped it on for every existing launcher.
 - `WebHiddenPolicy` (`int`) — `WebHiddenPolicies.UnloadWhenIdle` (0, default) / `Suspend` (1) / `KeepRunning` (2)
 - `WebIdleUnloadMinutes` (`int`) — 0 means the default; read `ResolvedWebIdleUnloadMinutes`
 - `WebReloadOnShow` (`bool`) — re-fetch on every open
+- `WebShowAddressBar` (`bool`) — keep an address bar under the flyout's header. Defaults `false`,
+  which is both the safe direction under `WhenWritingDefault` and the behaviour that shipped
+  first. Off does not mean unreachable: the header carries a button that reveals the bar for the
+  rest of that visit, and **that reveal is window state, never written back to this property** —
+  see [web-launchers.md](web-launchers.md)
 - `WebSharedProfile` (`bool`) — pool cookies and logins in `WebProfiles\Shared` with every other
   launcher that sets it, instead of a private per-launcher folder. Defaults `false`, which is both
   the safe direction under `WhenWritingDefault` and the behaviour that shipped first — an upgrade

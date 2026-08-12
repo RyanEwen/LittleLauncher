@@ -1276,6 +1276,20 @@ public sealed class LauncherSettingsWindow : Window
         };
         var reloadRow = BuildRow("Reload On Open", "Fetch the page again each time, instead of showing it as you left it", reloadToggle);
 
+        // ── Address bar ─────────────────────────────────────────
+        var addressToggle = new ToggleSwitch { IsOn = launcher.WebShowAddressBar, OnContent = "", OffContent = "", MinWidth = 0 };
+        addressToggle.Toggled += (_, _) =>
+        {
+            launcher.WebShowAddressBar = addressToggle.IsOn;
+            SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
+        };
+        // Says where it goes when it is off, so the toggle does not read as the only way to see
+        // an address — the flyout's header keeps a button that reveals it for that visit.
+        var addressRow = BuildRow("Address Bar",
+            "Keep the page address under the header. Off, the header's link button reveals it",
+            addressToggle);
+
         // ── Keep open on focus loss ─────────────────────────────
         var pinToggle = new ToggleSwitch { IsOn = launcher.WebPinFlyout, OnContent = "", OffContent = "", MinWidth = 0 };
         pinToggle.Toggled += (_, _) =>
@@ -1471,7 +1485,7 @@ public sealed class LauncherSettingsWindow : Window
 
         // ── Advanced ────────────────────────────────────────────
         var advancedPanel = new StackPanel { Spacing = 12 };
-        foreach (var row in new[] { zoomRow, policyRow, idleRow, reloadRow, pinRow, anchorRow, rememberRow, rememberSizeRow, trustRow, resetPermissionsRow, profileRow, clearRow })
+        foreach (var row in new[] { zoomRow, policyRow, idleRow, reloadRow, addressRow, pinRow, anchorRow, rememberRow, rememberSizeRow, trustRow, resetPermissionsRow, profileRow, clearRow })
             advancedPanel.Children.Add(row);
 
         var advanced = new Expander

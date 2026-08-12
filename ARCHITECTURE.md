@@ -106,6 +106,11 @@ writes nothing to the launcher and is dropped when the flyout is dismissed, so t
 the configured size again. That is a different thing from page fullscreen, which the page enters,
 which takes the whole monitor over the taskbar, and which hides the chrome for the duration.
 
+An **address bar** can sit under the header (`Launcher.WebShowAddressBar`, off by default, in
+Advanced). Off, the header's link button reveals it for the rest of that visit — a reveal which is
+window state dropped on dismissal, exactly like maximize, so clicking it never rewrites the
+launcher.
+
 Per-launcher WebView2 profiles live in `%AppData%\LittleLauncher\WebProfiles\{launcherId}`, which is
 what keeps a dashboard signed in across app restarts.
 

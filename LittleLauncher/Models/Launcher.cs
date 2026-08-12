@@ -323,6 +323,19 @@ public partial class Launcher : ObservableObject
     public partial bool WebReloadOnShow { get; set; }
 
     /// <summary>
+    /// Keep an address bar under the flyout's header, showing and accepting the page address.
+    /// </summary>
+    /// <remarks>
+    /// Phrased as "show" rather than "hide" so the default behaviour is <c>false</c>: a flyout is
+    /// a small window and the address is chrome most launchers do not want standing in for page.
+    /// With it off the bar is still reachable — the header carries a button that reveals it for
+    /// as long as the flyout stays open. Same <c>WhenWritingDefault</c> constraint as
+    /// <see cref="WebPinFlyout"/>: a bool defaulting to <c>true</c> could not be turned off.
+    /// </remarks>
+    [ObservableProperty]
+    public partial bool WebShowAddressBar { get; set; }
+
+    /// <summary>
     /// Keep the flyout on screen when it loses focus, instead of dismissing like a flyout.
     /// </summary>
     /// <remarks>

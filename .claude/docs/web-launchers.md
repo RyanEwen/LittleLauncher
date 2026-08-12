@@ -221,15 +221,72 @@ that window disposes this very flyout.
 
 ## The header
 
-Back (left, where a browser puts it — it acts on the page, not the flyout) and, on the right,
-launcher settings / reload / open in browser / pin / maximize / close — the page actions first,
-then the two that decide how the flyout behaves as a window. Back is driven by `HistoryChanged`
-rather than `NavigationCompleted`: a dashboard is usually a single-page app, so most of its
-navigation is history pushed by script with no document load to hang the update off.
+Back / forward / reload on the left, where a browser puts them — they act on the page, not on the
+flyout — and on the right, launcher settings / show address / open in browser / pin / maximize /
+close: the page actions first, then the two that decide how the flyout behaves as a window. Back is
+driven by `HistoryChanged` rather than `NavigationCompleted`: a dashboard is usually a single-page
+app, so most of its navigation is history pushed by script with no document load to hang the update
+off.
+
+Reload moved to the nav group for the same reason Back is there in the first place, and the two
+groups now divide cleanly by what they act on. Only the reload button carries the trailing margin
+that separates the nav group from the title; keep that on whichever button ends up last.
+
+**Close tints its glyph red on hover** (`BuildHeaderButton`'s `redOnHover`) — the glyph, not a
+title-bar-style red fill behind it, which would be the only solid shape in a header of flat
+transparent buttons and reads as an application's close rather than a flyout's. Both close buttons
+take it: the header's and the bookmark bar's. Two details:
+
+- It overrides `ButtonForegroundPointerOver` / `ButtonForegroundPressed` on the **button's own**
+  `Resources`, the same mechanism the disabled state above uses — the templated parent is in the
+  lookup chain, so a `ThemeResource` in the default template resolves there first, and the
+  `FontIcon` inherits it because it sets no `Foreground` of its own. Pressed matches pointer-over
+  or the colour drops away at the moment of committing to it.
+- The brush is read with `TryGetValue`, not the indexer. A missing key throws, and this runs while
+  the window is being constructed, so an absent theme brush would take the launcher out rather
+  than merely lose a hover colour. WinUI theme dictionaries ship compiled to `.xbf`, so a key's
+  existence cannot be confirmed by grepping the SDK — assume nothing and fall back.
 
 **Passkeys work** — verified against a real sign-in. WebAuthn with a Windows Hello platform
 authenticator completes inside the flyout; credentials belong to the OS, so the per-launcher user
 data folder does not isolate them.
+
+## The address bar
+
+Off by default (`Launcher.WebShowAddressBar`, Advanced → **Address Bar**), because a flyout is a
+small window and a launcher usually opens one known page. Off does not mean unreachable: the
+header's link button reveals the bar, and hides itself when the bar is permanent — a control that
+reveals something already on screen reads as broken.
+
+- **It is a row of chrome, not an overlay.** Same reasoning as the permission prompt bar and the
+  resize grips: anything floating over a hosted browser depends on how WebView2 routes input, and
+  an address bar that cannot be clicked into is worse than one that costs a little height.
+- **It travels with the header, in a `StackPanel` sharing root row 0.** That keeps the root's rows —
+  and the resize grips' row spans — exactly as they were. Its visibility is driven off the header's
+  via `RegisterPropertyChangedCallback`, so everything that already hides the header (collapsing to
+  a bookmark bar, a page going fullscreen) carries the address bar with it without a matching line
+  at each of those call sites.
+- **It sizes to its content.** A fixed height clips the box at any scale or font where the default
+  `TextBox` is taller than the number picked. It eats into the page, not the window, so no geometry
+  arithmetic depends on how tall it comes out.
+- **The reveal is window state, exactly like maximize**, and is dropped in the same place
+  (`ParkOffScreen`). Nothing on that path may write `WebShowAddressBar`, or clicking the button
+  once would silently rewrite the launcher's settings.
+- **It never becomes a fourth answer to "which URL".** `GoToTypedAddress` drives the browser that
+  is already there and never creates one. Falling back to `PrepareContentAsync` looks helpful and
+  is not — that path navigates to `CurrentTargetUrl()`, so an address typed with no live browser
+  would silently load the launcher's configured page instead of the one asked for.
+- **Escape is checked in the accelerator, not left to the `TextBox`.** An accelerator and a
+  bubbling `KeyDown` do not resolve in a fixed order, so `CancelAddressEditing` runs first and
+  reports whether it consumed the key. That makes moving focus *off* the box load-bearing: Escape
+  is swallowed while the box has focus, so a failure to move it would swallow every later Escape
+  too and leave the flyout with no keyboard dismissal at all. Hence the fallback to the pin
+  button — always present and always enabled while the header is showing, unlike Back/Forward
+  (disableable) or the reveal button (hidden once the bar is permanent).
+- The box is refreshed from `UpdateNavigationButtons`, so it rides the same `HistoryChanged` +
+  `NavigationCompleted` pair as Back and Forward — and the tab switch in `ActivateTabAsync`, which
+  already calls it. **Never while the box has focus**: `HistoryChanged` fires freely on a
+  single-page app, and overwriting a half-typed address is indistinguishable from a bug.
 
 ## Discoverability
 
@@ -374,10 +431,10 @@ page updating itself, not a stale frame.
 ## Settings layout
 
 Launcher settings show only **Web Address** and **Flyout Size** for a web launcher. Zoom, When
-Hidden, Unload After, Reload On Open, Pin Open and Browsing Data live in a collapsed **Advanced**
-expander: they tune a launcher that already works, and putting all eight fields on one surface made
-the common case (paste a URL, pick a size) read as a form to fill in. Pin is safe to demote twice
-over — the flyout's own header has a pin button.
+Hidden, Unload After, Reload On Open, Address Bar, Pin Open and Browsing Data live in a collapsed
+**Advanced** expander: they tune a launcher that already works, and putting all of them on one
+surface made the common case (paste a URL, pick a size) read as a form to fill in. Pin and Address
+Bar are safe to demote twice over — the flyout's own header has a button for each.
 
 New per-launcher web settings should default to Advanced unless a launcher is unusable without
 them.

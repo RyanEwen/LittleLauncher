@@ -80,6 +80,9 @@ public sealed partial class WebFlyoutWindow : Window
     private readonly Button _maximizeButton;
     private readonly Button _backButton;
     private readonly Button _forwardButton;
+    private readonly Button _addressButton;
+    private readonly Grid _addressBar;
+    private readonly TextBox _addressBox;
     private readonly Grid _header;
     private readonly Grid _root;
     private readonly StackPanel _bookmarkStrip;
@@ -206,6 +209,18 @@ public sealed partial class WebFlyoutWindow : Window
     /// </remarks>
     private bool _hasTemporaryResize;
 
+    /// <summary>
+    /// True when the header button has revealed the address bar on a launcher that does not keep
+    /// it on screen.
+    /// </summary>
+    /// <remarks>
+    /// Temporary, exactly like <see cref="_isMaximized"/>, and dropped by
+    /// <see cref="ParkOffScreen"/> for the same reason: nothing here may write
+    /// <see cref="Launcher.WebShowAddressBar"/>, or clicking the button once would silently
+    /// change the launcher's settings.
+    /// </remarks>
+    private bool _addressBarRevealed;
+
     /// <summary>The edge and corner grips, kept so they can be hidden when resizing is impossible.</summary>
     private readonly List<ResizeGrip> _resizeGrips = [];
 
@@ -286,16 +301,33 @@ public sealed partial class WebFlyoutWindow : Window
         // there and back beats resizing the launcher and putting it back afterwards.
         _maximizeButton = BuildHeaderButton(MaximizeGlyph(false), MaximizeTooltip(false), (_, _) => ToggleMaximized());
 
+        // Reload acts on the page, not on the flyout, so it sits with Back and Forward on the
+        // left where a browser puts it — the same reasoning that moved Back there. Built here,
+        // added to the nav group below.
+        //
+        // U+E72C is Segoe Fluent's Refresh glyph, escaped rather than pasted for the reason
+        // recorded on the back button.
+        var reloadButton = BuildHeaderButton("\uE72C", "Reload", (_, _) => ReloadPage());
+        reloadButton.Margin = new Thickness(0, 0, 4, 0);
+
+        // Reveals the address bar for launchers that do not keep it on screen. It sits beside
+        // "open in browser" because the two answer the same question \u2014 what page is this, and
+        // where do I take it \u2014 and it hides itself entirely once the bar is permanent, since
+        // there is then nothing left for it to reveal.
+        //
+        // U+E71B is Segoe Fluent's Link glyph, escaped for the reason on the back button.
+        _addressButton = BuildHeaderButton("\uE71B", AddressButtonTooltip(false), (_, _) => ToggleAddressBar());
+
         var headerButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
         headerButtons.Children.Add(BuildHeaderButton("", "Launcher settings", (_, _) => _ = OpenLauncherSettingsAsync()));
-        headerButtons.Children.Add(BuildHeaderButton("", "Reload", (_, _) => ReloadPage()));
+        headerButtons.Children.Add(_addressButton);
         headerButtons.Children.Add(BuildHeaderButton("", "Open in browser", (_, _) => OpenInBrowser()));
         // Pin sits beside maximize rather than at the head of the group: both decide how the
-        // flyout behaves as a window, and the three page actions between them made that read as
-        // two unrelated buttons.
+        // flyout behaves as a window, and the page actions between them made that read as two
+        // unrelated buttons.
         headerButtons.Children.Add(_pinButton);
         headerButtons.Children.Add(_maximizeButton);
-        headerButtons.Children.Add(BuildHeaderButton("", "Close", (_, _) => HideFlyout()));
+        headerButtons.Children.Add(BuildHeaderButton("", "Close", (_, _) => HideFlyout(), redOnHover: true));
 
         // Back sits on the left, where every browser puts it, rather than among the window
         // controls on the right — it acts on the page, not on the flyout.
@@ -312,11 +344,11 @@ public sealed partial class WebFlyoutWindow : Window
         // Escaped rather than pasted, for the reason recorded on the back button.
         _forwardButton = BuildHeaderButton("\uE111", "Forward", (_, _) => GoForward());
         _forwardButton.IsEnabled = false;
-        _forwardButton.Margin = new Thickness(0, 0, 4, 0);
 
         var navButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 0, VerticalAlignment = VerticalAlignment.Center };
         navButtons.Children.Add(_backButton);
         navButtons.Children.Add(_forwardButton);
+        navButtons.Children.Add(reloadButton);
 
         var header = _header = new Grid
         {
@@ -336,6 +368,50 @@ public sealed partial class WebFlyoutWindow : Window
         header.Children.Add(navButtons);
         header.Children.Add(_headerTitle);
         header.Children.Add(headerButtons);
+
+        // ── Address bar ─────────────────────────────────────────────
+        // A row of chrome under the header rather than an overlay on the page, for the same
+        // reason the permission prompt is a row: anything floating over a hosted browser depends
+        // on how WebView2 routes input, and an address bar that cannot be clicked into is worse
+        // than one that costs a little height.
+        _addressBox = new TextBox
+        {
+            PlaceholderText = "Address",
+            FontSize = 12,
+            MinHeight = 0,
+            Padding = new Thickness(8, 3, 8, 3),
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
+        _addressBox.KeyDown += AddressBox_KeyDown;
+        // Clicking in selects the whole address, as every browser does — the common reasons to
+        // come here are replacing it and copying it, and both want it selected.
+        _addressBox.GotFocus += (_, _) => _addressBox.SelectAll();
+
+        _addressBar = new Grid
+        {
+            // Sized by its content, not pinned: a fixed height clips the box on any scale or font
+            // where the default TextBox is taller than the number chosen here. It eats into the
+            // page rather than the window, so nothing downstream depends on how tall it comes out.
+            Padding = new Thickness(12, 0, 12, 5),
+            Visibility = Visibility.Collapsed,
+            // A hairline below, not above: the header and this read as one block of chrome, and
+            // the line that matters is the one separating chrome from page.
+            BorderBrush = (Brush)Application.Current.Resources["DividerStrokeColorDefaultBrush"],
+            BorderThickness = new Thickness(0, 0, 0, 1),
+        };
+        _addressBar.Children.Add(_addressBox);
+
+        // Header and address bar travel together in root row 0, so the root's own rows — and the
+        // resize grips' row spans — stay exactly as they were.
+        var chrome = new StackPanel();
+        chrome.Children.Add(header);
+        chrome.Children.Add(_addressBar);
+
+        // Everything that hides the header — collapsing to a bookmark bar, a page going
+        // fullscreen — means to hide the chrome, so the address bar follows it rather than
+        // needing a matching line added at each of those call sites.
+        header.RegisterPropertyChangedCallback(UIElement.VisibilityProperty, (_, _) => ApplyAddressBarVisibility());
 
         // ── Status overlay (loading / error) ────────────────────────
         _statusRing = new ProgressRing
@@ -421,7 +497,7 @@ public sealed partial class WebFlyoutWindow : Window
         // header to hold. Expanded, the header takes over and these hide rather than duplicate.
         _barActions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2, VerticalAlignment = VerticalAlignment.Center };
         _barActions.Children.Add(BuildHeaderButton("", "Launcher settings", (_, _) => _ = OpenLauncherSettingsAsync()));
-        _barActions.Children.Add(BuildHeaderButton("", "Close", (_, _) => HideFlyout()));
+        _barActions.Children.Add(BuildHeaderButton("", "Close", (_, _) => HideFlyout(), redOnHover: true));
 
         _bookmarkBar = new Grid
         {
@@ -451,10 +527,10 @@ public sealed partial class WebFlyoutWindow : Window
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        Grid.SetRow(header, 0);
+        Grid.SetRow(chrome, 0);
         Grid.SetRow(_contentHost, 1);
         Grid.SetRow(_bookmarkBar, 2);
-        root.Children.Add(header);
+        root.Children.Add(chrome);
         root.Children.Add(_contentHost);
         root.Children.Add(_bookmarkBar);
         AddResizeGrips(root);
@@ -463,11 +539,22 @@ public sealed partial class WebFlyoutWindow : Window
         // page has focus the browser owns the key, which is why the header keeps a close button.
         root.KeyboardAcceleratorPlacementMode = KeyboardAcceleratorPlacementMode.Hidden;
         var escape = new KeyboardAccelerator { Key = global::Windows.System.VirtualKey.Escape };
-        escape.Invoked += (_, e) => { e.Handled = true; HideFlyout(); };
+        escape.Invoked += (_, e) =>
+        {
+            e.Handled = true;
+            // Escape while editing the address means "forget what I typed", not "close the
+            // window" — checked here rather than relying on the TextBox marking the key handled
+            // first, because an accelerator and a bubbling KeyDown do not resolve in a fixed order.
+            if (CancelAddressEditing()) return;
+            HideFlyout();
+        };
         root.KeyboardAccelerators.Add(escape);
 
         Content = root;
         ThemeManager.ApplySavedTheme(this);
+
+        // The header's visibility callback only fires on a change, so the first state is set here.
+        ApplyAddressBarVisibility();
 
         int exStyle = GetWindowLong(_hwnd, GWL_EXSTYLE);
         SetWindowLong(_hwnd, GWL_EXSTYLE, exStyle | WS_EX_TOOLWINDOW);
@@ -478,7 +565,12 @@ public sealed partial class WebFlyoutWindow : Window
         Activated += WebFlyoutWindow_Activated;
     }
 
-    private static Button BuildHeaderButton(string glyph, string tooltip, RoutedEventHandler onClick)
+    /// <param name="redOnHover">
+    /// Tints the glyph with the system's critical colour while the pointer is over it — for Close,
+    /// which is the one button here that throws away what is on screen. A theme brush rather than
+    /// a literal red, so it stays legible against both the light and dark acrylic header.
+    /// </param>
+    private static Button BuildHeaderButton(string glyph, string tooltip, RoutedEventHandler onClick, bool redOnHover = false)
     {
         var transparent = (Brush)Application.Current.Resources["SubtleFillColorTransparentBrush"];
 
@@ -500,6 +592,29 @@ public sealed partial class WebFlyoutWindow : Window
         // background. Dimming is left to ButtonForegroundDisabled, which is the whole signal.
         button.Resources["ButtonBackgroundDisabled"] = transparent;
         button.Resources["ButtonBorderBrushDisabled"] = transparent;
+
+        // The glyph, not a red fill behind it. A title-bar-style red block would be the only solid
+        // shape in a header of flat transparent buttons, and it is a flyout's close rather than an
+        // application's — recolouring the glyph reads as the same warning at the right weight.
+        // Pressed matches Pointer-over, or the colour drops away at the moment of committing to it.
+        //
+        // Overriding the template brushes on the button's own Resources is how the disabled state
+        // above is handled too: the templated parent is in the lookup chain, so a ThemeResource in
+        // the default template resolves here first. The FontIcon has no Foreground of its own, so
+        // it inherits whatever the template resolves.
+        if (redOnHover)
+        {
+            // TryGetValue rather than the indexer, which throws on a missing key. This runs while
+            // the flyout window is being built, so a theme brush that turned out not to be there
+            // would take the whole launcher down rather than merely losing a hover colour. The
+            // literal is Windows' own critical red and is only reached if the system brush is gone.
+            Brush critical = Application.Current.Resources.TryGetValue("SystemFillColorCriticalBrush", out object found) && found is Brush themeBrush
+                ? themeBrush
+                : new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 196, 43, 28));
+
+            button.Resources["ButtonForegroundPointerOver"] = critical;
+            button.Resources["ButtonForegroundPressed"] = critical;
+        }
 
         ToolTipService.SetToolTip(button, tooltip);
         button.Click += onClick;
@@ -1643,6 +1758,15 @@ public sealed partial class WebFlyoutWindow : Window
         _isOpen = false;
         ClearFade();
 
+        // A revealed address bar is temporary in the same way maximize is, and ends in the same
+        // place: the next open is whatever the launcher's settings say, not what the last visit
+        // happened to leave on screen.
+        if (_addressBarRevealed)
+        {
+            _addressBarRevealed = false;
+            ApplyAddressBarVisibility();
+        }
+
         if (_hwnd != IntPtr.Zero && IsWindow(_hwnd))
         {
             GetWindowRect(_hwnd, out var rect);
@@ -2530,6 +2654,139 @@ public sealed partial class WebFlyoutWindow : Window
         var core = _webView?.CoreWebView2;
         _backButton.IsEnabled = core?.CanGoBack == true;
         _forwardButton.IsEnabled = core?.CanGoForward == true;
+        SyncAddressBox();
+    }
+
+    // ── Address bar ─────────────────────────────────────────────────
+
+    private static string AddressButtonTooltip(bool shown) => shown ? "Hide address" : "Show address";
+
+    /// <summary>
+    /// Shows or hides the address bar for the launcher's current settings and reveal state.
+    /// </summary>
+    /// <remarks>
+    /// Two conditions, and the first is not optional: the bar lives with the header, so anything
+    /// that hid the header — a bookmark bar collapsed to a strip, a page gone fullscreen — meant
+    /// to hide this too. The button then disappears when the bar is permanent, because a control
+    /// that reveals something already on screen reads as broken.
+    /// </remarks>
+    private void ApplyAddressBarVisibility()
+    {
+        bool wanted = _launcher.WebShowAddressBar || _addressBarRevealed;
+        bool visible = wanted && _header.Visibility == Visibility.Visible;
+
+        _addressBar.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        _addressButton.Visibility = _launcher.WebShowAddressBar ? Visibility.Collapsed : Visibility.Visible;
+        ToolTipService.SetToolTip(_addressButton, AddressButtonTooltip(_addressBarRevealed));
+
+        if (visible) SyncAddressBox();
+    }
+
+    /// <summary>
+    /// Reveals or re-hides the address bar from the header button.
+    /// </summary>
+    /// <remarks>
+    /// The reveal is a state of the window, not of the launcher — the same bargain maximize
+    /// makes, and dropped in the same place (<c>ParkOffScreen</c>). Someone who wants the bar
+    /// every time turns it on in launcher settings; this is "what am I actually looking at".
+    /// </remarks>
+    private void ToggleAddressBar()
+    {
+        _addressBarRevealed = !_addressBarRevealed;
+        ApplyAddressBarVisibility();
+
+        // Revealing it is nearly always a prelude to reading or replacing the address, so put the
+        // caret there. Queued: focusing a control in the same layout pass that revealed it does
+        // not take — the same rule RestorePageFocus follows.
+        if (!_addressBarRevealed) return;
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (_addressBar.Visibility != Visibility.Visible) return;
+            try { _addressBox.Focus(FocusState.Programmatic); }
+            catch (Exception ex) { Logger.Debug(ex, "Focusing the address bar failed for launcher {Name}", _launcher.Name); }
+        });
+    }
+
+    /// <summary>Puts the page's own address back in the box, unless the user is mid-edit.</summary>
+    private void SyncAddressBox()
+    {
+        // Never while it has focus: this runs from HistoryChanged, which a single-page app raises
+        // freely, and overwriting a half-typed address would be indistinguishable from a bug.
+        if (_addressBox.FocusState != FocusState.Unfocused) return;
+
+        string source = _webView?.CoreWebView2?.Source ?? "";
+        // "about:blank" is what a browser that has not navigated yet reports. Showing it would
+        // make an empty bar-mode flyout look like it had loaded something.
+        _addressBox.Text = source.Equals("about:blank", StringComparison.OrdinalIgnoreCase) ? "" : source;
+    }
+
+    private void AddressBox_KeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key == global::Windows.System.VirtualKey.Enter)
+        {
+            e.Handled = true;
+            GoToTypedAddress();
+        }
+    }
+
+    /// <summary>Navigates to whatever is in the box, giving a bare host a scheme.</summary>
+    /// <remarks>
+    /// This drives the browser that is already there and never creates one. Falling back to
+    /// <c>PrepareContentAsync</c> looks like the helpful thing to do and is not: that path
+    /// navigates to <c>CurrentTargetUrl()</c>, so an address typed with no live browser would
+    /// silently load the launcher's configured page instead of the one asked for. It is also the
+    /// rule the three existing navigation paths follow — the address bar is a fourth caller of
+    /// <c>Navigate</c>, not a fourth answer to "which URL".
+    /// </remarks>
+    private void GoToTypedAddress()
+    {
+        string url = NormalizeUrl(_addressBox.Text);
+        if (string.IsNullOrEmpty(url)) return;
+
+        if (_webView?.CoreWebView2 == null)
+        {
+            Logger.Debug("Address entered with no live browser for launcher {Name}", _launcher.Name);
+            return;
+        }
+
+        Navigate(url);
+        MoveFocusOffAddressBox();
+    }
+
+    /// <summary>
+    /// Abandons an in-progress address edit, if there is one. Returns whether it consumed Escape.
+    /// </summary>
+    private bool CancelAddressEditing()
+    {
+        if (_addressBox.FocusState == FocusState.Unfocused) return false;
+
+        MoveFocusOffAddressBox();
+        SyncAddressBox();   // only lands once focus has actually left, which the call above does
+        return true;
+    }
+
+    /// <summary>
+    /// Takes the keyboard away from the address box — to the page where there is one.
+    /// </summary>
+    /// <remarks>
+    /// The fallback is not decoration. Escape is consumed while the box has focus, so a failure
+    /// to move focus off it would swallow every subsequent Escape too and leave the flyout with
+    /// no way to be dismissed by keyboard at all. The pin button is the target because it is
+    /// always present and always enabled whenever the header — and so the address bar — is
+    /// showing; Back and Forward can both be disabled, and the reveal button is hidden outright
+    /// once the bar is permanent.
+    /// </remarks>
+    private void MoveFocusOffAddressBox()
+    {
+        try
+        {
+            if (_webView is { Visibility: Visibility.Visible } view && view.Focus(FocusState.Programmatic)) return;
+            _pinButton.Focus(FocusState.Programmatic);
+        }
+        catch (Exception ex)
+        {
+            Logger.Debug(ex, "Moving focus off the address bar failed for launcher {Name}", _launcher.Name);
+        }
     }
 
     /// <summary>Shows the browser again once the content it was waiting for has arrived.</summary>
@@ -2626,6 +2883,7 @@ public sealed partial class WebFlyoutWindow : Window
         _headerTitle.Text = _launcher.Name;
         Title = _launcher.Name;
         ApplyZoom();
+        ApplyAddressBarVisibility();
 
         // CurrentTargetUrl, not WebUrl. This runs whenever the launcher changes — including
         // after a bookmark's favicon fetch completes — so reading the launcher's single address
