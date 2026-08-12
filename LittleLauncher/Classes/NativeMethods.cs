@@ -638,6 +638,13 @@ public static partial class NativeMethods
 
     #region Window messages — regular-window mode
 
+    /// <summary>Restores a minimized window to its previous size and position.</summary>
+    internal const int SW_RESTORE = 9;
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool IsIconic(IntPtr hWnd);
+
     internal const uint WM_SYSCOMMAND = 0x0112;
     internal const int SC_MINIMIZE = 0xF020;
     internal const int SC_CLOSE = 0xF060;

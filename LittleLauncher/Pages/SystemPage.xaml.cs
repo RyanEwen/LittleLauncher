@@ -18,11 +18,31 @@ public partial class SystemPage : Page
     private bool _startupStateInitialized;
     private bool _updatingStartupSwitch;
 
+    private bool _updatingShortcutsSwitch;
+
     public SystemPage()
     {
         InitializeComponent();
         DataContext = SettingsManager.Current;
+
+        // Shown in the positive, stored in the negative. The inversion lives here rather than in
+        // the model because a bool defaulting to true cannot be turned off under
+        // WhenWritingDefault — see user-settings.md.
+        _updatingShortcutsSwitch = true;
+        WebShortcutsToggle.IsOn = !SettingsManager.Current.DisableWebLauncherShortcuts;
+        _updatingShortcutsSwitch = false;
+
         _ = RefreshStartupStateAsync();
+    }
+
+    private void WebShortcutsToggle_Toggled(object sender, RoutedEventArgs e)
+    {
+        // Setting IsOn from code raises Toggled exactly as a click does, so the initial sync above
+        // would otherwise write the setting back over itself.
+        if (_updatingShortcutsSwitch) return;
+
+        SettingsManager.Current.DisableWebLauncherShortcuts = !WebShortcutsToggle.IsOn;
+        SettingsManager.SaveSettings();
     }
 
     private async void StartupSwitch_Toggled(object sender, RoutedEventArgs e)

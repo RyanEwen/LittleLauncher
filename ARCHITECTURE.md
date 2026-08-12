@@ -111,6 +111,12 @@ Advanced). Off, the header's link button reveals it for the rest of that visit â
 window state dropped on dismissal, exactly like maximize, so clicking it never rewrites the
 launcher.
 
+Web launchers also get a **Start Menu shortcut each**, in a `Programs\Little Launcher\` group kept
+in sync by `Services/StartMenuShortcutService`, so they can be opened from Start search, PowerToys
+Command Palette or anything else that indexes the Start Menu. The shortcuts run the same command a
+taskbar pin does, and deliberately carry **no AUMID** â€” an earlier version of them did, competed
+with the companion's relaunch properties for pin identity, and produced duplicate pins.
+
 A web launcher can also stop being a flyout altogether: `Launcher.WebRegularWindow` (Advanced) drops
 always-on-top and dismiss-on-focus-loss and puts it in the taskbar and the task switcher, so its
 pinned button shows the running indicator and closes it when clicked. **The switcher entry cannot be

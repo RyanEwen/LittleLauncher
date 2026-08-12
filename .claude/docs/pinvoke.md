@@ -155,6 +155,11 @@ Pair it with `SetWindowPos(… SWP_FRAMECHANGED)` after the style change. A null
 `GetTaskbarList()` is a normal outcome to handle — a taskbar button must never stop a flyout
 opening.
 
+`IsIconic` + `SW_RESTORE` belong to the same feature: **restore before foregrounding**.
+`SetForegroundWindow` on a minimized window raises it still minimized, which is
+indistinguishable from the call having done nothing — and minimized is exactly where a
+regular-window launcher lands after its taskbar button is clicked.
+
 ## IShellItemImageFactory COM Section
 
 The `#region shell32.dll` section includes `SHCreateItemFromParsingName` and the `IShellItemImageFactory` COM interface for extracting app icons from `shell:AppsFolder` items (used for PWA and Store app icons). The `#region gdi32.dll` section provides `DeleteObject` (HBITMAP cleanup), `GetObject` / `GetObjectDibSection` (reading bitmap metadata), `CreateCompatibleDC` / `DeleteDC` / `SelectObject` / `BitBlt` (blitting source HBITMAPs into controlled DIBs), and `CreateDIBSection` with `BITMAPINFO` (creating a top-down 32bpp DIB section with known pixel layout for reliable icon extraction).

@@ -43,6 +43,27 @@ public partial class UserSettings : ObservableObject
     [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public partial bool FlyoutAnimationsEnabled { get; set; }
 
+    /// <summary>
+    /// Stop creating a Start Menu shortcut for each web launcher.
+    /// </summary>
+    /// <remarks>
+    /// <para>Stored in the negative and shown in the positive ("Start Menu Shortcuts", on by
+    /// default) — the same bargain <c>Launcher.WebLockSize</c> makes, and for the same reason: a
+    /// bool defaulting to <c>true</c> cannot be turned off under <c>WhenWritingDefault</c>. Invert
+    /// it in the one line that builds the toggle, never in the model.</para>
+    /// <para>Shortcuts are what let a web launcher be opened from Start search, PowerToys Command
+    /// Palette and anything else that indexes the Start Menu. Turning this off deletes the group
+    /// rather than leaving it stale — see <see cref="Services.StartMenuShortcutService"/>.</para>
+    /// </remarks>
+    [ObservableProperty]
+    public partial bool DisableWebLauncherShortcuts { get; set; }
+
+    partial void OnDisableWebLauncherShortcutsChanged(bool value)
+    {
+        if (_initializing) return;
+        Services.StartMenuShortcutService.Sync(Launchers);
+    }
+
     // NIconHide, TrayIconMode, CustomTrayIconPath are kept here as legacy XML migration fields only.
     // They are copied into the first Launcher during CompleteInitialization() and then cleared.
     // Per-launcher icon settings now live on each Launcher object in the Launchers collection.

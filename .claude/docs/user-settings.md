@@ -292,4 +292,13 @@ Group related properties together with comment headers matching existing style:
 - Sync destination
 - SFTP Sync
 
-`UserSettings` appearance/behaviour properties currently include `AppTheme`, `Startup`, `ShowWebLauncherNotice`, and `FlyoutAnimationsEnabled` (default `true`, controls whether `FlyoutWindow` uses animated open/close transitions).
+`UserSettings` appearance/behaviour properties currently include `AppTheme`, `Startup`, `ShowWebLauncherNotice`, `FlyoutAnimationsEnabled` (default `true`, controls whether `FlyoutWindow` uses animated open/close transitions), and `DisableWebLauncherShortcuts`.
+
+`DisableWebLauncherShortcuts` (`bool`, default `false` = shortcuts on) controls the per-web-launcher
+Start Menu group that makes them findable from Start search and PowerToys Command Palette. **Stored
+in the negative, shown in the positive** ("Start Menu Shortcuts") — the third example of that
+bargain after `Launcher.WebLockSize`, and for the same reason: a `bool` defaulting to `true` cannot
+be turned off here. The inversion lives in `SystemPage`'s code-behind, not in the model. Its
+`On…Changed` handler re-syncs immediately, since the shortcuts are built once at startup and would
+otherwise not appear (or disappear) until the next launch — the "a setting that configures
+something built at startup needs a change handler" rule above.

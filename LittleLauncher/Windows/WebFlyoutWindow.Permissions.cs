@@ -820,8 +820,18 @@ public sealed partial class WebFlyoutWindow
         if (owner == null) return false;
         if (SettingsManager.Current.Launchers.All(l => l.Id != launcherId)) return false;
 
-        // Already on screen: the click has nothing left to do, and Toggle would dismiss it.
-        if (Instances.TryGetValue(launcherId, out var panel) && panel._isOpen) return true;
+        // Already open: bring it forward rather than toggling, which would dismiss it.
+        //
+        // This used to do nothing at all, on the reasoning that an open flyout is already on
+        // screen. True of a flyout — it is always-on-top, so open means visible and in front — and
+        // false of a regular window, which can sit open and buried behind whatever the user was
+        // working in, or minimized to its taskbar button. Clicking the toast then appeared to do
+        // nothing whatsoever.
+        if (Instances.TryGetValue(launcherId, out var panel) && panel._isOpen)
+        {
+            panel.ActivateForNotification();
+            return true;
+        }
 
         owner.OpenLauncherPanel(launcherId);
         return true;

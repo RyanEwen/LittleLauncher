@@ -68,6 +68,19 @@ public sealed partial class MainWindow : Window
             "Programs");
     }
 
+    /// <summary>
+    /// The Start Menu Programs folder as it exists on disk, which is what the shell indexes.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="GetStartMenuProgramsDir"/> goes through <c>SpecialFolder.StartMenu</c>, which
+    /// MSIX VFS-redirects — anything written through it inside a packaged build lands where only
+    /// that package can see it, so the shell never indexes it. Any shortcut that has to be
+    /// *found* by Windows must be written here instead. Same rule as
+    /// <see cref="GetPhysicalAppDataDir"/>, for the same reason.
+    /// </remarks>
+    internal static string GetPhysicalStartMenuProgramsDir() =>
+        IsPackaged ? GetLegacySharedStartMenuProgramsDir() : GetStartMenuProgramsDir();
+
     internal static string GetLegacySharedStartMenuProgramsDir()
     {
         string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -198,6 +211,11 @@ public sealed partial class MainWindow : Window
         ApplyDeferredInit();
         EnsureStartMenuShortcuts();
         EnsureFlyoutShortcut();
+
+        // After EnsureFlyoutShortcut, which is what deploys the companion exe these shortcuts
+        // target — on a first run the other order writes shortcuts pointing at nothing.
+        Services.StartMenuShortcutService.Sync(SettingsManager.Current.Launchers);
+
         CleanUpStaleIconFiles();
         LauncherPanels.WarmUp(this, SettingsManager.Current.Launchers);
         _ = StartAutoSyncAsync();
@@ -526,6 +544,12 @@ public sealed partial class MainWindow : Window
             LauncherPanels.SyncKind(launcher);
 
         LauncherPanels.WarmUp(this, SettingsManager.Current.Launchers);
+
+        // This is the one place that already runs on every launcher add, remove, rename, icon
+        // change and sync-driven replacement, which is exactly the set of events a Start Menu
+        // shortcut has to follow. It prunes as well as writes, so a deleted launcher's shortcut
+        // goes with it.
+        Services.StartMenuShortcutService.Sync(SettingsManager.Current.Launchers);
     }
 
     /// <summary>
@@ -1770,12 +1794,7 @@ public sealed partial class MainWindow : Window
             }
 
             // Remove MSI-era shortcut that lived in a "Little Launcher" subfolder
-            string msiSubfolder = Path.Combine(startMenuDir, "Little Launcher");
-            if (Directory.Exists(msiSubfolder))
-            {
-                try { Directory.Delete(msiSubfolder, true); }
-                catch { /* best-effort */ }
-            }
+            RemoveLegacyMsiSubfolderShortcut(startMenuDir);
 
             // Single Start Menu shortcut — always opens settings when clicked.
             // Always use the exe's embedded icon (blue rocket) for the app identity.
@@ -1806,12 +1825,37 @@ public sealed partial class MainWindow : Window
                     File.Delete(shortcutPath);
             }
 
-            string msiSubfolder = Path.Combine(startMenuDir, "Little Launcher");
-            if (Directory.Exists(msiSubfolder))
+            RemoveLegacyMsiSubfolderShortcut(startMenuDir);
+        }
+        catch { /* best-effort */ }
+    }
+
+    /// <summary>
+    /// Removes the MSI-era shortcut that lived in a <c>Little Launcher</c> subfolder.
+    /// </summary>
+    /// <remarks>
+    /// <b>Deletes the shortcut, not the folder.</b> This used to be a recursive delete of the whole
+    /// subfolder, which is now the same folder
+    /// <see cref="Services.StartMenuShortcutService"/> keeps a shortcut per web launcher in — so it
+    /// would have silently emptied that group on every startup, and the shortcuts would have looked
+    /// like they were never created. The folder is still removed when nothing is left in it, so a
+    /// machine with no web launchers ends up as clean as before.
+    /// </remarks>
+    private static void RemoveLegacyMsiSubfolderShortcut(string startMenuDir)
+    {
+        try
+        {
+            string subfolder = Path.Combine(startMenuDir, Services.StartMenuShortcutService.FolderName);
+            if (!Directory.Exists(subfolder)) return;
+
+            foreach (string legacy in new[] { "Little Launcher.lnk", "LittleLauncher.lnk", "LittleLauncher Settings.lnk" })
             {
-                try { Directory.Delete(msiSubfolder, true); }
-                catch { /* best-effort */ }
+                string path = Path.Combine(subfolder, legacy);
+                if (File.Exists(path)) File.Delete(path);
             }
+
+            if (Directory.GetFileSystemEntries(subfolder).Length == 0)
+                Directory.Delete(subfolder);
         }
         catch { /* best-effort */ }
     }
@@ -1886,6 +1930,19 @@ public sealed partial class MainWindow : Window
 
     /// <summary>
     /// Updates the icon on the main Start Menu shortcut (non-MSIX only).
+    /// <summary>
+    /// Writes a launcher's Start Menu shortcut. See <see cref="Services.StartMenuShortcutService"/>.
+    /// </summary>
+    /// <remarks>
+    /// A thin pass-through rather than making <see cref="CreateOrUpdateShortcut"/> internal, so the
+    /// one caller outside this class is visible from here — these shortcuts must never gain an
+    /// AUMID, and that constraint is easier to keep when the entry point is named.
+    /// </remarks>
+    internal static void CreateOrUpdateLauncherShortcut(
+        string shortcutPath, string exePath, string? arguments,
+        string description, string iconLocation) =>
+        CreateOrUpdateShortcut(shortcutPath, exePath, arguments, description, iconLocation);
+
     private static void CreateOrUpdateShortcut(
         string shortcutPath, string exePath, string? arguments,
         string description, string iconLocation)

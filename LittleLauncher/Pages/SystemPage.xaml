@@ -48,6 +48,29 @@
             </Grid>
         </Border>
 
+        <!-- Start Menu shortcuts for web launchers. Shown in the positive; DisableWebLauncherShortcuts
+             is stored in the negative so it survives WhenWritingDefault, and the inversion lives in
+             the code-behind rather than in the model. -->
+        <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1" CornerRadius="4" Padding="16" Margin="0,0,0,4">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <FontIcon Glyph="&#xE71D;" FontSize="20" Margin="0,0,16,0" VerticalAlignment="Center"/>
+                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                    <TextBlock Text="Start Menu Shortcuts" FontSize="14"/>
+                    <TextBlock Text="List web launchers in the Start Menu, so they can be opened from Start search and tools like PowerToys Command Palette"
+                               FontSize="12" Opacity="0.5" TextWrapping="Wrap"/>
+                </StackPanel>
+                <ToggleSwitch x:Name="WebShortcutsToggle" Grid.Column="2" OnContent="" OffContent="" MinWidth="0"
+                              Toggled="WebShortcutsToggle_Toggled"/>
+            </Grid>
+        </Border>
+
         <TextBlock Text="Tray icon and per-launcher settings are managed on the Launchers page."
                    FontSize="12" Opacity="0.55" Margin="0,4,0,4"/>
 

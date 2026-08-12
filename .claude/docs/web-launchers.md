@@ -364,6 +364,48 @@ Four things follow, each a guard rather than a convention:
   Consequence for existing pins: a launcher pinned before this must be **re-pinned** once, unless
   it happens to be one the registry scan can still find.
 
+## Start Menu shortcuts
+
+`Services/StartMenuShortcutService.cs` keeps one shortcut per **web** launcher in a
+`Programs\Little Launcher\` group, so they can be opened from Start search, PowerToys Command
+Palette, and anything else that indexes the Start Menu. A web launcher is an application in
+everything but installation; reaching it only by tray click or taskbar pin was the odd part.
+
+Driven from `MainWindow.RefreshTrayIcons` — already the one place that runs on every launcher add,
+remove, rename, icon change and sync-driven replacement — plus once at startup, *after*
+`EnsureFlyoutShortcut` deploys the companion exe the shortcuts point at. Pruning is by what
+*should* exist rather than by remembering what was written, so renames, deletions, a launcher
+switched away from Web, and files left by a crash all resolve themselves.
+
+Four things this has to get right, three of them landmines:
+
+- **Nothing here writes an AUMID.** Per-launcher Start Menu shortcuts existed before and were
+  removed precisely because they set `PKEY_AppUserModel_ID` and acted as a pin identity source:
+  Windows saw two identities for one pin — the shortcut's and the companion's relaunch properties —
+  and produced duplicate "(2)" pins. These are plain shortcuts running the same command the pin's
+  `RelaunchCommand` runs, so they cannot compete with anything. **Do not add one.**
+- **They must not live loose in `Programs`.** `MainWindow.CleanUpStaleFlyoutShortcuts` still sweeps
+  the old `Little Launcher - *.lnk` naming there on every startup.
+- **The MSI-era cleanup had to stop deleting the folder.** It removed a `Little Launcher` subfolder
+  recursively — the same folder this now uses — so it would have silently emptied the group on
+  every startup and the shortcuts would have looked like they were never created.
+  `RemoveLegacyMsiSubfolderShortcut` deletes the known MSI filenames and removes the folder only if
+  it is then empty.
+- **The physical Start Menu path is required** (`MainWindow.GetPhysicalStartMenuProgramsDir`).
+  `SpecialFolder.StartMenu` is VFS-redirected under MSIX, so shortcuts written through it land
+  where only the packaged app can see them and the shell never indexes them — the feature would do
+  nothing on exactly the build most people run. Same rule as everything else the shell must read.
+
+Opening a launcher this way is the *same code path* as its taskbar pin, so a launcher in
+regular-window mode lights its pinned button either way. A launcher with no pin now falls back to a
+stable `LittleLauncher.Launcher.{guid}` identity rather than none, so its window gets its own
+correctly-named and correctly-iconed taskbar button instead of joining a generic "LittleLauncher"
+one.
+
+The group is removed entirely when the feature is switched off
+(`UserSettings.DisableWebLauncherShortcuts`) or when no web launchers remain — an empty group is
+still a visible entry in All apps.
+
 ## Discoverability
 
 Two mechanisms, doing different jobs:
@@ -624,6 +666,13 @@ occurred yet.
 driven from it — `ReportShown` when Windows accepts the toast, `ReportClicked` when it is activated
 — or the page believes its notification never appeared.
 
+- **An already-open launcher is brought forward, not left alone.** `HandleNotificationActivation`
+  used to return early when the flyout was open, reasoning that it was therefore already on screen.
+  That holds only for a flyout, which is always-on-top; a launcher in regular-window mode can be
+  open and buried behind whatever the user was working in, or minimized to its taskbar button — so
+  clicking the toast appeared to do nothing at all. `ActivateForNotification` restores **before**
+  foregrounding, because `SetForegroundWindow` on a minimized window raises it still minimized,
+  which looks identical to the bug it is fixing.
 - **The toast carries its launcher** (`AddArgument("launcher", id)`), and
   `MainWindow.OnNotificationInvoked` routes a click to `WebFlyoutWindow.HandleNotificationActivation`
   before falling back to opening the Home page. That opens the flyout via

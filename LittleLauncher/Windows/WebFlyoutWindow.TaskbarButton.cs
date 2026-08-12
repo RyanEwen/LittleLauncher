@@ -171,6 +171,33 @@ public sealed partial class WebFlyoutWindow
     }
 
     /// <summary>
+    /// Brings an already-open launcher to the front, for a clicked notification.
+    /// </summary>
+    /// <remarks>
+    /// <para>Restore first, then foreground. A minimized window ignores
+    /// <c>SetForegroundWindow</c> — it comes to the front still minimized, which is
+    /// indistinguishable from nothing happening, and is the state the taskbar button's click leaves
+    /// a regular-window launcher in.</para>
+    /// <para>Safe in flyout mode too, where it is close to a no-op: the window is already topmost
+    /// and never minimized, so this is a foreground call on a window that already has it.</para>
+    /// </remarks>
+    internal void ActivateForNotification()
+    {
+        if (_hwnd == IntPtr.Zero || !IsWindow(_hwnd)) return;
+
+        try
+        {
+            if (IsIconic(_hwnd)) ShowWindow(_hwnd, SW_RESTORE);
+            SetForegroundWindow(_hwnd);
+            RestorePageFocus();
+        }
+        catch (Exception ex)
+        {
+            Logger.Debug(ex, "Activating {Name} for a notification click failed", _launcher.Name);
+        }
+    }
+
+    /// <summary>
     /// Turns the taskbar button's click into a close, when the launcher asks for that.
     /// </summary>
     /// <remarks>
@@ -255,6 +282,14 @@ public sealed partial class WebFlyoutWindow
             }
         }
 
-        return "";
+        // No pin to join, so give the window an identity of its own rather than none. Without this
+        // it falls in with the process's default identity and shows up as a generic "LittleLauncher"
+        // button — which is what an unpinned launcher opened from its Start Menu shortcut did. With
+        // it the button is this launcher's, carrying its name and its icon.
+        //
+        // Stable, with no tick: the tick exists on a *pin* to bust Windows' per-AUMID icon cache
+        // between pin attempts, and there is nothing to bust here. A stable id also means repeated
+        // opens keep landing on one button instead of accumulating.
+        return $"LittleLauncher.Launcher.{_launcher.Id}";
     }
 }
