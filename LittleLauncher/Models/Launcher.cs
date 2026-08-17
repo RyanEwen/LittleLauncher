@@ -383,6 +383,23 @@ public partial class Launcher : ObservableObject
     public partial bool WebTaskbarClickCloses { get; set; }
 
     /// <summary>
+    /// In regular-window mode, close when focus is lost — a flyout's dismissal, but keeping the
+    /// taskbar button and the switcher entry.
+    /// </summary>
+    /// <remarks>
+    /// <para>The two halves of "is this a flyout" turn out to be separable, and this is the axis
+    /// that splits them: <see cref="WebRegularWindow"/> decides whether the shell sees a window,
+    /// this decides whether it survives being clicked away from. A launcher that wants to be
+    /// Alt-Tab-able while still getting out of the way on its own sets both.</para>
+    /// <para>Defaults <c>false</c> — stay open — which is both the behaviour regular-window mode
+    /// shipped with and what an ordinary app window does. Meaningless without
+    /// <see cref="WebRegularWindow"/>: a flyout already dismisses on focus loss unless
+    /// <see cref="WebPinFlyout"/> says otherwise.</para>
+    /// </remarks>
+    [ObservableProperty]
+    public partial bool WebWindowAutoHide { get; set; }
+
+    /// <summary>
     /// The AppUserModelID stamped on this launcher's pinned taskbar button, empty when it has
     /// never been pinned from a build that records this.
     /// </summary>

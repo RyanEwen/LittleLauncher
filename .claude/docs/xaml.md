@@ -92,6 +92,22 @@ Conventions for these windows:
 - Size to content. Surplus height shows as a large empty gap, because the form is top-aligned above a bottom-anchored button row.
 - Don't leak the window: the flyout tracks the open editor and closes it when edit mode ends, so an orphan can't commit into a launcher the user has navigated away from.
 
+## Flyouts and menus inside the flyout window
+
+A `MenuFlyout` opened from the web flyout's header hits the same wall as `ContentDialog`, and needs
+two things the default does not give:
+
+- **`ShouldConstrainToRootBounds = false`.** The window is often 400px wide with 34px of chrome, so
+  a constrained menu is clipped exactly like a `ContentDialog` would be.
+- **Pin the flyout while it is open.** Once unconstrained the menu lives in a popup of its own, so
+  opening it *deactivates* the flyout — which dismisses it and takes the menu down in the same
+  motion. `WebFlyoutWindow` sets `_isMenuOpen` from `Opened`/`Closed` and tests it in both
+  dismissal guards, alongside `_isModalOpen`. Clear it on `Closed`, which also covers the
+  dismissed-by-clicking-away case.
+
+This is the same failure mode as the owned-window rule above: anything that takes focus away from a
+window that dismisses on focus loss has to say so first.
+
 ## Expander rows for on/off + settings
 
 `SyncPage` renders each sync destination as an `Expander`: icon, name and a live status line in

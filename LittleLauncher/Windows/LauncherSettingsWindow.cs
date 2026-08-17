@@ -1331,13 +1331,30 @@ public sealed class LauncherSettingsWindow : Window
             "What clicking this launcher's taskbar button does while it is open",
             clickCombo);
 
-        // Only meaningful with Regular Window on — a flyout has no taskbar button to click — so it
-        // follows that toggle rather than sitting there inert. Shown and hidden rather than
-        // disabled: a greyed row still reads as a setting you are missing out on.
-        void UpdateClickVisibility() =>
-            clickRow.Visibility = launcher.WebRegularWindow ? Visibility.Visible : Visibility.Collapsed;
-        regularToggle.Toggled += (_, _) => UpdateClickVisibility();
-        UpdateClickVisibility();
+        // ── Close on focus loss, as a window ────────────────────
+        var autoHideToggle = new ToggleSwitch { IsOn = launcher.WebWindowAutoHide, OnContent = "", OffContent = "", MinWidth = 0 };
+        autoHideToggle.Toggled += (_, _) =>
+        {
+            launcher.WebWindowAutoHide = autoHideToggle.IsOn;
+            SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
+        };
+        var autoHideRow = BuildRow("Close On Focus Loss",
+            "Dismiss like a flyout when you click elsewhere, while keeping the taskbar button and Alt-Tab entry",
+            autoHideToggle);
+
+        // Both only mean anything with Regular Window on — a flyout has no taskbar button to click,
+        // and already dismisses on focus loss unless pinned. They follow that toggle rather than
+        // sitting there inert. Shown and hidden rather than disabled: a greyed row still reads as a
+        // setting you are missing out on.
+        void UpdateWindowRowVisibility()
+        {
+            var visibility = launcher.WebRegularWindow ? Visibility.Visible : Visibility.Collapsed;
+            clickRow.Visibility = visibility;
+            autoHideRow.Visibility = visibility;
+        }
+        regularToggle.Toggled += (_, _) => UpdateWindowRowVisibility();
+        UpdateWindowRowVisibility();
 
         // ── Opening position ────────────────────────────────────
         var anchorCombo = new ComboBox { MinWidth = 200 };
@@ -1395,7 +1412,7 @@ public sealed class LauncherSettingsWindow : Window
             Services.AutoSyncService.NotifyLaunchersChanged();
             UpdateAnchorText();   // the anchor means "first open" only while this is on
         };
-        var rememberRow = BuildRow("Remember Position",
+        var rememberRow = BuildRow("Remember Position Changes",
             "Keep this flyout where you drag it; otherwise a move lasts until you close it",
             rememberToggle);
 
@@ -1409,7 +1426,7 @@ public sealed class LauncherSettingsWindow : Window
             SettingsManager.SaveSettings();
             Services.AutoSyncService.NotifyLaunchersChanged();
         };
-        var rememberSizeRow = BuildRow("Remember Size",
+        var rememberSizeRow = BuildRow("Remember Size Changes",
             "Keep this flyout at the size you drag it to; otherwise it reopens at the size above",
             rememberSizeToggle);
 
@@ -1524,7 +1541,12 @@ public sealed class LauncherSettingsWindow : Window
 
         // ── Advanced ────────────────────────────────────────────
         var advancedPanel = new StackPanel { Spacing = 12 };
-        foreach (var row in new[] { zoomRow, policyRow, idleRow, reloadRow, addressRow, pinRow, regularRow, clickRow, anchorRow, rememberRow, rememberSizeRow, trustRow, resetPermissionsRow, profileRow, clearRow })
+        // Opens At / Remember Position / Remember Size are deliberately *not* here — they sit with
+        // Flyout Size in the main form. They answer the same question it does ("where and how big
+        // does this open?"), they are the ones a user reaches for after dragging a flyout and
+        // finding the change did not stick, and Opens At's subtitle describes its interaction with
+        // Remember Position, which would read oddly with the two separated by the Advanced fold.
+        foreach (var row in new[] { zoomRow, policyRow, idleRow, reloadRow, addressRow, pinRow, regularRow, autoHideRow, clickRow, trustRow, resetPermissionsRow, profileRow, clearRow })
             advancedPanel.Children.Add(row);
 
         var advanced = new Expander
@@ -1552,7 +1574,7 @@ public sealed class LauncherSettingsWindow : Window
             UpdateIdleVisibility();
         }
 
-        return ([contentRow, urlRow, bookmarksRow], [sizeRow, advanced], Refresh);
+        return ([contentRow, urlRow, bookmarksRow], [sizeRow, anchorRow, rememberRow, rememberSizeRow, advanced], Refresh);
     }
 
     private (Button Button, Grid CustomRow, Action Refresh) BuildIconChooser(Launcher launcher)

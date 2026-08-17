@@ -80,7 +80,7 @@ public sealed partial class WebFlyoutWindow : Window
     private readonly Button _maximizeButton;
     private readonly Button _backButton;
     private readonly Button _forwardButton;
-    private readonly Button _addressButton;
+    private readonly Button _moreButton;
     private readonly Grid _addressBar;
     private readonly TextBox _addressBox;
     private readonly Grid _header;
@@ -147,6 +147,27 @@ public sealed partial class WebFlyoutWindow : Window
 
     /// <summary>True while an owned window (launcher settings) is open. Pins the flyout.</summary>
     private bool _isModalOpen;
+
+    /// <summary>
+    /// True while the header's More menu is open. Pins the flyout, like an owned window.
+    /// </summary>
+    /// <remarks>
+    /// A <c>MenuFlyout</c> that is allowed to overflow this window is hosted in a popup of its own,
+    /// so opening it deactivates the flyout — which would dismiss it and take the menu down in the
+    /// same motion. Same reason <c>_isModalOpen</c> exists.
+    /// </remarks>
+    private bool _isMenuOpen;
+
+    /// <summary>
+    /// True when this launcher is a regular window that should not dismiss itself on focus loss.
+    /// </summary>
+    /// <remarks>
+    /// The default for a window — an ordinary app window does not vanish when you click another
+    /// one, and its taskbar button is how it gets closed instead. <c>WebWindowAutoHide</c> opts
+    /// back into a flyout's dismissal while keeping the taskbar button and switcher entry, which
+    /// is a combination neither mode offers on its own.
+    /// </remarks>
+    private bool StaysOpenAsWindow => _launcher.WebRegularWindow && !_launcher.WebWindowAutoHide;
     private Window? _openModal;
 
     /// <summary>
@@ -208,18 +229,6 @@ public sealed partial class WebFlyoutWindow : Window
     /// to go back to is always the launcher's configured one, since that is what an open produces.
     /// </remarks>
     private bool _hasTemporaryResize;
-
-    /// <summary>
-    /// True when the header button has revealed the address bar on a launcher that does not keep
-    /// it on screen.
-    /// </summary>
-    /// <remarks>
-    /// Temporary, exactly like <see cref="_isMaximized"/>, and dropped by
-    /// <see cref="ParkOffScreen"/> for the same reason: nothing here may write
-    /// <see cref="Launcher.WebShowAddressBar"/>, or clicking the button once would silently
-    /// change the launcher's settings.
-    /// </remarks>
-    private bool _addressBarRevealed;
 
     /// <summary>The edge and corner grips, kept so they can be hidden when resizing is impossible.</summary>
     private readonly List<ResizeGrip> _resizeGrips = [];
@@ -316,17 +325,17 @@ public sealed partial class WebFlyoutWindow : Window
         var reloadButton = BuildHeaderButton("\uE72C", "Reload", (_, _) => ReloadPage());
         reloadButton.Margin = new Thickness(0, 0, 4, 0);
 
-        // Reveals the address bar for launchers that do not keep it on screen. It sits beside
-        // "open in browser" because the two answer the same question \u2014 what page is this, and
-        // where do I take it \u2014 and it hides itself entirely once the bar is permanent, since
-        // there is then nothing left for it to reveal.
+        // The gear used to open launcher settings directly. It now opens a menu of the per-launcher
+        // options that are per-moment decisions \u2014 how this launcher presents itself, and whether it
+        // gets out of the way \u2014 with the full settings window still one item down. The "\u2026" is the
+        // same idiom the item cards already use for their context menus, so the affordance is not a
+        // new one to learn.
         //
-        // U+E71B is Segoe Fluent's Link glyph, escaped for the reason on the back button.
-        _addressButton = BuildHeaderButton("\uE71B", AddressButtonTooltip(false), (_, _) => ToggleAddressBar());
+        // U+E712 is Segoe Fluent's More glyph, escaped for the reason on the back button.
+        _moreButton = BuildHeaderButton("\uE712", "More", (_, _) => ShowMoreMenu());
 
         var headerButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
-        headerButtons.Children.Add(BuildHeaderButton("", "Launcher settings", (_, _) => _ = OpenLauncherSettingsAsync()));
-        headerButtons.Children.Add(_addressButton);
+        headerButtons.Children.Add(_moreButton);
         headerButtons.Children.Add(BuildHeaderButton("", "Open in browser", (_, _) => OpenInBrowser()));
         // Pin sits beside maximize rather than at the head of the group: both decide how the
         // flyout behaves as a window, and the page actions between them made that read as two
@@ -1812,18 +1821,9 @@ public sealed partial class WebFlyoutWindow : Window
         _isOpen = false;
         ClearFade();
 
-        // PROTOTYPE: drop the taskbar button before the window goes off screen. The park leaves it
-        // visible in the Win32 sense, so nothing else would ever take the button away.
+        // Drop the taskbar button before the window goes off screen. The park leaves it visible in
+        // the Win32 sense, so nothing else would ever take the button away.
         ApplyTaskbarButton(false);
-
-        // A revealed address bar is temporary in the same way maximize is, and ends in the same
-        // place: the next open is whatever the launcher's settings say, not what the last visit
-        // happened to leave on screen.
-        if (_addressBarRevealed)
-        {
-            _addressBarRevealed = false;
-            ApplyAddressBarVisibility();
-        }
 
         if (_hwnd != IntPtr.Zero && IsWindow(_hwnd))
         {
@@ -2717,52 +2717,25 @@ public sealed partial class WebFlyoutWindow : Window
 
     // ── Address bar ─────────────────────────────────────────────────
 
-    private static string AddressButtonTooltip(bool shown) => shown ? "Hide address" : "Show address";
-
     /// <summary>
-    /// Shows or hides the address bar for the launcher's current settings and reveal state.
+    /// Shows or hides the address bar for the launcher's current setting.
     /// </summary>
     /// <remarks>
-    /// Two conditions, and the first is not optional: the bar lives with the header, so anything
-    /// that hid the header — a bookmark bar collapsed to a strip, a page gone fullscreen — meant
-    /// to hide this too. The button then disappears when the bar is permanent, because a control
-    /// that reveals something already on screen reads as broken.
+    /// The header check is not optional: the bar lives with the header, so anything that hid the
+    /// header — a bookmark bar collapsed to a strip, a page gone fullscreen — meant to hide this
+    /// too.
+    /// <para>There was a header button that revealed the bar for one visit without changing the
+    /// launcher. It is gone, and with it the temporary state: the More menu carries the setting
+    /// itself, which is one affordance instead of two that differed only in how long they lasted —
+    /// a distinction the header had no room to explain.</para>
     /// </remarks>
     private void ApplyAddressBarVisibility()
     {
-        bool wanted = _launcher.WebShowAddressBar || _addressBarRevealed;
-        bool visible = wanted && _header.Visibility == Visibility.Visible;
+        bool visible = _launcher.WebShowAddressBar && _header.Visibility == Visibility.Visible;
 
         _addressBar.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
-        _addressButton.Visibility = _launcher.WebShowAddressBar ? Visibility.Collapsed : Visibility.Visible;
-        ToolTipService.SetToolTip(_addressButton, AddressButtonTooltip(_addressBarRevealed));
 
         if (visible) SyncAddressBox();
-    }
-
-    /// <summary>
-    /// Reveals or re-hides the address bar from the header button.
-    /// </summary>
-    /// <remarks>
-    /// The reveal is a state of the window, not of the launcher — the same bargain maximize
-    /// makes, and dropped in the same place (<c>ParkOffScreen</c>). Someone who wants the bar
-    /// every time turns it on in launcher settings; this is "what am I actually looking at".
-    /// </remarks>
-    private void ToggleAddressBar()
-    {
-        _addressBarRevealed = !_addressBarRevealed;
-        ApplyAddressBarVisibility();
-
-        // Revealing it is nearly always a prelude to reading or replacing the address, so put the
-        // caret there. Queued: focusing a control in the same layout pass that revealed it does
-        // not take — the same rule RestorePageFocus follows.
-        if (!_addressBarRevealed) return;
-        DispatcherQueue.TryEnqueue(() =>
-        {
-            if (_addressBar.Visibility != Visibility.Visible) return;
-            try { _addressBox.Focus(FocusState.Programmatic); }
-            catch (Exception ex) { Logger.Debug(ex, "Focusing the address bar failed for launcher {Name}", _launcher.Name); }
-        });
     }
 
     /// <summary>Puts the page's own address back in the box, unless the user is mid-edit.</summary>
@@ -3046,10 +3019,7 @@ public sealed partial class WebFlyoutWindow : Window
         // same rule the item flyout applies to edit mode and its editors.
         // An open question pins the flyout too: a prompt that disappears when the user clicks
         // elsewhere is a request the page never gets an answer to.
-        // Regular-window mode pins it open for the same reason WebPinFlyout does, and more
-        // fundamentally: an ordinary app window that vanished the moment you clicked another one
-        // would not be an ordinary app window. Its taskbar button is how it gets closed instead.
-        if (_isShowing || !_isOpen || _launcher.WebPinFlyout || _launcher.WebRegularWindow || _isModalOpen || _isResizing || _isMovingWindow || _isFullScreen || IsPromptOpen) return;
+        if (_isShowing || !_isOpen || _launcher.WebPinFlyout || StaysOpenAsWindow || _isModalOpen || _isResizing || _isMovingWindow || _isFullScreen || IsPromptOpen || _isMenuOpen) return;
 
         // The browser's own HWNDs are children of this window, so clicking into the page
         // deactivates the XAML window without the user having gone anywhere. Read the
@@ -3062,7 +3032,7 @@ public sealed partial class WebFlyoutWindow : Window
             // at one moment and acting on it at another is exactly how a pinned flyout ends up
             // dismissed anyway.
             if (!_isOpen || _isShowing || _isHiding) return;
-            if (_launcher.WebPinFlyout || _launcher.WebRegularWindow || _isModalOpen || _isResizing || _isMovingWindow || _isFullScreen || IsPromptOpen) return;
+            if (_launcher.WebPinFlyout || StaysOpenAsWindow || _isModalOpen || _isResizing || _isMovingWindow || _isFullScreen || IsPromptOpen || _isMenuOpen) return;
 
             if (IsForegroundStillOurs())
             {

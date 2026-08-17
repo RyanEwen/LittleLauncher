@@ -145,6 +145,10 @@ model default, which would have flipped it on for every existing launcher.
   a flyout is always-on-top by nature, a regular window never self-dismisses — so a second property
   would only ever be inert wherever the launcher actually is. The header's pin button toggles it and
   re-labels itself for the current mode
+- `WebWindowAutoHide` (`bool`) — under `WebRegularWindow`, dismiss on focus loss like a flyout while
+  keeping the taskbar button and switcher entry. **Presentation and dismissal are separate axes**;
+  the dismissal guards read the `StaysOpenAsWindow` helper rather than `WebRegularWindow` directly.
+  Defaults `false` (stay open)
 - `WebTaskbarClickCloses` (`bool`) — under `WebRegularWindow`, close on a taskbar-button click
   instead of minimizing. Defaults `false` (minimize), which is both what an ordinary app window does
   and the direction that survives `WhenWritingDefault`

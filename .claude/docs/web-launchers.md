@@ -251,6 +251,39 @@ take it: the header's and the bookmark bar's. Two details:
 authenticator completes inside the flyout; credentials belong to the OS, so the per-launcher user
 data folder does not isolate them.
 
+## The header's More menu
+
+`WebFlyoutWindow.MoreMenu.cs`. The header's "…" replaced the gear: it opens a menu of the
+per-launcher options whose right value is a per-moment judgement — Regular window, Close when focus
+is lost (window mode only), the pin, Address bar, Reload when opened, **Opens at** (a submenu of
+radio items, being a ten-way choice rather than a toggle), Remember position changes, Remember size
+changes — with **Launcher settings…** one item below them.
+
+The address bar's header button was removed in favour of its menu item. That button revealed the
+bar for one visit without changing the launcher, and the temporary state went with it: one
+affordance beats two that differ only in how long they last, which is a distinction the header had
+no room to explain. Anything configured once and forgotten (address, size, zoom, profiles,
+browsing data) deliberately stays in the settings window; putting it all here would be a second
+settings window in a worse place. The "…" is the same idiom the item cards use, so the affordance is
+not new.
+
+Three rules, and the first two are the traps this window has hit before:
+
+- **`ShouldConstrainToRootBounds = false`.** A flyout can be 400px wide with 34px of chrome, and a
+  constrained menu is clipped exactly like the `ContentDialog` the item editors had to stop using.
+- **`_isMenuOpen` pins the flyout while the menu is up.** Once unconstrained the menu is hosted in
+  its own popup, so opening it deactivates the flyout — which would dismiss it and take the menu
+  down in the same motion. Same reason `_isModalOpen` exists, and it must clear on `Closed`,
+  including the dismissed-by-clicking-away case.
+- **Every item applies immediately**, via `ApplyWindowMode` for the mode switch. The menu is opened
+  while looking at the thing it changes, so a toggle that only took effect on the next open would
+  be indistinguishable from one that did nothing. `ApplyWindowMode` has to push *all* of it —
+  taskbar/switcher eligibility, always-on-top (which the pin's meaning depends on), and
+  `IsMinimizable`, without which the taskbar button's click does nothing.
+
+The pin item names what it does in the current mode ("Always on top" vs "Stay open when focus is
+lost"), since `WebPinFlyout` is one flag with two readings and the header button only has a glyph.
+
 ## The address bar
 
 Off by default (`Launcher.WebShowAddressBar`, Advanced → **Address Bar**), because a flyout is a
@@ -312,6 +345,13 @@ So a flyout cannot light its pin without also appearing in the switcher. Under t
 stops being clutter and becomes correct: the window is no longer always-on-top, so there is finally
 a reason to Alt-Tab *to* it. **Do not re-litigate this by adding a taskbar-only toggle** — the
 proxy-window route is the one that looks like it should work and does not.
+
+**Dismissal is a separate axis from presentation.** `WebRegularWindow` decides whether the shell
+sees a window; `WebWindowAutoHide` ("Close On Focus Loss") decides whether it survives being clicked
+away from. Setting both gives a launcher that is Alt-Tab-able and shows a running indicator while
+still getting out of the way on its own — a combination neither mode offers alone. Default is off,
+which is both what regular-window mode shipped with and what an ordinary app window does. The
+dismissal guards read `StaysOpenAsWindow`, not `WebRegularWindow`.
 
 Four things follow, each a guard rather than a convention:
 
@@ -548,9 +588,14 @@ page updating itself, not a stale frame.
 
 ## Settings layout
 
-Launcher settings show only **Web Address** and **Flyout Size** for a web launcher. Zoom, When
-Hidden, Unload After, Reload On Open, Address Bar, Pin Open, Regular Window and Browsing Data live
-in a collapsed **Advanced** expander: they tune a launcher that already works, and putting all of them on one
+Launcher settings show **Web Address**, **Flyout Size**, and the three geometry rows that go with
+it — **Opens At**, **Remember Position**, **Remember Size**. Those three were in Advanced and were
+promoted: they answer the same question Flyout Size does, they are what a user reaches for straight
+after dragging a flyout and finding the change did not stick, and Opens At's subtitle describes its
+interaction with Remember Position, which reads oddly with the two separated by the Advanced fold.
+
+Zoom, When Hidden, Unload After, Reload On Open, Address Bar, Pin Open, Regular Window, Close On
+Focus Loss, Taskbar Click and Browsing Data live in a collapsed **Advanced** expander: they tune a launcher that already works, and putting all of them on one
 surface made the common case (paste a URL, pick a size) read as a form to fill in. Pin and Address
 Bar are safe to demote twice over — the flyout's own header has a button for each.
 

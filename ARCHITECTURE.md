@@ -106,6 +106,10 @@ writes nothing to the launcher and is dropped when the flyout is dismissed, so t
 the configured size again. That is a different thing from page fullscreen, which the page enters,
 which takes the whole monitor over the taskbar, and which hides the chrome for the duration.
 
+The header's **"…" menu** carries the per-launcher options that are per-moment decisions — window
+mode, whether it closes on focus loss, the pin, address bar, reload on open, where it opens and
+whether drags to its position and size are remembered — with launcher settings one item below them.
+
 An **address bar** can sit under the header (`Launcher.WebShowAddressBar`, off by default, in
 Advanced). Off, the header's link button reveals it for the rest of that visit — a reveal which is
 window state dropped on dismissal, exactly like maximize, so clicking it never rewrites the
