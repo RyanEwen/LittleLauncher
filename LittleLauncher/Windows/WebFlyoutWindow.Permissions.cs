@@ -38,6 +38,13 @@ public sealed partial class WebFlyoutWindow
 
     private Grid? _promptBar;
     private TextBlock? _promptText;
+
+    /// <summary>Row 0's stack: the prompt bar and the notice bar, one above the other.</summary>
+    private StackPanel? _chromeNotices;
+
+    private Grid? _noticeBar;
+    private TextBlock? _noticeText;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _noticeTimer;
     private Button? _promptAccept;
     private Button? _promptReject;
 
@@ -153,8 +160,83 @@ public sealed partial class WebFlyoutWindow
         _promptBar.Children.Add(_promptText);
         _promptBar.Children.Add(buttons);
 
-        Grid.SetRow(_promptBar, 0);
-        _contentHost.Children.Add(_promptBar);
+        // Row 0 holds a stack rather than the prompt alone, so a notice and a question can both be
+        // up without one drawing over the other — see BuildNoticeBar.
+        _chromeNotices = new StackPanel();
+        _chromeNotices.Children.Add(_promptBar);
+        BuildNoticeBar();
+
+        Grid.SetRow(_chromeNotices, 0);
+        _contentHost.Children.Add(_chromeNotices);
+    }
+
+    /// <summary>
+    /// Builds the one-line notice bar — the flyout telling the user something, rather than asking.
+    /// </summary>
+    /// <remarks>
+    /// <para><b><see cref="SetStatus"/> cannot be used for this, and that is not a style
+    /// preference.</b> The status overlay shares row 1 with the browser, so it is only ever seen
+    /// while the browser is hidden or has not loaded — a hosted WebView2 draws above its XAML
+    /// siblings. Told something while a page is up, the user sees nothing, or sees it faintly
+    /// through the page. That is the airspace rule the prompt bar and the address bar are already
+    /// built around: anything the user must read or click gets a row of its own.</para>
+    /// <para>It dismisses itself, because nothing here is a question. It also does not pin the
+    /// flyout open the way an unanswered prompt does — a notice that kept the window up until it
+    /// was clicked would be worse than the silence it replaces.</para>
+    /// </remarks>
+    private void BuildNoticeBar()
+    {
+        _noticeText = new TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 12, 0),
+        };
+
+        // U+E711 is Segoe Fluent's Cancel.
+        var dismiss = BuildHeaderButton("", "Dismiss", (_, _) => HideNotice());
+
+        _noticeBar = new Grid
+        {
+            Visibility = Visibility.Collapsed,
+            Padding = new Thickness(12, 8, 8, 8),
+            Background = (Brush)Application.Current.Resources["LayerFillColorDefaultBrush"],
+            BorderBrush = (Brush)Application.Current.Resources["DividerStrokeColorDefaultBrush"],
+            BorderThickness = new Thickness(0, 0, 0, 1),
+        };
+        _noticeBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        _noticeBar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        Grid.SetColumn(_noticeText, 0);
+        Grid.SetColumn(dismiss, 1);
+        _noticeBar.Children.Add(_noticeText);
+        _noticeBar.Children.Add(dismiss);
+
+        _chromeNotices!.Children.Add(_noticeBar);
+    }
+
+    /// <summary>Says one line above the page, and takes it away again.</summary>
+    internal void ShowNotice(string text, int seconds = 12)
+    {
+        if (_noticeBar == null || _noticeText == null) return;
+
+        _noticeText.Text = text;
+        _noticeBar.Visibility = Visibility.Visible;
+
+        _noticeTimer ??= DispatcherQueue.CreateTimer();
+        _noticeTimer.Stop();
+        _noticeTimer.Interval = TimeSpan.FromSeconds(seconds);
+        _noticeTimer.IsRepeating = false;
+        _noticeTimer.Tick -= NoticeTimer_Tick;
+        _noticeTimer.Tick += NoticeTimer_Tick;
+        _noticeTimer.Start();
+    }
+
+    private void NoticeTimer_Tick(Microsoft.UI.Dispatching.DispatcherQueueTimer sender, object args) => HideNotice();
+
+    private void HideNotice()
+    {
+        _noticeTimer?.Stop();
+        if (_noticeBar != null) _noticeBar.Visibility = Visibility.Collapsed;
     }
 
     private void EnqueuePrompt(PromptRequest request)

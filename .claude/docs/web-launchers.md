@@ -218,10 +218,16 @@ here, because the menu is where several of these were born.
 Tab bar is named for what turning it *on* does, not for the default it switches off: it reads as
 "keep it", because the strip already appears on its own with a second tab.
 
-The address bar's header button was removed in favour of its menu item. That button revealed the
-bar for one visit without changing the launcher, and the temporary state went with it: one
-affordance beats two that differ only in how long they last, which is a distinction the header had
-no room to explain. Anything configured once and forgotten (address, size, zoom, profiles,
+**Open in browser moved here, and the header slot it vacated became the address bar's toggle.**
+Handing the page to the real browser is a once-in-a-while action, which is what this menu is for;
+showing the address is the per-moment decision, and the one worth a button — it is how you see where
+you are, type somewhere else, and reach the bookmark star. The button now *sets*
+`Launcher.WebShowAddressBar` rather than revealing the bar for one visit: an earlier version had
+both a permanent setting and a temporary reveal, and one affordance beats two that differ only in
+how long they last, which is a distinction the header had no room to explain. The menu carries the
+same toggle, since a button that is only in the header is a button nobody finds.
+
+Anything configured once and forgotten (address, size, zoom, profiles,
 browsing data) deliberately stays in the settings window; putting it all here would be a second
 settings window in a worse place. The "…" is the same idiom the item cards use, so the affordance is
 not new.
@@ -247,8 +253,7 @@ lost"), since `WebPinFlyout` is one flag with two readings and the header button
 
 Off by default (`Launcher.WebShowAddressBar`, Advanced → **Address Bar**), because a flyout is a
 small window and a launcher usually opens one known page. Off does not mean unreachable: the
-header's link button reveals the bar, and hides itself when the bar is permanent — a control that
-reveals something already on screen reads as broken.
+header carries a button that turns it on and off, tooltipped for whichever it will do next.
 
 - **It is a row of chrome, not an overlay.** Same reasoning as the permission prompt bar and the
   resize grips: anything floating over a hosted browser depends on how WebView2 routes input, and
@@ -261,9 +266,13 @@ reveals something already on screen reads as broken.
 - **It sizes to its content.** A fixed height clips the box at any scale or font where the default
   `TextBox` is taller than the number picked. It eats into the page, not the window, so no geometry
   arithmetic depends on how tall it comes out.
-- **The reveal is window state, exactly like maximize**, and is dropped in the same place
-  (`ParkOffScreen`). Nothing on that path may write `WebShowAddressBar`, or clicking the button
-  once would silently rewrite the launcher's settings.
+- **The header button writes the setting; it is not window state.** It used to be the latter —
+  a reveal for the current visit, dropped by `ParkOffScreen` like maximize — and having both that
+  and a persistent setting meant two controls whose only difference was how long they lasted. Now
+  `ToggleAddressBar` saves, notifies sync, and re-applies, exactly as the "…" menu's twin does.
+- **A blank new tab shows the bar whatever the setting says** (`IsActiveTabBlank`). A tab opened
+  with the "+" has no address yet, so it is a place to type; hiding the box would leave the user an
+  empty window and no way to use it.
 - **It never becomes a fourth answer to "which URL".** `GoToTypedAddress` drives the browser that
   is already there and never creates one. Falling back to `PrepareContentAsync` looks helpful and
   is not — that path navigates to `CurrentTargetUrl()`, so an address typed with no live browser
@@ -1124,6 +1133,22 @@ no browser-action UI** — so `Services/BrowserExtensionService.cs` and
 - **Archive extraction is path-checked.** A zip entry may name `..\..nything`, so each entry's
   resolved path is required to be under the target. The file came from the internet even though the
   user asked for it.
+- **One button that opens a list, plus whichever are pinned beside it** — the way every browser
+  does it, and not one button per extension: a flyout header is a handful of slots wide, so four
+  extensions would spend them all and leave nothing for the window controls. The list is also the
+  only place an extension with *no* popup can be seen at all, which for an MV3 blocker is every
+  time. They sit **immediately after the address-bar toggle** (`ExtensionSlot`), with the page
+  controls rather than among the window controls further right — the same reasoning that keeps
+  Back and Reload on the left. The slot is computed from the address button's index rather than
+  written as a constant, so adding a header button later cannot silently move them.
+- **`BrowserExtension.Folder` must be persisted, and is kept out of the payload by projection.**
+  It carried `[JsonIgnore]` briefly, to keep it from syncing — and since local settings use the
+  same class, that dropped it from disk too: every extension came back after a restart with an
+  empty path, loaded into nothing, and vanished from the header with no error anywhere.
+  `Portable()` is what keeps it out of the sync payload, by projecting id and name into fresh
+  objects. An attribute cannot express "persist here, not there"; a projection can.
+  `RepairMissingFolders` re-pairs saved names with folders still on disk, for the settings files
+  that were written during that window.
 - **The popup is the toolbar that does not exist.** `CoreWebView2BrowserExtension` carries an id, a
   name and an enabled flag and nothing about browser actions, so `action.default_popup` and its icon
   are read from the extension's own `manifest.json` — which the host has, because the host unpacked
@@ -1133,6 +1158,66 @@ no browser-action UI** — so `Services/BrowserExtensionService.cs` and
   blocker does its whole job through `declarativeNetRequest` and content scripts with no UI at all.
 - **Manifest V3 only**, since WebView2 tracks Chromium's extension platform. uBlock Origin proper is
   MV2 and cannot load; uBlock Origin Lite is the MV3 product and does.
+
+## Continue where you left off
+
+`WebFlyoutWindow.Session.cs`. The addresses a launcher had open are written to
+`Launcher.WebSessionTabs` and put back the next time it is **opened**.
+
+- **Restored on open, never at startup.** That is the whole of how it coexists with the resource
+  contract: a launcher nobody opens still builds nothing, and one that is opened pays exactly what
+  its tabs cost — which is what they were already costing before the restart. The active tab is
+  created first and in the foreground; the rest follow behind it, so only the page being looked at
+  renders.
+- **Once per run** (`_sessionRestored`). After the first open the tabs are live and are themselves
+  the session; re-reading the stored list would resurrect tabs the user has since closed.
+- **The save is guarded while a restore is mid-flight** (`_restoringSession`), or the half-built
+  list overwrites the stored one as each tab is created.
+- **Saved from `NavigationCompleted`, not only from `RefreshTabBar`.** This was the bug that made
+  the feature look absent: `RefreshTabBar` catches opens, closes and switches, so a launcher opened
+  once and then browsed within recorded the address it started at — or, far more often, nothing at
+  all. `NavigationCompleted` is the moment a tab's address is finally real, and it runs **per tab**,
+  not per active tab.
+- **A browser that has not navigated yet reports `Source` as the empty string, not `null`.** So
+  `Source ?? NavigatedUrl` never fired, and the save that runs during tab creation found nothing to
+  record. Test the string, not the reference.
+- Each save compares against what is stored and writes nothing when the set has not moved — it runs
+  on every navigation of every tab, and each write is the whole settings file.
+- **Closing the last tab clears the session.** It is an explicit "I am done with this", not a place
+  to come back to.
+- **Not synced**, for the reason `WebFlyoutPosition` is not: a set of open tabs is what one machine
+  was doing, not a preference about the launcher.
+- Addresses only. Scroll position, form state and history live in the browser that was torn down,
+  and promising them would mean keeping it. Same bargain `Ctrl+Shift+T` makes.
+
+## The addresses a real browser answers and WebView2 does not
+
+`WebFlyoutWindow.BrowserPages.cs` intercepts `chrome://`, `search://` and friends in
+`NavigationStarting`. WebView2 ships without Chrome's built-in pages, so an extension or a page
+linking to one navigates to a 404 — which is what sent Bitwarden's "unlock with biometrics" setup
+to `search://local-ntp/local-ntp.html` and left it dead.
+
+The new-tab page becomes a **blank tab with the address bar showing**, which is what a new tab is
+for; the rest are answered or refused rather than navigated to. A new tab deliberately does not
+assume the launcher's address: an empty tab the user asked for is a place to type, not another copy
+of the page they already have.
+
+## Saved logins are scoped to the profile
+
+`UserSettings.ProfilesWithoutPasswordManager`, surfaced as **Save Logins** beside Sign-ins in
+Advanced. Turning it off stops WebView2 offering to save logins and filling them in, which is what
+a password manager extension needs — two of them competing means the built-in one keeps proposing
+its own older saved logins over the manager's.
+
+- **Per profile, not per launcher**, and the row says so when the launcher is on the shared one.
+  Saved passwords live in the profile, so the switch governing them has to be scoped the same way.
+  The platform scopes it neither way (`IsPasswordAutosaveEnabled` is per browser instance), so this
+  is what decides.
+- **Read when a browser is created**, so `ReloadProfile` is what makes the change immediate rather
+  than "next time this launcher is opened".
+- **Forget** clears the saved logins for the whole profile, because WebView2 exposes no way to
+  enumerate them — only to clear the category. It needs a live browser, and says so instead of
+  reporting a success that did not happen.
 
 ## Profiles
 

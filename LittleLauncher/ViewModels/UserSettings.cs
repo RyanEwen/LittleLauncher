@@ -228,13 +228,53 @@ public partial class UserSettings : ObservableObject
     /// </remarks>
     public List<int>? EnabledSyncProviders { get; set; }
 
-    /// <summary>Unpacked browser-extension folders loaded into every web launcher's profile.</summary>
+    /// <summary>
+    /// Profiles where web launchers should not offer to save logins or fill them in.
+    /// </summary>
+    /// <remarks>
+    /// <para>For when a password manager extension is doing the job: two of them competing means
+    /// the built-in one keeps proposing its own older saved logins over the manager's, which is
+    /// what installing Bitwarden and still being offered the old passwords looks like.</para>
+    /// <para><b>Keyed by profile</b> — <c>"Shared"</c> or a launcher id, matching the folder names
+    /// under <c>WebProfiles</c>. Saved logins belong to a profile, so the setting governing them has
+    /// to as well: every launcher sharing a profile shares one answer, and a launcher with a private
+    /// profile gets its own. The platform scopes it neither way
+    /// (<c>IsPasswordAutosaveEnabled</c> is per browser instance), so this is what decides.</para>
+    /// <para>A set of the profiles where it is <em>off</em>, rather than a flag per profile, so the
+    /// default — on, as it has always been — is the absent case and stays absent under
+    /// <c>WhenWritingDefault</c>.</para>
+    /// <para>Read when a browser is created, so it takes effect for a launcher the next time its
+    /// browser starts rather than retroactively for one already running.</para>
+    /// </remarks>
+    public List<string>? ProfilesWithoutPasswordManager { get; set; }
+
+    /// <summary>Extensions promoted to a button in the flyout header.</summary>
+    /// <remarks>
+    /// Keyed by store id, or by name for one added from a folder — the same fallback the rest of
+    /// the feature uses. Absent means none pinned, which is the default and stays absent under
+    /// <c>WhenWritingDefault</c>.
+    /// </remarks>
+    public List<string>? PinnedBrowserExtensions { get; set; }
+
+    /// <summary>Browser extensions loaded into every web launcher's profile.</summary>
     /// <remarks>
     /// App-wide rather than per launcher, because extensions belong to a <em>profile</em> and most
     /// launchers share one — an app-wide list installed onto whichever profile is starting is the
     /// arrangement that matches how WebView2 actually scopes them. Nullable so an absent key stays
-    /// absent under <c>WhenWritingDefault</c>; <c>BrowserExtensionService.InstalledFolders</c>
-    /// creates it on first use.
+    /// absent under <c>WhenWritingDefault</c>; <c>BrowserExtensionService.Installed</c> creates it
+    /// on first use.
+    /// <para>Only the id and the name of each are synced — see <see cref="Models.BrowserExtension"/>.
+    /// </para>
+    /// </remarks>
+    public List<Models.BrowserExtension>? BrowserExtensions { get; set; }
+
+    /// <summary>
+    /// Legacy: unpacked extension folders, before an extension was more than a path.
+    /// </summary>
+    /// <remarks>
+    /// Read once by <c>BrowserExtensionService.MigrateFolders</c>, which turns each into a
+    /// <see cref="Models.BrowserExtension"/> and clears this. Those entries become local-only —
+    /// a bare folder carries no store id, so there is nothing another machine could fetch by.
     /// </remarks>
     public List<string>? BrowserExtensionFolders { get; set; }
 

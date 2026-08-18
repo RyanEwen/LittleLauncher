@@ -73,14 +73,15 @@ public sealed partial class WebFlyoutWindow
     private WebBookmark? _draggingBookmark;
 
     /// <summary>
-    /// True while a bookmark is being dragged, which pins the flyout open.
+    /// True while a bookmark or a tab is being dragged, which pins the flyout open.
     /// </summary>
     /// <remarks>
-    /// The drag carries the bookmark's address as text, so it can end in another application —
-    /// and that deactivates this window. Without this the flyout would dismiss itself mid-gesture
-    /// and take the bar being reordered with it, exactly as a resize or a window move would.
+    /// Both strips carry an address as text, so a drag can end in another application — and that
+    /// deactivates this window. Without this the flyout would dismiss itself mid-gesture and take
+    /// the strip being reordered with it, exactly as a resize or a window move would. One flag for
+    /// both, because the guards only ever ask "is a drag in progress".
     /// </remarks>
-    private bool _isBookmarkDragging;
+    private bool _isStripDragging;
 
     private Button? _bookmarkStar;
     private Border? _dropCaret;
@@ -617,10 +618,14 @@ public sealed partial class WebFlyoutWindow
     {
         button.CanDrag = true;
 
+        // CanDrag alone never fired: a Button captures the pointer for its own click handling, so
+        // the drag gesture never reached WinUI. See WebFlyoutWindow.StripDrag.cs.
+        WireStripDragSource(button);
+
         button.DragStarting += (_, e) =>
         {
             _draggingBookmark = bookmark;
-            _isBookmarkDragging = true;
+            _isStripDragging = true;
 
             // A drag with no payload is refused outright, so the address is the payload — which is
             // also what makes dropping one into a browser or an editor do the obvious thing.
@@ -633,7 +638,7 @@ public sealed partial class WebFlyoutWindow
         button.DropCompleted += (_, _) =>
         {
             _draggingBookmark = null;
-            _isBookmarkDragging = false;
+            _isStripDragging = false;
             HideDropCaret();
         };
     }
@@ -691,10 +696,13 @@ public sealed partial class WebFlyoutWindow
         int from = _launcher.WebBookmarks.IndexOf(dragged);
         if (from < 0) return;
 
-        // The index counts only the other bookmarks, so a drop to the right of its own slot has
-        // already skipped the gap it is about to leave behind.
+        // No adjustment for the gap the dragged item leaves behind: the index already counts only
+        // the *others*, which is exactly the list that exists after it is removed — and both Move
+        // and Remove-then-Insert take their destination in those post-removal terms. Subtracting one
+        // as well double-counted the removal, so every drop to the right landed back where it
+        // started and appeared to do nothing, while drops to the left (where the subtraction never
+        // applied) worked.
         int to = DropIndexFor(e.GetPosition(_bookmarkStrip).X);
-        if (to > from) to--;
         if (to == from) return;
 
         _launcher.WebBookmarks.Move(from, to);

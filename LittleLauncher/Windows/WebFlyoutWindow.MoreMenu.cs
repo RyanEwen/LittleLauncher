@@ -91,6 +91,13 @@ public sealed partial class WebFlyoutWindow
         bookmarkItem.Click += (_, _) => ToggleBookmarkForAddress();
         menu.Items.Add(bookmarkItem);
 
+        // Its header button became the address bar's toggle, which is the per-moment decision of
+        // the two. Handing the page to the real browser is a once-in-a-while action, and the menu
+        // is where those belong.
+        var openInBrowser = new MenuFlyoutItem { Text = "Open in browser" };
+        openInBrowser.Click += (_, _) => OpenInBrowser();
+        menu.Items.Add(openInBrowser);
+
         menu.Items.Add(new MenuFlyoutSeparator());
 
         // ── What it shows ───────────────────────────────────────

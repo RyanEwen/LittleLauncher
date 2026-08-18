@@ -230,6 +230,19 @@ in is user-facing.
 `WriteAtomic` lives here too, and **every** folder write goes through it — global sync and shared
 launchers both. See "Writes must be atomic" above.
 
+### The envelope carries extensions as well as launchers
+
+`LauncherPayload.Deserialize` returns `(launchers, timestamp, extensions)` and `ApplyAsync` takes
+both, because the installed browser extensions are app-wide state a second machine should match.
+**Identity travels; the copy does not** — what crosses is the Chrome Web Store id and the name, which
+is all another machine needs to fetch its own copy. `BrowserExtensionService.Portable()` does that
+projection, and is also what keeps the local-only `Folder` out of the payload; an extension added
+from a folder or a zip has no id, so nothing elsewhere can reproduce it and it stays on the machine
+it was added to.
+
+The downloaded list is authoritative, the same rule the bookmark collection follows: an extension
+missing from it was uninstalled somewhere, so the machine reading it uninstalls too.
+
 ### `CopyInto` must list every property that should travel
 
 The merge updates an existing launcher **in place** so `PropertyChanged` subscriptions and the

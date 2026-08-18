@@ -116,7 +116,15 @@ public sealed class ExtensionPopupWindow : Window
                 options: new CoreWebView2EnvironmentOptions { AreBrowserExtensionsEnabled = true });
 
             await _webView.EnsureCoreWebView2Async(environment);
-            _webView.CoreWebView2?.Navigate(url);
+            if (_webView.CoreWebView2 is not { } core) return;
+
+            // The popup decides its own size in CSS and there is no API to ask an extension how big
+            // its panel is, so the window has to be told by the page once the page exists. Until
+            // then it is a guess — which is what left uBlock Origin Lite's 280px panel sitting in
+            // the corner of a 420x560 window.
+            core.NavigationCompleted += async (_, _) => await SizeToPopupAsync(core);
+
+            core.Navigate(url);
         }
         catch (Exception ex)
         {
@@ -125,14 +133,55 @@ public sealed class ExtensionPopupWindow : Window
         }
     }
 
-    private void Resize()
+    /// <summary>
+    /// Fits the window to the popup the extension actually rendered.
+    /// </summary>
+    /// <remarks>
+    /// <para>Measured from the document rather than assumed, because an extension popup is sized by
+    /// its own stylesheet — a browser gives it exactly the box it asks for, within limits, and
+    /// anything else leaves it stranded in the corner of a window that is too big or clipped in one
+    /// that is too small.</para>
+    /// <para>Clamped at both ends: a popup that reports nothing useful before layout settles would
+    /// otherwise collapse the window to nothing, and one that asks for the height of a document
+    /// would fill the screen. Chromium's own popup limits are 800x600, which is the ceiling used
+    /// here for the same reason.</para>
+    /// </remarks>
+    private async Task SizeToPopupAsync(CoreWebView2 core)
+    {
+        try
+        {
+            // scrollWidth/Height rather than the body's: a popup that sets its size on <html> —
+            // which is the common shape — reports nothing useful on the body.
+            string json = await core.ExecuteScriptAsync(
+                "JSON.stringify([Math.max(document.documentElement.scrollWidth, document.body ? document.body.scrollWidth : 0),"
+                + " Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0)])");
+
+            var size = System.Text.Json.JsonSerializer.Deserialize<double[]>(json);
+            if (size is not { Length: 2 }) return;
+
+            double width = Math.Clamp(size[0], 240, 800);
+            double height = Math.Clamp(size[1], 160, 600);
+
+            // The title bar is chrome of ours, so the page's height is not the window's.
+            Resize(width, height + TitleBarAllowanceDips);
+        }
+        catch (Exception ex)
+        {
+            NLog.LogManager.GetCurrentClassLogger().Debug(ex, "Measuring the extension popup failed");
+        }
+    }
+
+    /// <summary>Height of the window's own title bar, which the page does not know about.</summary>
+    private const double TitleBarAllowanceDips = 44;
+
+    private void Resize(double widthDips = WindowWidthDips, double heightDips = WindowHeightDips)
     {
         double scale = NativeMethods.GetDpiForWindow(_hwnd) / 96.0;
         var appWindow = GetAppWindow();
 
         appWindow.Resize(new SizeInt32(
-            (int)Math.Ceiling(WindowWidthDips * scale),
-            (int)Math.Ceiling(WindowHeightDips * scale)));
+            (int)Math.Ceiling(widthDips * scale),
+            (int)Math.Ceiling(heightDips * scale)));
 
         var area = DisplayArea.GetFromWindowId(appWindow.Id, DisplayAreaFallback.Nearest).WorkArea;
         appWindow.Move(new PointInt32(

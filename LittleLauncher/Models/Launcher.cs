@@ -571,6 +571,26 @@ public partial class Launcher : ObservableObject
     [ObservableProperty]
     public partial bool WebBookmarkIconsOnly { get; set; }
 
+    /// <summary>
+    /// The pages this launcher had open when it was last used, restored on the next open.
+    /// </summary>
+    /// <remarks>
+    /// <para>"Continue where you left off", per launcher. <c>_rememberedUrl</c> already survives an
+    /// idle unload, but only in memory — closing Little Launcher forgot everything, so a launcher
+    /// used as a small browser came back at its address with the four tabs gone.</para>
+    /// <para><b>Restored when the launcher is opened, not at startup</b>, which is what keeps the
+    /// resource contract intact: a launcher nobody opens still costs nothing, and one that is opened
+    /// costs exactly what its tabs cost — which is what they cost before the restart. All but the
+    /// active one are built in the background, so only the page being looked at renders.</para>
+    /// <para><b>Deliberately not synced</b>, for the reason <see cref="WebFlyoutPosition"/> is not:
+    /// a set of open tabs is what one machine was doing, not a preference about the launcher. See
+    /// the note in <c>LauncherPayload.MergeInto</c>.</para>
+    /// </remarks>
+    public List<string>? WebSessionTabs { get; set; }
+
+    /// <summary>Which of <see cref="WebSessionTabs"/> was in front. Out of range means the first.</summary>
+    public int WebSessionActiveTab { get; set; }
+
     /// <summary>Bookmarks shown as a bar along the bottom of the web flyout.</summary>
     public ObservableCollection<WebBookmark> WebBookmarks { get; set; } = [];
 

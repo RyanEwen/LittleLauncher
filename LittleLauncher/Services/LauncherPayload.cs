@@ -40,6 +40,16 @@ internal static class LauncherPayload
     {
         public DateTimeOffset LastModified { get; set; }
         public List<Launcher> Launchers { get; set; } = [];
+
+        /// <summary>
+        /// The browser extensions this machine has, by identity — never their contents.
+        /// </summary>
+        /// <remarks>
+        /// Null on a payload written before extensions existed, which is the difference between
+        /// "no extensions" and "this machine cannot say". Only the first is a reason to uninstall
+        /// anything, so the merge treats null as no instruction at all.
+        /// </remarks>
+        public List<BrowserExtension>? Extensions { get; set; }
     }
 
     /// <summary>
@@ -50,7 +60,11 @@ internal static class LauncherPayload
         var envelope = new LaunchersEnvelope
         {
             LastModified = DateTimeOffset.UtcNow,
-            Launchers = new List<Launcher>(launchers)
+            Launchers = new List<Launcher>(launchers),
+
+            // Identity only — BrowserExtension.Folder is [JsonIgnore] because it names a path that
+            // exists on exactly one machine.
+            Extensions = BrowserExtensionService.Portable(),
         };
         var stream = new MemoryStream();
         JsonSerializer.Serialize(stream, envelope, JsonOptions);
@@ -63,13 +77,14 @@ internal static class LauncherPayload
     /// Supports both the envelope format and the legacy plain array format.
     /// Returns the launcher list and an optional timestamp (null for legacy data).
     /// </summary>
-    public static (List<Launcher>? Launchers, DateTimeOffset? LastModified) Deserialize(Stream stream)
+    public static (List<Launcher>? Launchers, DateTimeOffset? LastModified, List<BrowserExtension>? Extensions)
+        Deserialize(Stream stream)
     {
         try
         {
             var envelope = JsonSerializer.Deserialize<LaunchersEnvelope>(stream, JsonOptions);
             if (envelope?.Launchers != null && envelope.Launchers.Count > 0)
-                return (envelope.Launchers, envelope.LastModified);
+                return (envelope.Launchers, envelope.LastModified, envelope.Extensions);
         }
         catch { }
 
@@ -78,11 +93,11 @@ internal static class LauncherPayload
         try
         {
             var list = JsonSerializer.Deserialize<List<Launcher>>(stream, JsonOptions);
-            return (list, null);
+            return (list, null, null);
         }
         catch
         {
-            return (null, null);
+            return (null, null, null);
         }
     }
 
@@ -134,9 +149,16 @@ internal static class LauncherPayload
     /// Apply a downloaded launcher list: merge it in, normalize legacy glyphs, fetch any missing
     /// icons, and save. The single tail end of every successful global download.
     /// </summary>
-    public static async Task ApplyAsync(List<Launcher> launchers)
+    /// <param name="extensions">
+    /// The browser extensions the other machine had, or <c>null</c> for a payload written before
+    /// they were carried. Null is "cannot say" and means no reconciliation — an empty list is a
+    /// real answer and does uninstall, so the two must stay distinguishable.
+    /// </param>
+    public static async Task ApplyAsync(List<Launcher> launchers, List<BrowserExtension>? extensions = null)
     {
         await MergeAsync(launchers);
+
+        if (extensions != null) await BrowserExtensionService.ReconcileAsync(extensions);
 
         foreach (var launcher in SettingsManager.Current.Launchers)
         {
@@ -257,6 +279,21 @@ internal static class LauncherPayload
         existing.WebPinFlyout = downloaded.WebPinFlyout;
         existing.WebSharedProfile = downloaded.WebSharedProfile;
         existing.WebAnchor = downloaded.WebAnchor;
+
+        // These six were added to the model and the settings UI and never added here, so they were
+        // silently local-only: a launcher set up as a regular window on one machine arrived on the
+        // other as a flyout, and turning its address bar on had to be done twice. Every one of them
+        // is a decision about the launcher rather than a record of one machine's state, which is the
+        // line that decides what travels — see WebFlyoutPosition below for the other side of it.
+        //
+        // Anything added to Launcher's Web* properties belongs in this method unless it fails that
+        // test. The gap is invisible until someone uses two machines.
+        existing.WebShowAddressBar = downloaded.WebShowAddressBar;
+        existing.WebAlwaysShowTabs = downloaded.WebAlwaysShowTabs;
+        existing.WebRegularWindow = downloaded.WebRegularWindow;
+        existing.WebWindowAutoHide = downloaded.WebWindowAutoHide;
+        existing.WebTaskbarClickCloses = downloaded.WebTaskbarClickCloses;
+        existing.WebAllowAllPermissions = downloaded.WebAllowAllPermissions;
         // Legacy, and synced for the same reason WebUrl is: a launcher edited on a machine running
         // an older build arrives saying it remembered its position, and MigrateWebModel at the foot
         // of this method turns that into the WebAnchors.LastPosition it now means.
@@ -268,6 +305,10 @@ internal static class LauncherPayload
         // send the size without the rule that governs it.
         existing.WebLockSize = downloaded.WebLockSize;
 
+        // Deliberately NOT synced: WebSessionTabs / WebSessionActiveTab. What one machine had open
+        // is not a preference about the launcher, and restoring another machine's tabs would both
+        // surprise and cost a browser each. Same reasoning as the position below.
+        //
         // Deliberately NOT synced: WebFlyoutPosition. It is a remembered pixel position on one
         // machine's monitor layout, not a preference — copying it lands the flyout somewhere
         // arbitrary on a different display arrangement, or entirely off-screen. WebAnchor above

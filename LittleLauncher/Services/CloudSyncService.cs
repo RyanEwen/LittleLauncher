@@ -109,14 +109,14 @@ public static class CloudSyncService
                 return (false, $"No launchers file found in {store.ProviderName}.");
 
             using var stream = new MemoryStream(bytes, writable: false);
-            var (launchers, remoteTimestamp) = LauncherPayload.Deserialize(stream);
+            var (launchers, remoteTimestamp, extensions) = LauncherPayload.Deserialize(stream);
             if (launchers == null)
                 return (false, $"Failed to parse launchers from {store.ProviderName}.");
 
             if (LauncherPayload.ShouldSkipDownload(remoteTimestamp, force, out string reason))
                 return (false, reason);
 
-            await LauncherPayload.ApplyAsync(launchers);
+            await LauncherPayload.ApplyAsync(launchers, extensions);
 
             Logger.Info($"Launchers downloaded from {store.ProviderName}");
             return (true, $"Launchers downloaded from {store.ProviderName}.");

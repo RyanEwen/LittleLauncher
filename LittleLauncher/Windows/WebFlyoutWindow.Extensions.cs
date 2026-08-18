@@ -4,6 +4,7 @@
 using LittleLauncher.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.Web.WebView2.Core;
 using System;
@@ -24,8 +25,11 @@ namespace LittleLauncher.Windows;
 /// </remarks>
 public sealed partial class WebFlyoutWindow
 {
-    /// <summary>Header buttons currently standing in for extension browser actions.</summary>
+    /// <summary>Header buttons for the extensions the user pinned there.</summary>
     private readonly List<Button> _extensionButtons = [];
+
+    /// <summary>The one button that opens the list of extensions.</summary>
+    private Button? _extensionsButton;
 
     // ── Catching a store install ────────────────────────────────────
 
@@ -76,10 +80,106 @@ public sealed partial class WebFlyoutWindow
         operation.StateChanged += async (sender, _) =>
         {
             if (sender is not CoreWebView2DownloadOperation download) return;
-            if (download.State != CoreWebView2DownloadState.Completed) return;
 
-            await InstallDownloadedExtensionAsync(download.ResultFilePath);
+            if (download.State == CoreWebView2DownloadState.Completed)
+            {
+                await InstallDownloadedExtensionAsync(download.ResultFilePath);
+                return;
+            }
+
+            // Interrupted is the *expected* ending for a Chrome Web Store install rather than a
+            // failure to report as one — the package never reaches disk. See HandleInterruptedAsync.
+            if (download.State == CoreWebView2DownloadState.Interrupted)
+                await HandleInterruptedAsync(uri);
         };
+    }
+
+    /// <summary>
+    /// The host Chromium substitutes for the Web Store's download endpoint in unbranded builds.
+    /// </summary>
+    /// <remarks>
+    /// <para>The address that serves <c>.crx</c> packages lives in Google's <em>non-open-source</em>
+    /// branding configuration, so any Chromium built without it — WebView2, Electron, plain
+    /// Chromium — emits this placeholder in place of the real host. The request then fails DNS
+    /// before it is a network call at all, which the store page reports as "Download
+    /// interrupted".</para>
+    /// <para>It is an absent constant rather than a lock, and supplying it is what every Chromium
+    /// browser with Web Store support already does — Edge, Brave, Vivaldi and Opera each put the
+    /// endpoint back in their own build. Edge's install dialog says "Add to Microsoft Edge" because
+    /// Edge implemented the client side, not because it was granted something.</para>
+    /// </remarks>
+    private const string RemovedStoreHost = "permanently-removed.invalid";
+
+    /// <summary>The endpoint the placeholder stands in for.</summary>
+    private const string StoreDownloadEndpoint = "https://clients2.google.com/service/update2/crx";
+
+    /// <summary>Salvages an interrupted extension download.</summary>
+    /// <remarks>
+    /// Chromium builds the whole query correctly — extension id, accepted format, product version,
+    /// <c>installsource=ondemand</c> — and only the host is missing, so restoring it is a
+    /// substitution rather than a request this app composes. <c>response=redirect</c> means the
+    /// endpoint answers with a 302 to the package, which <c>HttpClient</c> follows by itself.
+    /// </remarks>
+    private async Task HandleInterruptedAsync(string url)
+    {
+        if (url.Contains(RemovedStoreHost, StringComparison.OrdinalIgnoreCase))
+            url = RestoreStoreEndpoint(url);
+
+        await InstallFromUrlAsync(url);
+    }
+
+    /// <summary>Puts the real download host back into a store URL, keeping its query untouched.</summary>
+    private static string RestoreStoreEndpoint(string url)
+    {
+        int query = url.IndexOf('?', StringComparison.Ordinal);
+        string parameters = query >= 0 ? url[query..] : "";
+
+        // "puff" is a differential format: it answers with a patch against a version this profile
+        // has never held. Asking only for crx3 keeps the reply a whole package.
+        parameters = parameters.Replace("acceptformat=crx3,puff", "acceptformat=crx3",
+            StringComparison.OrdinalIgnoreCase);
+
+        return StoreDownloadEndpoint + parameters;
+    }
+
+    /// <summary>
+    /// Fetches an extension package the browser refused to save, and installs it.
+    /// </summary>
+    /// <remarks>
+    /// Only ever called for a URL WebView2 itself just tried to download as an extension, so this is
+    /// not a general fetcher — the address came from the page's own install flow, not from anything
+    /// this app composed.
+    /// </remarks>
+    private async Task InstallFromUrlAsync(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return;
+
+        string temp = Path.Combine(Path.GetTempPath(), $"ll-extension-{Guid.NewGuid():N}.crx");
+
+        try
+        {
+            using var http = new System.Net.Http.HttpClient();
+            byte[] bytes = await http.GetByteArrayAsync(url);
+            await File.WriteAllBytesAsync(temp, bytes);
+
+            await InstallDownloadedExtensionAsync(temp);
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn(ex, "Fetching the extension package from {Url} failed", url);
+
+            // Said in the flyout, because the store page has only said "Download interrupted" and
+            // left the user with nothing to act on.
+            // ShowNotice, not SetStatus: the store page is on screen, and the status overlay shares
+            // its row with the browser — which draws over it. See BuildNoticeBar.
+            ShowNotice("That extension could not be installed from the store. Download its .zip and "
+                     + "add it under Settings → Browser Extensions → Add Folder.");
+        }
+        finally
+        {
+            try { if (File.Exists(temp)) File.Delete(temp); }
+            catch (Exception ex) { Logger.Debug(ex, "Could not delete {Path}", temp); }
+        }
     }
 
     private async Task InstallDownloadedExtensionAsync(string archivePath)
@@ -88,8 +188,7 @@ public sealed partial class WebFlyoutWindow
 
         if (folder == null)
         {
-            SetStatus("That extension could not be unpacked. It may not be a browser extension.",
-                busy: false, showRetry: false);
+            ShowNotice("That extension could not be unpacked. It may not be a browser extension.");
             return;
         }
 
@@ -100,27 +199,33 @@ public sealed partial class WebFlyoutWindow
 
         RefreshExtensionButtons();
 
-        // The download itself was only ever a delivery mechanism.
+        // The package was only ever a delivery mechanism; the unpacked copy is what runs. Deleting
+        // it is best-effort — InstallFromUrlAsync cleans up its own temp file regardless.
         try { if (File.Exists(archivePath)) File.Delete(archivePath); }
-        catch (Exception ex) { Logger.Debug(ex, "Could not delete the downloaded package {Path}", archivePath); }
+        catch (Exception ex) { Logger.Debug(ex, "Could not delete the package {Path}", archivePath); }
 
-        Logger.Info("Installed browser extension {Name} for launcher {Launcher}",
-            BrowserExtensionService.ReadName(folder), _launcher.Name);
+        string name = BrowserExtensionService.ReadName(folder);
+        Logger.Info("Installed browser extension {Name} for launcher {Launcher}", name, _launcher.Name);
+
+        // Said out loud, because the store page is still showing "Download interrupted" — from its
+        // side the install genuinely did fail, and without this the user believes nothing happened.
+        ShowNotice($"{name} is installed and running in this launcher.");
     }
 
     // ── Showing an extension's panel ────────────────────────────────
 
     /// <summary>
-    /// Puts a header button in front of every extension that declares a popup.
+    /// Rebuilds the extensions button, and whichever extensions are pinned beside it.
     /// </summary>
     /// <remarks>
-    /// <para>This is the browser toolbar WebView2 does not have.
-    /// <c>CoreWebView2BrowserExtension</c> carries an id, a name and an enabled flag and nothing
-    /// about browser actions, so the popup page and its icon are read out of the extension's own
-    /// <c>manifest.json</c> — which the host has, because the host is what unpacked it.</para>
-    /// <para>Extensions with no popup get no button. A content-script or
-    /// <c>declarativeNetRequest</c> extension — which is what an MV3 blocker is — does its whole job
-    /// with no UI at all, and a button that opened an empty page would suggest otherwise.</para>
+    /// <para>One button that opens a list, the way every browser does it — not one button per
+    /// extension. A flyout header is a handful of slots wide, so a launcher with four extensions
+    /// spent them all on extensions and left nothing for the window controls. The list is also where
+    /// an extension with no popup can still be seen: an MV3 blocker does its whole job through
+    /// <c>declarativeNetRequest</c> with no UI, and a toolbar alone would never mention it.</para>
+    /// <para>Pinning promotes one to the header, which is the point of pinning — a blocker you check
+    /// constantly is worth a slot, and the other three are not. The pins are per profile, since the
+    /// extensions are.</para>
     /// </remarks>
     private void RefreshExtensionButtons()
     {
@@ -129,18 +234,139 @@ public sealed partial class WebFlyoutWindow
 
         _extensionButtons.Clear();
 
-        foreach (string folder in BrowserExtensionService.InstalledFolders.ToList())
+        var installed = BrowserExtensionService.Installed
+            .Where(e => !string.IsNullOrEmpty(e.Folder) && Directory.Exists(e.Folder))
+            .ToList();
+
+        if (installed.Count == 0)
         {
-            if (BrowserExtensionService.ReadAction(folder) is not { } action) continue;
-
-            string name = BrowserExtensionService.ReadName(folder);
-            var button = BuildExtensionButton(folder, name, action.Icon);
-
-            // Ahead of the window controls, where a browser puts its extensions: those act on the
-            // window, these act on the page.
-            _headerButtons.Children.Insert(0, button);
-            _extensionButtons.Add(button);
+            if (_extensionsButton != null)
+            {
+                _headerButtons.Children.Remove(_extensionsButton);
+                _extensionsButton = null;
+            }
+            return;
         }
+
+        // The menu first, then whichever are pinned beside it — reading left to right as "the
+        // list, and the ones worth a slot of their own". Inserted at a running slot rather than
+        // repeatedly at the same index, which would have reversed the pinned run.
+        int slot = ExtensionSlot;
+
+        // U+E710 is Segoe Fluent's Add; U+E713 Settings. Neither is a puzzle piece — Segoe
+        // Fluent has none — so E74C (OpenPane) reads closest to "a list of things behind this".
+        _extensionsButton ??= BuildHeaderButton("", "Extensions", (_, _) => ShowExtensionsMenu());
+
+        // Re-seated rather than left wherever it was: the pinned run is rebuilt around it.
+        _headerButtons.Children.Remove(_extensionsButton);
+        _headerButtons.Children.Insert(slot++, _extensionsButton);
+
+        foreach (var extension in installed.Where(e => IsPinned(e.Id, e.Name)))
+        {
+            if (BrowserExtensionService.ReadAction(extension.Folder) is not { } action) continue;
+
+            var pinned = BuildExtensionButton(extension.Folder, extension.Name, action.Icon);
+            _headerButtons.Children.Insert(slot++, pinned);
+            _extensionButtons.Add(pinned);
+        }
+    }
+
+    /// <summary>
+    /// Where extension buttons go in the header: immediately after the address-bar toggle.
+    /// </summary>
+    /// <remarks>
+    /// They act on the page, so they belong with the page controls rather than among the window
+    /// controls further right — the same reasoning that keeps Back and Reload on the left. Placed
+    /// relative to the address-bar button rather than at a fixed index, so adding a header button
+    /// later cannot silently move them somewhere else.
+    /// </remarks>
+    private int ExtensionSlot
+    {
+        get
+        {
+            int address = _headerButtons.Children.IndexOf(_addressBarButton);
+            return address < 0 ? 0 : address + 1;
+        }
+    }
+
+    /// <summary>Opens the list of extensions, each with its popup and a pin.</summary>
+    private void ShowExtensionsMenu()
+    {
+        if (_extensionsButton == null) return;
+
+        var menu = new MenuFlyout
+        {
+            Placement = FlyoutPlacementMode.BottomEdgeAlignedRight,
+            ShouldConstrainToRootBounds = false,
+        };
+
+        foreach (var extension in BrowserExtensionService.Installed.ToList())
+        {
+            if (string.IsNullOrEmpty(extension.Folder) || !Directory.Exists(extension.Folder)) continue;
+
+            var action = BrowserExtensionService.ReadAction(extension.Folder);
+            var item = new MenuFlyoutSubItem { Text = extension.Name };
+
+            // An extension with no popup still appears, and says so rather than being absent — its
+            // absence would read as "not installed" for exactly the kind that needs no UI.
+            if (action is { } popup)
+            {
+                var open = new MenuFlyoutItem { Text = "Open" };
+                open.Click += (_, _) => _ = ShowExtensionPopupAsync(extension.Folder, extension.Name);
+                item.Items.Add(open);
+            }
+            else
+            {
+                item.Items.Add(new MenuFlyoutItem { Text = "Runs in the background", IsEnabled = false });
+            }
+
+            var pin = new ToggleMenuFlyoutItem
+            {
+                Text = "Pin to the header",
+                IsChecked = IsPinned(extension.Id, extension.Name),
+
+                // Nothing to pin without a popup: the button would open nothing.
+                IsEnabled = action != null,
+            };
+            pin.Click += (_, _) =>
+            {
+                SetPinned(extension.Id, extension.Name, pin.IsChecked);
+                RefreshExtensionButtons();
+            };
+            item.Items.Add(pin);
+
+            menu.Items.Add(item);
+        }
+
+        if (menu.Items.Count == 0) return;
+
+        menu.Opened += (_, _) => _isMenuOpen = true;
+        menu.Closed += (_, _) => _isMenuOpen = false;
+        menu.ShowAt(_extensionsButton);
+    }
+
+    /// <summary>
+    /// Which extensions are pinned, keyed the way the extension itself is identified.
+    /// </summary>
+    /// <remarks>
+    /// By store id where there is one, and by name otherwise — the same fallback the rest of this
+    /// feature uses for an extension added from a folder, which has no id to be known by.
+    /// </remarks>
+    private static string PinKey(string id, string name) => string.IsNullOrEmpty(id) ? name : id;
+
+    private static bool IsPinned(string id, string name) =>
+        Classes.Settings.SettingsManager.Current.PinnedBrowserExtensions is { } pinned &&
+        pinned.Contains(PinKey(id, name), StringComparer.OrdinalIgnoreCase);
+
+    private static void SetPinned(string id, string name, bool pinned)
+    {
+        var list = Classes.Settings.SettingsManager.Current.PinnedBrowserExtensions ??= [];
+        string key = PinKey(id, name);
+
+        list.RemoveAll(k => string.Equals(k, key, StringComparison.OrdinalIgnoreCase));
+        if (pinned) list.Add(key);
+
+        Classes.Settings.SettingsManager.SaveSettings();
     }
 
     private Button BuildExtensionButton(string folder, string name, string? iconPath)
@@ -196,8 +422,7 @@ public sealed partial class WebFlyoutWindow
 
             if (match == null)
             {
-                SetStatus($"{name} is not loaded in this launcher yet. Reopen it and try again.",
-                    busy: false, showRetry: false);
+                ShowNotice($"{name} is not loaded in this launcher yet. Reopen it and try again.");
                 return;
             }
 

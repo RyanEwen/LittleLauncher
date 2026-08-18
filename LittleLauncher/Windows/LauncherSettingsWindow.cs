@@ -1493,6 +1493,10 @@ public sealed class LauncherSettingsWindow : Window
             "Keep this flyout at the size you drag it to; otherwise it reopens at the size above",
             rememberSizeToggle);
 
+        // Set once the password row below exists; the profile combo above has to re-read it, and
+        // that handler is written before the row it refers to.
+        Action? refreshPasswordRow = null;
+
         // ── Profile ─────────────────────────────────────────────
         // A combo rather than a toggle: "shared with other launchers" is a statement about where
         // the sign-ins live, and naming both ends of it beats an unlabelled switch.
@@ -1523,12 +1527,77 @@ public sealed class LauncherSettingsWindow : Window
             // old profile until it is dropped.
             WebFlyoutWindow.ReloadProfile(launcher.Id);
             UpdateProfileText();
+
+            // The profile changed, so both the wording and the value belong to a different profile
+            // now — a launcher moved onto the shared one adopts whatever the shared one is set to.
+            // Through a hook, because that row is built below this handler.
+            refreshPasswordRow?.Invoke();
         };
 
         var profileRow = BuildRow("Sign-ins",
             "Pooled with every launcher set to share, so one sign-in covers them all. Private keeps this "
             + "launcher's cookies to itself — for a second account on a site another launcher already uses",
             profileCombo);
+
+        // ── Saved logins ────────────────────────────────────────
+        // Beside Sign-ins deliberately: both are properties of the *profile*, not the launcher, so a
+        // launcher on the shared profile is setting this for every launcher on it. Saved passwords
+        // live in the profile, so the switch that governs them has to be scoped the same way.
+        var passwordToggle = new ToggleSwitch
+        {
+            IsOn = WebFlyoutWindow.UsesBuiltInPasswordManager(launcher),
+            OnContent = "",
+            OffContent = "",
+            MinWidth = 0,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        var passwordSubtitle = new TextBlock { FontSize = 12, Opacity = 0.5, TextWrapping = TextWrapping.Wrap };
+
+        void UpdatePasswordText() => passwordSubtitle.Text = launcher.WebSharedProfile
+            ? "Offer to save logins and fill them in, for every launcher on the shared profile. Turn off "
+              + "when a password manager extension is doing it, so the two do not compete"
+            : "Offer to save logins and fill them in. Turn off when a password manager extension is "
+              + "doing it, so the two do not compete";
+
+        passwordToggle.Toggled += (_, _) =>
+        {
+            WebFlyoutWindow.SetBuiltInPasswordManager(launcher, passwordToggle.IsOn);
+
+            // The setting is read when a browser starts, so a launcher already open keeps the old
+            // behaviour until it is reopened. Dropping its browser is what makes that immediate.
+            WebFlyoutWindow.ReloadProfile(launcher.Id);
+        };
+
+        UpdatePasswordText();
+        var passwordRow = BuildRow("Save Logins", passwordSubtitle, passwordToggle);
+
+        refreshPasswordRow = () =>
+        {
+            UpdatePasswordText();
+            passwordToggle.IsOn = WebFlyoutWindow.UsesBuiltInPasswordManager(launcher);
+        };
+
+        var forgetLoginsButton = new Button { Content = "Forget" };
+        forgetLoginsButton.Click += async (_, _) =>
+        {
+            forgetLoginsButton.IsEnabled = false;
+
+            // All of them, because WebView2 exposes no way to enumerate saved passwords — only to
+            // clear the category. The button is named for what it can actually do.
+            bool cleared = await WebFlyoutWindow.ClearSavedPasswordsAsync(launcher);
+            forgetLoginsButton.Content = cleared ? "Forgotten" : "Forget";
+
+            if (!cleared)
+                await ShowErrorAsync("Open this launcher first — its saved logins can only be cleared while its browser is running.");
+
+            forgetLoginsButton.IsEnabled = true;
+        };
+
+        var forgetLoginsRow = BuildRow("Saved Logins",
+            "Forget every login and form entry saved for this profile. Logins kept by a password "
+            + "manager extension are not affected",
+            forgetLoginsButton);
 
         // ── Sign-out / clear data ───────────────────────────────
         var clearButton = new Button { Content = "Clear" };
@@ -1613,7 +1682,7 @@ public sealed class LauncherSettingsWindow : Window
         // does this open?"), they are the ones a user reaches for after dragging a flyout and
         // finding the change did not stick, and Opens At's subtitle describes its interaction with
         // Remember Position, which would read oddly with the two separated by the Advanced fold.
-        foreach (var row in new[] { zoomRow, policyRow, idleRow, reloadRow, linksRow, pinRow, regularRow, autoHideRow, clickRow, trustRow, resetPermissionsRow, profileRow, clearRow })
+        foreach (var row in new[] { zoomRow, policyRow, idleRow, reloadRow, linksRow, pinRow, regularRow, autoHideRow, clickRow, trustRow, resetPermissionsRow, profileRow, passwordRow, forgetLoginsRow, clearRow })
             advancedPanel.Children.Add(row);
 
         var advanced = new Expander

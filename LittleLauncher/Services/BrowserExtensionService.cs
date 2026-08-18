@@ -56,7 +56,12 @@ internal static class BrowserExtensionService
     /// with nothing on screen to explain why — so the copy under <see cref="ExtensionsRoot"/> is
     /// what the profile is pointed at, and it lives as long as the extension does.
     /// </remarks>
-    internal static async Task<string?> InstallAsync(string sourcePath)
+    /// <param name="storeId">
+    /// The Chrome Web Store id when the package came from the store, so another machine can fetch
+    /// its own copy. Empty for a folder or zip the user picked, which nothing elsewhere can
+    /// reproduce — see <see cref="Models.BrowserExtension.Id"/>.
+    /// </param>
+    internal static async Task<string?> InstallAsync(string sourcePath, string storeId = "")
     {
         try
         {
@@ -73,7 +78,7 @@ internal static class BrowserExtensionService
                 return null;
             }
 
-            Remember(unpacked);
+            Remember(unpacked, storeId);
             return unpacked;
         }
         catch (Exception ex)
@@ -181,30 +186,222 @@ internal static class BrowserExtensionService
 
     // ── The list ────────────────────────────────────────────────────
 
-    /// <summary>Folders that should be loaded into every web launcher's profile.</summary>
-    internal static List<string> InstalledFolders =>
-        SettingsManager.Current.BrowserExtensionFolders ??= [];
-
-    private static void Remember(string folder)
+    /// <summary>What should be loaded into every web launcher's profile.</summary>
+    internal static List<Models.BrowserExtension> Installed
     {
-        if (InstalledFolders.Any(f => string.Equals(f, folder, StringComparison.OrdinalIgnoreCase))) return;
+        get
+        {
+            var list = SettingsManager.Current.BrowserExtensions ??= [];
+            MigrateFolders(list);
+            RepairMissingFolders(list);
+            return list;
+        }
+    }
 
-        InstalledFolders.Add(folder);
+    /// <summary>
+    /// Re-finds the unpacked folder for an extension whose path was lost.
+    /// </summary>
+    /// <remarks>
+    /// Builds between 1.33.0.7 and 1.33.0.8 wrote the extension list with <c>Folder</c> marked
+    /// <c>[JsonIgnore]</c>, so it never reached settings.json — every extension came back after a
+    /// restart pointing nowhere, loaded into no profile, and disappeared from the header. The
+    /// unpacked copies are still on disk, and their manifests still declare the names that were
+    /// saved, so the pairing can simply be worked out again rather than asking the user to
+    /// reinstall.
+    /// </remarks>
+    private static void RepairMissingFolders(List<Models.BrowserExtension> list)
+    {
+        var broken = list.Where(e => string.IsNullOrEmpty(e.Folder) || !Directory.Exists(e.Folder)).ToList();
+        if (broken.Count == 0 || !Directory.Exists(ExtensionsRoot)) return;
+
+        var claimed = list.Select(e => e.Folder)
+            .Where(f => !string.IsNullOrEmpty(f))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        bool repaired = false;
+
+        foreach (var extension in broken)
+        {
+            foreach (string folder in SafeDirectories(ExtensionsRoot))
+            {
+                if (claimed.Contains(folder)) continue;
+                if (!string.Equals(ReadName(folder), extension.Name, StringComparison.OrdinalIgnoreCase)) continue;
+
+                extension.Folder = folder;
+                claimed.Add(folder);
+                repaired = true;
+
+                Logger.Info("Re-found the folder for browser extension {Name}", extension.Name);
+                break;
+            }
+        }
+
+        if (repaired) SettingsManager.SaveSettings();
+    }
+
+    /// <summary>Folders still on disk, for the code that only needs paths.</summary>
+    internal static List<string> InstalledFolders =>
+        [.. Installed.Select(e => e.Folder).Where(f => !string.IsNullOrEmpty(f))];
+
+    /// <summary>
+    /// Brings the old folder-only list onto the record model.
+    /// </summary>
+    /// <remarks>
+    /// Those entries become local-only: a bare folder carries no store id, so there is nothing
+    /// another machine could fetch by. Re-adding such an extension from the store is what makes it
+    /// portable — which the settings list says, rather than leaving it to be discovered.
+    /// </remarks>
+    private static void MigrateFolders(List<Models.BrowserExtension> list)
+    {
+        var folders = SettingsManager.Current.BrowserExtensionFolders;
+        if (folders == null || folders.Count == 0) return;
+
+        foreach (string folder in folders)
+        {
+            if (list.Any(e => string.Equals(e.Folder, folder, StringComparison.OrdinalIgnoreCase))) continue;
+            list.Add(new Models.BrowserExtension { Name = ReadName(folder), Folder = folder });
+        }
+
+        SettingsManager.Current.BrowserExtensionFolders = null;
         SettingsManager.SaveSettings();
     }
 
+    private static void Remember(string folder, string id)
+    {
+        var list = Installed;
+
+        var existing = list.FirstOrDefault(e => string.Equals(e.Folder, folder, StringComparison.OrdinalIgnoreCase));
+        if (existing != null)
+        {
+            existing.Id = id;
+            existing.Name = ReadName(folder);
+        }
+        else
+        {
+            list.Add(new Models.BrowserExtension { Id = id, Name = ReadName(folder), Folder = folder });
+        }
+
+        SettingsManager.SaveSettings();
+        AutoSyncService.NotifyLaunchersChanged();
+    }
+
     /// <summary>Forgets an extension and deletes the copy that was made for it.</summary>
+    /// <remarks>
+    /// The removal is what travels: the synced list is authoritative, so an extension gone from it
+    /// is uninstalled on every other machine when they next read it.
+    /// </remarks>
     internal static void Uninstall(string folder)
     {
-        InstalledFolders.RemoveAll(f => string.Equals(f, folder, StringComparison.OrdinalIgnoreCase));
+        Installed.RemoveAll(e => string.Equals(e.Folder, folder, StringComparison.OrdinalIgnoreCase));
         SettingsManager.SaveSettings();
+        AutoSyncService.NotifyLaunchersChanged();
 
         // Only ever a folder this service made, under its own root — never the source the user
         // picked from, which may be anywhere and is not ours to delete.
         if (folder.StartsWith(ExtensionsRoot, StringComparison.OrdinalIgnoreCase)) TryDelete(folder);
     }
 
-    /// <summary>The <c>name</c> an unpacked extension declares, for showing it in a list.</summary>
+    /// <summary>
+    /// Makes this machine's extensions match a list that arrived over sync.
+    /// </summary>
+    /// <remarks>
+    /// <para>Installs what is listed and missing, and removes what is here and not listed — the
+    /// synced list is the authority, which is what makes an uninstall on one machine an uninstall on
+    /// all of them.</para>
+    /// <para><b>Local-only extensions are left entirely alone.</b> One added from a folder has no id
+    /// to appear in the list under, so treating its absence as a removal would delete it on the very
+    /// machine it was added to, every time that machine synced.</para>
+    /// </remarks>
+    internal static async Task ReconcileAsync(List<Models.BrowserExtension> wanted)
+    {
+        var local = Installed;
+        bool changed = false;
+
+        // Gone from the list, and reproducible — so its absence is a decision rather than a machine
+        // that simply never had it.
+        foreach (var extension in local.Where(e => e.IsPortable).ToList())
+        {
+            if (wanted.Any(w => string.Equals(w.Id, extension.Id, StringComparison.OrdinalIgnoreCase))) continue;
+
+            Logger.Info("Removing browser extension {Name}: it was uninstalled on another machine", extension.Name);
+            local.Remove(extension);
+            if (!string.IsNullOrEmpty(extension.Folder)) TryDelete(extension.Folder);
+            changed = true;
+        }
+
+        foreach (var extension in wanted.Where(w => w.IsPortable))
+        {
+            if (local.Any(e => string.Equals(e.Id, extension.Id, StringComparison.OrdinalIgnoreCase))) continue;
+
+            Logger.Info("Fetching browser extension {Name} ({Id}): installed on another machine",
+                extension.Name, extension.Id);
+
+            if (await TryFetchFromStoreAsync(extension.Id) != null) changed = true;
+        }
+
+        if (changed) SettingsManager.SaveSettings();
+    }
+
+    /// <summary>What crosses to another machine: identity and name, never a path.</summary>
+    internal static List<Models.BrowserExtension> Portable() =>
+        [.. Installed.Where(e => e.IsPortable)
+            .Select(e => new Models.BrowserExtension { Id = e.Id, Name = e.Name })];
+
+    /// <summary>
+    /// Fetches an extension by store id, the way the other machine originally got it.
+    /// </summary>
+    /// <remarks>
+    /// The same endpoint an install from the store uses, with a query composed here rather than
+    /// taken from a page — there is no page involved when the trigger is a sync download. The
+    /// product version is what the update service matches against; a current one is enough for it
+    /// to answer with the current package.
+    /// </remarks>
+    private static async Task<string?> TryFetchFromStoreAsync(string id)
+    {
+        string url = "https://clients2.google.com/service/update2/crx"
+                   + "?response=redirect&acceptformat=crx3&prodversion=131.0.0.0"
+                   + $"&x=id%3D{Uri.EscapeDataString(id)}%26installsource%3Dondemand%26uc";
+
+        string temp = Path.Combine(Path.GetTempPath(), $"ll-extension-{Guid.NewGuid():N}.crx");
+
+        try
+        {
+            using var http = new System.Net.Http.HttpClient();
+            byte[] bytes = await http.GetByteArrayAsync(url);
+            await File.WriteAllBytesAsync(temp, bytes);
+
+            string? folder = await TryInstallFromArchiveAsync(temp);
+            if (folder == null) return null;
+
+            Remember(folder, id);
+            return folder;
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn(ex, "Could not fetch browser extension {Id}", id);
+            return null;
+        }
+        finally
+        {
+            try { if (File.Exists(temp)) File.Delete(temp); }
+            catch (Exception ex) { Logger.Debug(ex, "Could not delete {Path}", temp); }
+        }
+    }
+
+    /// <summary>
+    /// The name an unpacked extension goes by.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>A manifest name is often not a name.</b> A localised extension declares
+    /// <c>"name": "__MSG_extName__"</c> and keeps the real string in
+    /// <c>_locales/{default_locale}/messages.json</c> — so uBlock Origin Lite reads as
+    /// <c>__MSG_extName__</c> until that indirection is followed. It showed that way in the settings
+    /// list, in the header button's tooltip, and in the log.</para>
+    /// <para>It also broke more than labels: <see cref="ApplyAsync"/> and the popup lookup both
+    /// match against what WebView2 reports, and WebView2 reports the <em>resolved</em> name. Every
+    /// comparison failed, so the extension was re-added to each profile in turn and its popup could
+    /// never be found.</para>
+    /// </remarks>
     internal static string ReadName(string folder)
     {
         try
@@ -212,12 +409,65 @@ internal static class BrowserExtensionService
             using var stream = File.OpenRead(Path.Combine(folder, "manifest.json"));
             using var json = JsonDocument.Parse(stream, new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip });
 
-            if (json.RootElement.TryGetProperty("name", out var name) && name.GetString() is { } text)
-                return text;
+            if (!json.RootElement.TryGetProperty("name", out var name) || name.GetString() is not { } text)
+                return Path.GetFileName(folder);
+
+            string? locale = json.RootElement.TryGetProperty("default_locale", out var declared)
+                ? declared.GetString()
+                : null;
+
+            return ResolveMessage(folder, text, locale);
         }
         catch (Exception ex)
         {
             Logger.Debug(ex, "Reading the manifest name in {Folder} failed", folder);
+        }
+
+        return Path.GetFileName(folder);
+    }
+
+    /// <summary>
+    /// Follows a <c>__MSG_key__</c> placeholder into the extension's own message catalogue.
+    /// </summary>
+    /// <remarks>
+    /// The declared <c>default_locale</c> first, then the usual English folders — an extension whose
+    /// default locale is missing from its own package is broken, but showing its folder name is a
+    /// better answer than showing the placeholder.
+    /// </remarks>
+    private static string ResolveMessage(string folder, string value, string? defaultLocale)
+    {
+        const string prefix = "__MSG_";
+        const string suffix = "__";
+
+        if (!value.StartsWith(prefix, StringComparison.Ordinal) || !value.EndsWith(suffix, StringComparison.Ordinal))
+            return value;
+
+        string key = value[prefix.Length..^suffix.Length];
+
+        foreach (string? locale in new[] { defaultLocale, "en", "en_US", "en_GB" })
+        {
+            if (string.IsNullOrEmpty(locale)) continue;
+
+            string path = Path.Combine(folder, "_locales", locale, "messages.json");
+            if (!File.Exists(path)) continue;
+
+            try
+            {
+                using var stream = File.OpenRead(path);
+                using var json = JsonDocument.Parse(stream, new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip });
+
+                // Keys are matched case-insensitively, which the extension platform also does.
+                foreach (var entry in json.RootElement.EnumerateObject())
+                {
+                    if (!string.Equals(entry.Name, key, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (entry.Value.TryGetProperty("message", out var message) && message.GetString() is { } resolved)
+                        return resolved;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Debug(ex, "Reading {Path} failed", path);
+            }
         }
 
         return Path.GetFileName(folder);
@@ -308,6 +558,17 @@ internal static class BrowserExtensionService
             // Never fatal to opening a launcher: a page that loads without its ad blocker is worth
             // far more than a flyout that refuses to open.
             Logger.Warn(ex, "Applying browser extensions failed");
+        }
+    }
+
+    /// <summary>Lists the unpacked extension folders, or nothing if the root cannot be read.</summary>
+    private static IEnumerable<string> SafeDirectories(string root)
+    {
+        try { return Directory.EnumerateDirectories(root); }
+        catch (Exception ex)
+        {
+            Logger.Warn(ex, "Could not list extensions in {Root}", root);
+            return [];
         }
     }
 

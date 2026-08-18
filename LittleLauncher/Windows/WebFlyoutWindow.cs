@@ -81,6 +81,9 @@ public sealed partial class WebFlyoutWindow : Window
     private readonly Button _backButton;
     private readonly Button _forwardButton;
     private readonly Button _moreButton;
+
+    /// <summary>Shows and hides the address bar. Its glyph reports which it will do.</summary>
+    private readonly Button _addressBarButton;
     private readonly Grid _addressBar;
     private readonly TextBox _addressBox;
     private readonly Grid _header;
@@ -327,7 +330,12 @@ public sealed partial class WebFlyoutWindow : Window
 
         var headerButtons = _headerButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
         headerButtons.Children.Add(_moreButton);
-        headerButtons.Children.Add(BuildHeaderButton("", "Open in browser", (_, _) => OpenInBrowser()));
+        // The address bar's toggle, where Open in browser used to be. Open in browser stays in the
+        // "…" menu, which is where a once-in-a-while action belongs; showing the address is the
+        // per-moment decision, and the one worth a button — it is how you see where you are, type
+        // somewhere else, and reach the bookmark star.
+        _addressBarButton = BuildHeaderButton("", "Address bar", (_, _) => ToggleAddressBar());
+        headerButtons.Children.Add(_addressBarButton);
         // Pin sits beside maximize rather than at the head of the group: both decide how the
         // flyout behaves as a window, and the page actions between them made that read as two
         // unrelated buttons.
@@ -1313,6 +1321,44 @@ public sealed partial class WebFlyoutWindow : Window
     }
 
     /// <summary>
+    /// Forgets every login this app's browsers have saved, across every profile.
+    /// </summary>
+    /// <remarks>
+    /// <para>All of them, not a list to pick from: WebView2 exposes no way to enumerate saved
+    /// passwords, only to clear the category. So this is the honest shape of what the platform
+    /// allows — "forget them all", not "manage them".</para>
+    /// <para>Every profile, because a password manager replaces the built-in one everywhere, and
+    /// leaving the old logins in the profiles that happen to be closed would mean they reappeared
+    /// launcher by launcher. Profiles with no browser running are cleared by starting nothing — the
+    /// data is a folder, and the next browser on it reads what is left.</para>
+    /// </remarks>
+    public static async Task<bool> ClearSavedPasswordsAsync(Launcher launcher)
+    {
+        const CoreWebView2BrowsingDataKinds kinds =
+            CoreWebView2BrowsingDataKinds.PasswordAutosave | CoreWebView2BrowsingDataKinds.GeneralAutofill;
+
+        // One clear does the whole profile, so the first sibling with a live browser is enough — the
+        // others are views onto the same folder, not copies. Same shape as ClearBrowsingDataAsync.
+        foreach (string id in ProfileSiblings(launcher))
+        {
+            if (!Instances.TryGetValue(id, out var panel)) continue;
+            if (panel._webView?.CoreWebView2 is not { } core) continue;
+
+            try
+            {
+                await core.Profile.ClearBrowsingDataAsync(kinds);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn(ex, "Clearing saved logins failed for launcher {Name}", panel._launcher.Name);
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Clears cookies, storage and cache for a web launcher — the way to sign out of a page the
     /// flyout has stayed signed in to.
     /// </summary>
@@ -1355,6 +1401,35 @@ public sealed partial class WebFlyoutWindow : Window
 
     internal static string GetUserDataFolder(string launcherId) =>
         Path.Combine(MainWindow.GetPhysicalAppDataDir(), "WebProfiles", launcherId);
+
+    /// <summary>
+    /// Names the profile a launcher's data lives in: <c>"Shared"</c>, or its own id.
+    /// </summary>
+    /// <remarks>
+    /// The folder name under <c>WebProfiles</c>, which is what makes it a stable key for anything
+    /// scoped to a profile rather than to a launcher. Launcher ids are GUIDs, so nothing private can
+    /// collide with the shared name.
+    /// </remarks>
+    internal static string ProfileKey(Launcher launcher) =>
+        launcher.WebSharedProfile ? "Shared" : launcher.Id;
+
+    /// <summary>Whether this launcher's profile still offers to save and fill logins.</summary>
+    internal static bool UsesBuiltInPasswordManager(Launcher launcher) =>
+        SettingsManager.Current.ProfilesWithoutPasswordManager is not { } off ||
+        !off.Contains(ProfileKey(launcher), StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Turns the built-in password manager on or off for a launcher's whole profile.</summary>
+    internal static void SetBuiltInPasswordManager(Launcher launcher, bool enabled)
+    {
+        var off = SettingsManager.Current.ProfilesWithoutPasswordManager ??= [];
+        string key = ProfileKey(launcher);
+
+        off.RemoveAll(k => string.Equals(k, key, StringComparison.OrdinalIgnoreCase));
+        if (!enabled) off.Add(key);
+
+        SettingsManager.SaveSettings();
+        Services.AutoSyncService.NotifyLaunchersChanged();
+    }
 
     /// <summary>The profile behind every launcher with <c>WebSharedProfile</c> set.</summary>
     internal static string SharedUserDataFolder =>
@@ -1729,6 +1804,15 @@ public sealed partial class WebFlyoutWindow : Window
     /// </remarks>
     private async Task PrepareContentAsync()
     {
+        // First open of the run, with pages remembered from the last one — see
+        // WebFlyoutWindow.Session.cs. Ahead of everything else, because it decides what the tabs
+        // *are*; the branches below only choose between tabs that already exist.
+        if (HasSessionToRestore)
+        {
+            await RestoreSessionAsync();
+            if (_tabs.Count > 0) return;
+        }
+
         if (_activeTab is { HomeKey: null } link && link.View.CoreWebView2 != null)
         {
             ActivateTab(link);
@@ -1931,8 +2015,12 @@ public sealed partial class WebFlyoutWindow : Window
         var settings = core.Settings;
         settings.IsStatusBarEnabled = false;
         settings.AreBrowserAcceleratorKeysEnabled = false;   // no Ctrl+N/Ctrl+P from a tray panel
-        settings.IsPasswordAutosaveEnabled = true;
-        settings.IsGeneralAutofillEnabled = true;
+        // Off when a password manager extension is doing the job — otherwise both offer, and the
+        // built-in one keeps proposing older saved logins over the manager's. Read per browser, so
+        // it applies to a launcher the next time it starts rather than to one already open.
+        bool builtIn = UsesBuiltInPasswordManager(_launcher);
+        settings.IsPasswordAutosaveEnabled = builtIn;
+        settings.IsGeneralAutofillEnabled = builtIn;
 
         // A link asking for a new window becomes another tab of this launcher — see
         // HandleNewWindowRequested for why the browser's own NewWindow is used rather than reading
@@ -1957,8 +2045,10 @@ public sealed partial class WebFlyoutWindow : Window
         // Every handler below that writes shared chrome asks IsActiveCore first: a background tab
         // navigates on its own — a chat app pushing history, a dashboard refreshing — and without
         // the check it would drive the header of a page nobody is looking at.
-        core.NavigationStarting += (_, _) =>
+        core.NavigationStarting += (_, e) =>
         {
+            if (TryHandleBrowserPageNavigation(core, e)) return;
+
             if (IsActiveCore(core)) SetStatus("Loading…", busy: true, showRetry: false);
         };
 
@@ -1993,6 +2083,14 @@ public sealed partial class WebFlyoutWindow : Window
             {
                 ApplyZoom(core);   // CSS zoom lives in the document, so each navigation drops it
                 UpdateTabChip(tab);
+
+                // Per tab, not per active tab: this is the moment a tab's address is finally real,
+                // and it is the only one that catches a page the user browsed to rather than one
+                // opened by a gesture. RefreshTabBar alone recorded only opens, closes and
+                // switches — so a launcher opened once and browsed within stored the address it
+                // started at, or nothing. The save compares before writing, so this is cheap.
+                SaveSession();
+
                 if (!active) return;
 
                 HideStatus();
@@ -2265,6 +2363,7 @@ public sealed partial class WebFlyoutWindow : Window
         if (core == null || string.IsNullOrEmpty(url)) return;
 
         tab!.NavigatedUrl = url;
+        SaveSession();
 
         try
         {
@@ -2471,17 +2570,66 @@ public sealed partial class WebFlyoutWindow : Window
     /// itself, which is one affordance instead of two that differed only in how long they lasted —
     /// a distinction the header had no room to explain.</para>
     /// </remarks>
+    /// <summary>
+    /// Turns the address bar on or off for this launcher.
+    /// </summary>
+    /// <remarks>
+    /// It writes the launcher rather than lasting for the visit, which is the same thing the "…"
+    /// menu's item does — there was once a reveal-for-this-visit button here and it was removed,
+    /// because one affordance beats two that differ only in how long they last.
+    /// </remarks>
+    private void ToggleAddressBar()
+    {
+        _launcher.WebShowAddressBar = !_launcher.WebShowAddressBar;
+        Classes.Settings.SettingsManager.SaveSettings();
+        Services.AutoSyncService.NotifyLaunchersChanged();
+        ApplyAddressBarVisibility();
+    }
+
     private void ApplyAddressBarVisibility()
     {
-        bool visible = _launcher.WebShowAddressBar && _header.Visibility == Visibility.Visible;
+        // An empty tab overrides the launcher's setting: it has nothing else in it, and the only
+        // thing to do with one is type an address. Hiding the bar there would leave a blank panel
+        // with no way to use it.
+        bool visible = (_launcher.WebShowAddressBar || IsActiveTabBlank) && _header.Visibility == Visibility.Visible;
 
         _addressBar.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
 
         if (visible) SyncAddressBox();
 
+        // The button reports what it will do, not what is on screen: an empty tab forces the bar on
+        // regardless of the setting, and a button that went "checked" because of that would be
+        // claiming the launcher had been changed when it had not.
+        ToolTipService.SetToolTip(_addressBarButton,
+            _launcher.WebShowAddressBar ? "Hide the address bar" : "Show the address bar");
+
+        if (_addressBarButton.Content is FontIcon glyph)
+            glyph.Opacity = _launcher.WebShowAddressBar ? 1.0 : 0.6;
+
         // Unconditional: the star is hidden for a launcher with no bookmark bar to write into, and
         // that is a launcher setting rather than something the address bar's own visibility decides.
         UpdateBookmarkStar();
+    }
+
+    /// <summary>True when the tab in front has never been sent anywhere.</summary>
+    private bool IsActiveTabBlank
+    {
+        get
+        {
+            if (_activeTab == null) return false;
+
+            try
+            {
+                string source = _activeTab.View.CoreWebView2?.Source ?? "";
+                return string.IsNullOrEmpty(source) ||
+                       source.Equals("about:blank", StringComparison.OrdinalIgnoreCase);
+            }
+            catch (Exception ex)
+            {
+                Logger.Debug(ex, "Reading the active tab's address failed for launcher {Name}", _launcher.Name);
+                return false;
+            }
+        }
     }
 
     /// <summary>Puts the page's own address back in the box, unless the user is mid-edit.</summary>
@@ -2782,7 +2930,7 @@ public sealed partial class WebFlyoutWindow : Window
         // same rule the item flyout applies to edit mode and its editors.
         // An open question pins the flyout too: a prompt that disappears when the user clicks
         // elsewhere is a request the page never gets an answer to.
-        if (_isShowing || !_isOpen || _launcher.WebPinFlyout || StaysOpenAsWindow || _isModalOpen || _isResizing || _isMovingWindow || _isBookmarkDragging || _isFullScreen || IsPromptOpen || _isMenuOpen) return;
+        if (_isShowing || !_isOpen || _launcher.WebPinFlyout || StaysOpenAsWindow || _isModalOpen || _isResizing || _isMovingWindow || _isStripDragging || _isFullScreen || IsPromptOpen || _isMenuOpen) return;
 
         // The browser's own HWNDs are children of this window, so clicking into the page
         // deactivates the XAML window without the user having gone anywhere. Read the
@@ -2795,7 +2943,7 @@ public sealed partial class WebFlyoutWindow : Window
             // at one moment and acting on it at another is exactly how a pinned flyout ends up
             // dismissed anyway.
             if (!_isOpen || _isShowing || _isHiding) return;
-            if (_launcher.WebPinFlyout || StaysOpenAsWindow || _isModalOpen || _isResizing || _isMovingWindow || _isBookmarkDragging || _isFullScreen || IsPromptOpen || _isMenuOpen) return;
+            if (_launcher.WebPinFlyout || StaysOpenAsWindow || _isModalOpen || _isResizing || _isMovingWindow || _isStripDragging || _isFullScreen || IsPromptOpen || _isMenuOpen) return;
 
             if (IsForegroundStillOurs())
             {
@@ -2893,7 +3041,7 @@ public sealed partial class WebFlyoutWindow : Window
     private void ForegroundWatchTimer_Tick(Microsoft.UI.Dispatching.DispatcherQueueTimer sender, object args)
     {
         // Nothing left to watch for: the flyout has gone, or something else is now holding it open.
-        if (!_isOpen || _isHiding || _launcher.WebPinFlyout || _isModalOpen || _isResizing || _isMovingWindow || _isBookmarkDragging || _isFullScreen || IsPromptOpen)
+        if (!_isOpen || _isHiding || _launcher.WebPinFlyout || _isModalOpen || _isResizing || _isMovingWindow || _isStripDragging || _isFullScreen || IsPromptOpen)
         {
             StopForegroundWatch();
             return;

@@ -121,14 +121,14 @@ public static class FolderSyncService
             byte[] bytes = await Task.Run(() => File.ReadAllBytes(file));
 
             using var stream = new MemoryStream(bytes, writable: false);
-            var (launchers, remoteTimestamp) = LauncherPayload.Deserialize(stream);
+            var (launchers, remoteTimestamp, extensions) = LauncherPayload.Deserialize(stream);
             if (launchers == null)
                 return (false, "Failed to parse launchers from the sync folder.");
 
             if (LauncherPayload.ShouldSkipDownload(remoteTimestamp, force, out string reason))
                 return (false, reason);
 
-            await LauncherPayload.ApplyAsync(launchers);
+            await LauncherPayload.ApplyAsync(launchers, extensions);
 
             Logger.Info($"Launchers read from {file}");
             return (true, $"Launchers loaded from {DescribeTarget()}");

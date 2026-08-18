@@ -119,11 +119,6 @@ model default, which would have flipped it on for every existing launcher.
   first. Off does not mean unreachable: the header carries a button that reveals the bar for the
   rest of that visit, and **that reveal is window state, never written back to this property** —
   see [web-launchers.md](web-launchers.md)
-- `BrowserExtensionFolders` (`List<string>?`) — **app-wide, not per launcher.** Unpacked extension
-  folders loaded into every web launcher's profile as its browser starts. App-wide because
-  extensions belong to a WebView2 *profile* and most launchers share one, so a per-launcher list
-  would be several names for one thing. Nullable, so an absent key stays absent under
-  `WhenWritingDefault`; `BrowserExtensionService.InstalledFolders` creates it on first use
 - `WebSharedProfile` (`bool`) — pool cookies and logins in `WebProfiles\Shared` with every other
   launcher that sets it, instead of a private per-launcher folder. **What a new launcher gets**, but
   set to `true` at *creation* rather than as a model default: `WhenWritingDefault` omits a property
@@ -187,6 +182,12 @@ model default, which would have flipped it on for every existing launcher.
   `WhenWritingDefault`. A request answered by this toggle is **not** saved into the WebView2
   profile, so turning it off returns the launcher to asking — see
   [web-launchers.md](web-launchers.md)
+- `WebSessionTabs` (`List<string>?`) / `WebSessionActiveTab` (`int`) — the pages this launcher had
+  open when it was last used, restored on its next **open** (never at startup, which is what keeps
+  the resource contract intact). Plain auto-properties, not `[ObservableProperty]`: nothing binds to
+  them. **Deliberately not synced**, for the reason `WebFlyoutPosition` is not — a set of open tabs
+  is what one machine was doing, not a preference about the launcher. See
+  [web-launchers.md](web-launchers.md)
 - `WebBookmarks` (`ObservableCollection<WebBookmark>`) — **the launcher's content**, not an extra:
   the first entry is the address it opens and the rest are the bar. `WebBookmark`
   (`Models/WebBookmark.cs`) is `Name` + `Url` + `IconPath` + `IconsOnly`, observable because the
@@ -206,6 +207,36 @@ model default, which would have flipped it on for every existing launcher.
   a second step that is useless without the first.
   `MigrateWebModel()` is the one-way door onto this model and runs both on load
   (`SettingsManager.NormalizeAllGlyphs`) and on every sync merge (`LauncherPayload.MergeInto`)
+
+### Web launcher settings that live on `UserSettings`, not on `Launcher`
+
+These three configure web launchers but are **app-wide**, because what they govern is scoped to a
+WebView2 *profile* rather than to a launcher, and most launchers share one profile. A per-launcher
+copy would be several names for one thing — and, for the password one, several answers to a question
+the profile can only answer once.
+
+- `BrowserExtensions` (`List<BrowserExtension>?`) — **app-wide, not per launcher.** The extensions
+  loaded into every web launcher's profile as its browser starts. App-wide because extensions belong
+  to a WebView2 *profile* and most launchers share one, so a per-launcher list would be several names
+  for one thing. It replaced a bare `BrowserExtensionFolders: List<string>?`, which could say where a
+  copy was and nothing about what it *is* — so nothing could be synced and nothing could be shown in
+  a list before it was fetched. `BrowserExtension` (`Models/BrowserExtension.cs`) is `Id` (the Chrome
+  Web Store id, empty for one added from a folder) + `Name` + `Folder`. **`Folder` must not be
+  `[JsonIgnore]`**: it was, to keep it out of the sync payload, and since local settings use the same
+  class that dropped it from disk too — every extension came back after a restart with an empty path
+  and vanished. `BrowserExtensionService.Portable()` is what keeps it out of the payload, by
+  projecting id and name into fresh objects
+- `PinnedBrowserExtensions` (`List<string>?`) — which extensions get a header button of their own
+  beside the puzzle menu, by store id or (for a local-only one) name. Absent means none pinned, which
+  is the shipped behaviour and the state `WhenWritingDefault` writes as nothing
+- `ProfilesWithoutPasswordManager` (`List<string>?`) — the profiles where web launchers should not
+  offer to save logins or fill them in, for when a password manager extension is doing the job.
+  **Keyed by profile** (`"Shared"` or a launcher id, matching the folder names under `WebProfiles`),
+  because saved logins belong to a profile: every launcher sharing one shares the answer, and a
+  launcher with a private profile gets its own. The platform scopes it neither way —
+  `IsPasswordAutosaveEnabled` is per browser instance — so this is what decides. A list of the
+  profiles where it is *off* rather than a flag per profile, so the default stays the absent case.
+  Read when a browser is created, so `WebFlyoutWindow.ReloadProfile` is what makes a change immediate
 
 **Why every one of those defaults to 0 / false:** `WhenWritingDefault` omits a property holding the
 CLR default, so a non-zero field initialiser is silently restored on the next load. Numeric settings
