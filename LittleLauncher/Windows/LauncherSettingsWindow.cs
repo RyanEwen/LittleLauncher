@@ -1075,7 +1075,7 @@ public sealed class LauncherSettingsWindow : Window
         _bookmarksChanged = () => { Rebuild(); UpdateHeader(); SyncAddressBox(); };
         _bookmarksListChanged = UpdateHeader;
 
-        return new Expander
+        var bookmarks = new Expander
         {
             Header = headerLabel,
             IsExpanded = false,
@@ -1083,6 +1083,9 @@ public sealed class LauncherSettingsWindow : Window
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
             Content = body,
         };
+
+        ExpanderReveal.Attach(bookmarks);
+        return bookmarks;
     }
 
     /// <summary>Re-reads the bookmark count into the section header, when one is on screen.</summary>
@@ -1626,6 +1629,11 @@ public sealed class LauncherSettingsWindow : Window
         // read as a jolt — the window jumped a beat after the expander had already animated —
         // and the form is already inside a ScrollViewer with the button row pinned below it,
         // so revealing the section just scrolls. Nothing to chase, nothing to animate.
+        //
+        // The scroll does have to be *made*, though: this section is last in the dialog by
+        // design, so expanding it always happens at the bottom of the scroller and everything
+        // it reveals lands below the fold. See ExpanderReveal.
+        ExpanderReveal.Attach(advanced);
 
         void Refresh()
         {

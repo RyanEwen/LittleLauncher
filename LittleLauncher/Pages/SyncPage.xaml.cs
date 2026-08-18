@@ -30,6 +30,10 @@ public partial class SyncPage : Page
         InitializeComponent();
         DataContext = SettingsManager.Current;
 
+        // Five sections in one scroller: opening the last one reveals it entirely below the fold.
+        Classes.ExpanderReveal.Attach(
+            SftpExpander, OneDriveExpander, GoogleExpander, WebDavExpander, FolderExpander);
+
         RefreshDestinations();
         _initializing = false;
     }

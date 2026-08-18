@@ -136,6 +136,27 @@ Two rules, both learned the hard way:
 Give the expanders `HorizontalAlignment="Stretch"` *and* `HorizontalContentAlignment="Stretch"` (a
 shared `Style` is easiest) or they size to their content and the list looks ragged.
 
+### An expanding section must scroll its own start into view
+
+`Classes/ExpanderReveal.Attach(expander)` — call it on every `Expander` that lives in a scrolling
+form. A section near the bottom of a scroller reveals its content **below the fold**: the header
+stays put, everything the click produced is off screen, and it reads as having done nothing.
+Launcher settings' **Advanced** is the worst case by construction, since it is deliberately last in
+the dialog.
+
+Two details are load-bearing, and both are in the helper so no call site has to know them:
+
+- **`VerticalAlignmentRatio = 0`, not a bare `StartBringIntoView()`.** The default scrolls the
+  least amount that makes the target visible, which for a section taller than the viewport shows
+  its *end* — exactly the sections that most need the start.
+- **It runs twice**, the second pass at `DispatcherQueuePriority.Low`. The section's rows are still
+  being realised while `Expanding` runs, so the scroller's extent is not yet large enough to put a
+  bottom-most header at the top.
+
+Note this is *not* in tension with "the window does not resize when Advanced expands" (see
+[web-launchers.md](web-launchers.md)) — that rejects growing the **window**, which jolts. Scrolling
+the existing viewport is what that decision assumed would happen, and it now actually does.
+
 ## Drag-and-Drop (FlyoutWindow)
 
 ListViews use `CanDragItems="True"` with custom handlers — **never `CanReorderItems`**, which cannot be overridden for cross-list drops. Dragging is gated behind flyout edit mode. See [drag-drop.md](drag-drop.md) for full details.

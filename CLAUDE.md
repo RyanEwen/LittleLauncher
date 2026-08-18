@@ -24,7 +24,7 @@ Little Launcher is a .NET 10 WinUI 3 desktop application (unpackaged) that provi
 | Namespace | Contents |
 |---|---|
 | `LittleLauncher` | App, MainWindow, SettingsWindow |
-| `LittleLauncher.Classes` | NativeMethods, ThemeManager, IconGallery, ShellIcons, WindowChrome |
+| `LittleLauncher.Classes` | NativeMethods, ThemeManager, IconGallery, ShellIcons, WindowChrome, ExpanderReveal |
 | `LittleLauncher.Classes.Settings` | SettingsManager |
 | `LittleLauncher.Controls` | PackedIconPanel |
 | `LittleLauncher.Models` | LauncherItem (its `ToString()` is the accessible name for every flyout row), Launcher, WebBookmark, SshConnectionProfile, SyncProviders, SharedSyncModes |
