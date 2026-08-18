@@ -63,6 +63,34 @@ public sealed partial class WebFlyoutWindow
     /// </summary>
     private static readonly HashSet<string> _pendingPermissionResets = [];
 
+    /// <summary>How close to a toast a page's own sound has to start to count as that toast's.</summary>
+    /// <remarks>
+    /// Generous on purpose. The two are triggered by the same arriving message but travel different
+    /// routes: the sound is played synchronously, while the notification goes through the bridge's
+    /// icon fetch — a network round-trip — before the host hears about it at all. In practice the
+    /// page is already making its noise by the time the toast is built, which is what lets this
+    /// work without holding the toast back to wait and see.
+    /// </remarks>
+    private const long PageSoundWindowMs = 2500;
+
+    /// <summary>How long "this launcher announces itself" is believed once it has been observed.</summary>
+    /// <remarks>
+    /// The sound can also arrive just <em>after</em> the toast, and nothing can un-ring a toast that
+    /// has already played. So the first one may double up, and every one after it defers to the
+    /// page. It lapses rather than latching, so a launcher whose sounds the user later turns off in
+    /// the site's own settings gets the Windows one back instead of going quiet for good.
+    /// </remarks>
+    private const long PageSoundMemoryMs = 60 * 60 * 1000;
+
+    /// <summary>When a page of this launcher last started making a sound. 0 if never.</summary>
+    private long _pageAudioStartedAt;
+
+    /// <summary>When a page sound last landed close enough to a toast to be that toast's. 0 if never.</summary>
+    private long _pageSoundedForToastAt;
+
+    /// <summary>When this launcher last raised a toast, so a sound just after it can be attributed.</summary>
+    private long _lastToastAt;
+
     /// <summary>Notifications currently on screen, so a toast click can be reported back to the page.</summary>
     /// <remarks>
     /// Entries leave on a click or when the page withdraws the notification, but a toast the user
@@ -436,9 +464,7 @@ public sealed partial class WebFlyoutWindow
     /// <summary>The origins this launcher is actually pointed at — its address, or its bookmarks.</summary>
     private IEnumerable<string> TrustedOrigins()
     {
-        var urls = IsBarMode
-            ? _launcher.WebBookmarks.Select(b => b.Url)
-            : [_launcher.ResolvedSingleWebUrl];
+        var urls = _launcher.WebBookmarks.Select(b => b.Url);
 
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (string url in urls)
@@ -643,6 +669,55 @@ public sealed partial class WebFlyoutWindow
     }
 
     /// <summary>
+    /// Starts watching whether this browser is making a sound of its own.
+    /// </summary>
+    /// <remarks>
+    /// <para>The honest answer to "will the page announce this itself": there is no declarative
+    /// signal. A chat app plays its notification sound with an <c>Audio</c> element or WebAudio,
+    /// which has nothing to do with the Notification API and cannot be predicted from it. What
+    /// <em>can</em> be observed is the browser making noise, which is what this listens for.</para>
+    /// <para>Not perfect and not meant to be: a launcher playing a video, or sitting in a call, is
+    /// making noise for other reasons and its toasts go quiet for as long as that lasts. That is
+    /// the right way round — a toast chiming over a call is worse than one that does not.</para>
+    /// </remarks>
+    private void WatchPageAudio(CoreWebView2 core)
+    {
+        core.IsDocumentPlayingAudioChanged += (sender, _) =>
+        {
+            if (!sender.IsDocumentPlayingAudio) return;
+
+            long now = Environment.TickCount64;
+            _pageAudioStartedAt = now;
+
+            // Started just after a toast of ours: this launcher answers for itself, so the next
+            // one is silent. This is the half that catches a page whose sound trails its
+            // notification, which no check made at toast time could see.
+            if (_lastToastAt != 0 && now - _lastToastAt <= PageSoundWindowMs)
+                _pageSoundedForToastAt = now;
+        };
+    }
+
+    /// <summary>True when the page is expected to make this notification's sound itself.</summary>
+    private bool PageAnnouncesItself(CoreWebView2? core)
+    {
+        long now = Environment.TickCount64;
+
+        try
+        {
+            if (core?.IsDocumentPlayingAudio == true) return true;
+        }
+        catch (Exception ex)
+        {
+            // The browser can go between the notification arriving and the toast being built.
+            Logger.Debug(ex, "Reading the audio state failed for launcher {Name}", _launcher.Name);
+        }
+
+        if (_pageAudioStartedAt != 0 && now - _pageAudioStartedAt <= PageSoundWindowMs) return true;
+
+        return _pageSoundedForToastAt != 0 && now - _pageSoundedForToastAt <= PageSoundMemoryMs;
+    }
+
+    /// <summary>
     /// Turns a page's notification into a Windows toast.
     /// </summary>
     /// <remarks>
@@ -665,7 +740,7 @@ public sealed partial class WebFlyoutWindow
     /// that is the sender's avatar, which is what the notification is actually about, so it leads
     /// and the launcher's own icon is only the fallback.
     /// </remarks>
-    private void ShowNotificationToast(JsonNode message)
+    private void ShowNotificationToast(CoreWebView2 source, JsonNode message)
     {
         string tag = message["tag"]?.GetValue<string>() ?? "";
         if (string.IsNullOrEmpty(tag)) return;
@@ -673,6 +748,15 @@ public sealed partial class WebFlyoutWindow
         string title = message["title"]?.GetValue<string>() ?? "";
         string body = message["body"]?.GetValue<string>() ?? "";
         string icon = message["icon"]?.GetValue<string>() ?? "";
+
+        // Which browser raised it, so a click goes back to that tab rather than to whichever is in
+        // front. Previously only recorded for notifications carrying action buttons.
+        RememberNotificationSource(tag, source);
+
+        // Two reasons to keep quiet, and they are not the same reason. The page asking for a silent
+        // notification is a statement about this notification; the page already making a sound is
+        // an observation about this launcher — see PageAnnouncesItself.
+        bool silent = message["silent"]?.GetValue<bool>() == true || PageAnnouncesItself(source);
 
         try
         {
@@ -693,10 +777,10 @@ public sealed partial class WebFlyoutWindow
 
             // Truncated deliberately: a page icon is often an inline data URL tens of kilobytes
             // long, and logging it whole makes the log unreadable and enormous.
-            string source = message["iconUrl"]?.GetValue<string>() ?? "";
+            string iconUrl = message["iconUrl"]?.GetValue<string>() ?? "";
             Logger.Debug("Toast icon for {Name}: source={Source} bytes={Bytes} saved={Saved}",
                 _launcher.Name,
-                source.Length <= 60 ? source : source[..60] + "…",
+                iconUrl.Length <= 60 ? iconUrl : iconUrl[..60] + "…",
                 icon.Length, avatar ?? "(none)");
 
             if (avatar != null)
@@ -720,6 +804,12 @@ public sealed partial class WebFlyoutWindow
                 _pendingActions[tag] = (JsonArray)actions.DeepClone();
                 AddNotificationActions(builder, tag);
             }
+
+            if (silent) builder.MuteAudio();
+
+            // Before the Show, so a sound the page starts while Windows is putting the toast up is
+            // still attributed to it rather than being missed by a few milliseconds.
+            _lastToastAt = Environment.TickCount64;
 
             Microsoft.Windows.AppNotifications.AppNotificationManager.Default.Show(builder.BuildNotification());
             PostNotificationEvent("notifyShown", tag);
@@ -807,13 +897,29 @@ public sealed partial class WebFlyoutWindow
         // replying from the toast.
         if (TryDeliverAction(launcherId, arguments, reply)) return true;
 
-        // Clicked: tell the page, which raises onclick on the object it handed us. Nothing here
-        // touches a WebView2 notification object, because none is ever created — see
-        // NotificationBridgeScript.
+        // Clicked. Two audiences, and a page has only one of them:
+        //
+        //   * a page that built this with `new Notification(...)` is listening on the object it
+        //     handed us, so `onclick` is raised on the shim;
+        //   * a page that used `registration.showNotification()` — Teams, WhatsApp, Messenger — is
+        //     listening for `notificationclick` **in its service worker**, and never sees that
+        //     `onclick` at all.
+        //
+        // Only the first was told, which is why clicking a Teams toast could be followed by Teams
+        // showing the same notification inside itself: its handler never ran, so the real
+        // persistent notification was never closed and was still sitting in `getNotifications()`
+        // when the flyout came forward. The worker is now sent the same empty-action message a
+        // toast *button* sends, which its handler already answers by closing the notification and
+        // dispatching a genuine `notificationclick` — see the worker bridge.
+        //
+        // Both are sent, because there is no way to know which kind of page it was, and each is
+        // inert for the other: a `new Notification` page has nothing under that tag in
+        // `getNotifications()`, and a `showNotification` page has no `onclick` listener.
         if (arguments.TryGetValue("webNotification", out string? tag) && !string.IsNullOrEmpty(tag) &&
             Instances.TryGetValue(launcherId, out var source))
         {
             source.PostNotificationEvent("notifyClicked", tag);
+            source.DispatchNotificationAction(tag, action: "", reply: "");
         }
 
         var owner = MainWindow.Current;

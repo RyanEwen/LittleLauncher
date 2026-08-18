@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using global::Windows.ApplicationModel;
 using global::Windows.Storage.Pickers;
@@ -33,6 +34,79 @@ public partial class SystemPage : Page
         _updatingShortcutsSwitch = false;
 
         _ = RefreshStartupStateAsync();
+        _ = RefreshProfileCleanupAsync();
+    }
+
+    // ── Unused browser profiles ────────────────────────────────────
+
+    private List<Services.WebProfileCleanupService.Reclaimable> _reclaimableProfiles = [];
+
+    private static string NewLine => System.Environment.NewLine;
+
+    /// <summary>
+    /// Counts what could be reclaimed and offers it, or says there is nothing to do.
+    /// </summary>
+    /// <remarks>
+    /// Off the UI thread: sizing a profile folder walks a Chromium cache of tens of thousands of
+    /// files, which is not something to do while the page is trying to appear.
+    /// </remarks>
+    private async Task RefreshProfileCleanupAsync()
+    {
+        var found = await Task.Run(Services.WebProfileCleanupService.Scan);
+        _reclaimableProfiles = found;
+
+        long bytes = found.Sum(f => f.Bytes);
+        bool any = found.Count > 0;
+
+        ProfileCleanupButton.IsEnabled = any;
+        ProfileCleanupSubtitle.Text = any
+            ? $"{found.Count} left behind by deleted launchers, or by launchers moved to the shared profile "
+              + $"— {Services.WebProfileCleanupService.FormatSize(bytes)}"
+            : "Nothing to clean up. Sign-ins for launchers you still have are never touched";
+    }
+
+    /// <summary>
+    /// Deletes the unused profiles, after saying exactly which sign-ins are going.
+    /// </summary>
+    /// <remarks>
+    /// Named rather than counted in the confirmation: "3 profiles" is not something anyone can
+    /// agree to, and the only question that matters is whether one of them is a launcher they still
+    /// use — which the list answers at a glance.
+    /// </remarks>
+    private async void ProfileCleanupButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_reclaimableProfiles.Count == 0) return;
+
+        var lines = _reclaimableProfiles
+            .Select(f => $"• {f.Description} ({Services.WebProfileCleanupService.FormatSize(f.Bytes)})");
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = "Delete unused browser profiles",
+            Content = "These hold cookies and sign-ins nothing is using any more:" + NewLine + NewLine
+                    + string.Join(NewLine, lines)
+                    + NewLine + NewLine
+                    + "Launchers you still have keep their own sign-ins. This cannot be undone.",
+            PrimaryButtonText = "Delete",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+
+        ProfileCleanupButton.IsEnabled = false;
+        ProfileCleanupButton.Content = "Deleting…";
+
+        var (deleted, bytes) = await Services.WebProfileCleanupService.DeleteAsync(_reclaimableProfiles);
+
+        ProfileCleanupButton.Content = "Delete";
+        await RefreshProfileCleanupAsync();
+
+        // Rescanned above, so anything a locked file kept back is still listed and still offered.
+        if (deleted > 0)
+            ProfileCleanupSubtitle.Text = $"Freed {Services.WebProfileCleanupService.FormatSize(bytes)}. "
+                                        + ProfileCleanupSubtitle.Text;
     }
 
     private void WebShortcutsToggle_Toggled(object sender, RoutedEventArgs e)

@@ -225,15 +225,56 @@ public sealed class LauncherSettingsWindow : Window
     private void CommitWebUrl()
     {
         if (_urlBox == null) return;
-        string url = _urlBox.Text.Trim();
-        if (url == _launcher.WebUrl) return;
+        CommitWebAddress(_urlBox.Text.Trim());
+    }
 
-        _launcher.WebUrl = url;
+    /// <summary>
+    /// Points the launcher at an address, which means writing its <em>first</em> bookmark.
+    /// </summary>
+    /// <remarks>
+    /// A web launcher is a list of bookmarks whose first entry is what it opens, so "the address"
+    /// is a position rather than a field of its own. An empty list gets one; a list that already
+    /// has entries has its first re-addressed, which is what the row above the list is editing.
+    /// </remarks>
+    private void CommitWebAddress(string url)
+    {
+        url = (url ?? "").Trim();
+        if (url == _launcher.WebAddress) return;
+
+        if (_launcher.WebBookmarks.Count == 0)
+        {
+            if (string.IsNullOrEmpty(url)) return;
+            _launcher.WebBookmarks.Add(new WebBookmark(HostOf(url), url));
+        }
+        else
+        {
+            var first = _launcher.WebBookmarks[0];
+            bool namedAfterItsHost = string.Equals(first.Name, HostOf(first.Url), StringComparison.OrdinalIgnoreCase);
+
+            first.Url = url;
+            first.IconPath = "";
+            if (namedAfterItsHost) first.Name = HostOf(url);
+        }
+
         SettingsManager.SaveSettings();
         WebFlyoutWindow.ApplyLauncherChanges(_launcher.Id);
+        _bookmarksChanged?.Invoke();
 
-        if (WebFlyoutWindow.MayAdoptPageIcon(_launcher) && !string.IsNullOrEmpty(url))
+        if (string.IsNullOrEmpty(url)) return;
+
+        _ = WebFlyoutWindow.FetchBookmarkIconAsync(_launcher, _launcher.WebBookmarks[0]);
+
+        if (WebFlyoutWindow.MayAdoptPageIcon(_launcher))
             _iconAdoption = AdoptAndShowSiteIconAsync(_launcher, WebFlyoutWindow.NormalizeUrl(url));
+    }
+
+    /// <summary>Re-reads the bookmark list into the editor, when one is on screen.</summary>
+    private Action? _bookmarksChanged;
+
+    /// <summary>Puts the launcher's address — its first bookmark — back in the address field.</summary>
+    private void SyncAddressBox()
+    {
+        if (_urlBox != null) _urlBox.Text = _launcher.WebAddress;
     }
 
     /// <summary>Fetches the site icon and shows it in this window's icon row once it lands.</summary>
@@ -602,7 +643,7 @@ public sealed class LauncherSettingsWindow : Window
         taskbarRow.Children.Add(pinBtn);
 
         // ── Web launcher rows ───────────────────────────────────
-        var (webAddressRows, webOptionRows, refreshWebRows) = BuildWebRows(launcher);
+        var (webAddressRows, webOptionRows, webAdvanced, refreshWebRows) = BuildWebRows(launcher);
 
         // ── Type ─────────────────────────────────────────────────
         // Last to be built, first to be shown: it decides which of the two sets of rows above
@@ -626,7 +667,7 @@ public sealed class LauncherSettingsWindow : Window
                 row.Visibility = isWeb ? Visibility.Collapsed : Visibility.Visible;
             if (!isWeb)
                 UpdateIconModeControls();   // the icons-per-row row has its own condition
-            foreach (var row in webAddressRows.Concat(webOptionRows))
+            foreach (var row in webAddressRows.Concat(webOptionRows).Append(webAdvanced))
                 row.Visibility = isWeb ? Visibility.Visible : Visibility.Collapsed;
             refreshWebRows();
             iconSubtitle.Text = isWeb
@@ -656,23 +697,42 @@ public sealed class LauncherSettingsWindow : Window
         UpdateKindVisibility();
 
         // ── Build dialog content ────────────────────────────────
+        // Ordered as three questions, then the fold: what is this launcher, how does it show its
+        // content, and how does it appear in the shell.
         var panel = new StackPanel { Spacing = 12 };
+
+        // ── What it is ──────────────────────────────────────────
         panel.Children.Add(nameRow);
         panel.Children.Add(typeRow);
-        // The address comes before the icon, because for a web launcher the icon is *derived*
-        // from it. Asked the other way round, the form made the user choose an icon for a page
-        // it had not been told about yet, which reads as a requirement rather than an override.
+
+        // Its content leads, and for a web launcher the address has to come before the icon
+        // anyway: the icon is *derived* from it, and asked the other way round the form made the
+        // user choose an icon for a page it had not been told about, which reads as a requirement
+        // rather than an override.
         foreach (var row in webAddressRows)
             panel.Children.Add(row);
-        panel.Children.Add(iconRow);
-        panel.Children.Add(customIconRow);
+
+        // ── How it shows that content ───────────────────────────
         panel.Children.Add(viewModeRow);
         panel.Children.Add(iconsPerRowRow);
         panel.Children.Add(showTitleRow);
         foreach (var row in webOptionRows)
             panel.Children.Add(row);
+
+        // ── How it appears in the shell ─────────────────────────
+        // The icon sits with the two rows that decide where it is *seen*. It used to sit up beside
+        // the launcher's content, where "Icon" read as the icon of the thing being configured
+        // rather than as the tray icon — which is the only place it appears.
+        panel.Children.Add(iconRow);
+        panel.Children.Add(customIconRow);
         panel.Children.Add(hideRow);
         panel.Children.Add(taskbarRow);
+
+        // ── Everything else ─────────────────────────────────────
+        // Last in the dialog, not last among the web rows. Advanced is the fold for the settings a
+        // working launcher does not need, so anything below it would be something the user had to
+        // scroll past a collapsed section to find.
+        panel.Children.Add(webAdvanced);
         return panel;
     }
 
@@ -745,18 +805,15 @@ public sealed class LauncherSettingsWindow : Window
     /// Builds the bookmark editor: the list, reordering, removal, and the two ways to add one.
     /// </summary>
     /// <remarks>
-    /// Two or more bookmarks turn the flyout into a bar-first mini-browser; one behaves exactly
-    /// like a plain web launcher. That threshold is stated in the row's subtitle rather than left
-    /// for the user to discover, because the flyout changes shape when they cross it.
+    /// <para>This is the launcher's content, not an extra: the first bookmark is the page the tray
+    /// icon opens, and the rest are the bar. That is stated on the first row rather than left for
+    /// the user to infer, because reordering the list changes what the launcher opens.</para>
+    /// <para>A second bookmark is what makes the bar appear, which the row's subtitle says for the
+    /// same reason — it is a visible change the user is one click away from causing.</para>
     /// </remarks>
     private FrameworkElement BuildBookmarksRow(Launcher launcher)
     {
         var list = new StackPanel { Spacing = 4 };
-
-        // Which bookmark (if any) opens with the flyout.
-        var defaultCombo = new ComboBox { MinWidth = 200, HorizontalAlignment = HorizontalAlignment.Stretch };
-        bool populatingDefault = false;
-
 
         var urlBox = new TextBox
         {
@@ -792,6 +849,7 @@ public sealed class LauncherSettingsWindow : Window
             foreach (var bookmark in launcher.WebBookmarks.ToList())
             {
                 var captured = bookmark;
+                bool isAddress = launcher.WebBookmarks.IndexOf(captured) == 0;
 
                 var label = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
                 label.Children.Add(new TextBlock
@@ -807,6 +865,19 @@ public sealed class LauncherSettingsWindow : Window
                     Opacity = 0.5,
                     TextTrimming = TextTrimming.CharacterEllipsis,
                 });
+
+                // Said on the row rather than in a legend: the only thing that makes this bookmark
+                // the launcher's address is being first, so it has to be readable from the order.
+                if (isAddress)
+                {
+                    label.Children.Add(new TextBlock
+                    {
+                        Text = "Opens with the launcher",
+                        FontSize = 11,
+                        Opacity = 0.6,
+                        Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"],
+                    });
+                }
 
                 var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2, VerticalAlignment = VerticalAlignment.Center };
 
@@ -842,6 +913,32 @@ public sealed class LauncherSettingsWindow : Window
                     Persist();
                     Rebuild();
                 }));
+                buttons.Children.Add(Small("", "Edit address", async () =>
+                {
+                    string? entered = await TextPromptWindow.ShowAsync(
+                        "Edit address", "https://…", captured.Url, "Save", _hwnd);
+                    if (entered == null) return;
+
+                    string edited = WebFlyoutWindow.NormalizeUrl(entered);
+                    if (string.IsNullOrEmpty(edited) || edited == captured.Url) return;
+
+                    // The address row above edits the same bookmark when this is the first one, so
+                    // that path owns it — including the site-icon fetch a new address needs.
+                    if (launcher.WebBookmarks.IndexOf(captured) == 0)
+                    {
+                        CommitWebAddress(edited);
+                        return;
+                    }
+
+                    bool namedAfterItsHost = string.Equals(captured.Name, HostOf(captured.Url), StringComparison.OrdinalIgnoreCase);
+                    captured.Url = edited;
+                    captured.IconPath = "";
+                    if (namedAfterItsHost) captured.Name = HostOf(edited);
+
+                    Persist();
+                    Rebuild();
+                    _ = FetchBookmarkIconAsync(launcher, captured);
+                }));
                 buttons.Children.Add(Small("", "Move up", () =>
                 {
                     int i = launcher.WebBookmarks.IndexOf(captured);
@@ -849,6 +946,8 @@ public sealed class LauncherSettingsWindow : Window
                     launcher.WebBookmarks.Move(i, i - 1);
                     Persist();
                     Rebuild();
+                    _bookmarksListChanged?.Invoke();
+                    SyncAddressBox();
                 }, index > 0));
                 buttons.Children.Add(Small("", "Move down", () =>
                 {
@@ -857,12 +956,18 @@ public sealed class LauncherSettingsWindow : Window
                     launcher.WebBookmarks.Move(i, i + 1);
                     Persist();
                     Rebuild();
+                    _bookmarksListChanged?.Invoke();
+                    SyncAddressBox();
                 }, index >= 0 && index < launcher.WebBookmarks.Count - 1));
                 buttons.Children.Add(Small("", "Remove", () =>
                 {
                     launcher.WebBookmarks.Remove(captured);
                     Persist();
                     Rebuild();
+
+                    // Removing or reordering the first one changes the launcher's address, so the
+                    // field above the list is now describing a bookmark that is not there.
+                    SyncAddressBox();
                 }));
 
                 var row = new Grid();
@@ -885,7 +990,8 @@ public sealed class LauncherSettingsWindow : Window
             launcher.WebBookmarks.Add(bookmark);
             Persist();
             Rebuild();
-            RebuildDefaultCombo();
+            _bookmarksListChanged?.Invoke();
+            SyncAddressBox();
 
             // A provisional icon so the bar is not a row of globes; the real one replaces it the
             // first time the bookmark is opened with a signed-in browser.
@@ -916,70 +1022,8 @@ public sealed class LauncherSettingsWindow : Window
         addRow.Children.Add(addButton);
         addRow.Children.Add(pickButton);
 
-        void RebuildDefaultCombo()
-        {
-            populatingDefault = true;
-            defaultCombo.Items.Clear();
-            defaultCombo.Items.Add(new ComboBoxItem { Content = "None — open as just the bar", Tag = "" });
-            foreach (var b in launcher.WebBookmarks)
-                defaultCombo.Items.Add(new ComboBoxItem { Content = string.IsNullOrWhiteSpace(b.Name) ? b.Url : b.Name, Tag = b.Url });
-
-            int selected = 0;
-            for (int i = 1; i < defaultCombo.Items.Count; i++)
-            {
-                if (defaultCombo.Items[i] is ComboBoxItem item && (string)item.Tag == launcher.WebDefaultBookmarkUrl)
-                {
-                    selected = i;
-                    break;
-                }
-            }
-            defaultCombo.SelectedIndex = selected;
-            populatingDefault = false;
-        }
-
-        defaultCombo.SelectionChanged += (_, _) =>
-        {
-            if (populatingDefault) return;
-            if (defaultCombo.SelectedItem is not ComboBoxItem item) return;
-            launcher.WebDefaultBookmarkUrl = (string)item.Tag;
-            Persist();
-        };
-
-        var defaultLabel = new TextBlock
-        {
-            Text = "Opens by default",
-            FontSize = 12,
-            Opacity = 0.6,
-            Margin = new Thickness(0, 12, 0, 4),
-        };
-
-        // ── Tabs ────────────────────────────────────────────────
-        var tabsToggle = new ToggleSwitch
-        {
-            IsOn = launcher.WebBookmarksAsTabs,
-            OnContent = "",
-            OffContent = "",
-            MinWidth = 0,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        tabsToggle.Toggled += (_, _) =>
-        {
-            launcher.WebBookmarksAsTabs = tabsToggle.IsOn;
-            Persist();
-
-            // The shape of the content changes, not just its settings: the flyout has to drop
-            // whatever it was holding and rebuild under the new rule.
-            WebFlyoutWindow.ReloadProfile(launcher.Id);
-        };
-
-        var tabsRow = BuildRow("Treat as Tabs",
-            "Keep each bookmark loaded in its own tab, so switching never loses your place — at the cost of one browser per bookmark",
-            tabsToggle);
-        tabsRow.Margin = new Thickness(0, 12, 0, 0);
-
         // ── Bar appearance ──────────────────────────────────────
-        // Kept here rather than in Advanced: it is a property of the bar, and Advanced is shown for
-        // single-address launchers too, where a bookmark-bar option means nothing at all.
+        // ── Bar appearance ──────────────────────────────────────
         var iconsOnlyToggle = new ToggleSwitch
         {
             IsOn = launcher.WebBookmarkIconsOnly,
@@ -1002,53 +1046,61 @@ public sealed class LauncherSettingsWindow : Window
         var body = new StackPanel();
         body.Children.Add(list);
         body.Children.Add(addRow);
-        body.Children.Add(defaultLabel);
-        body.Children.Add(defaultCombo);
-        body.Children.Add(tabsRow);
         body.Children.Add(iconsOnlyRow);
 
+        // Folded away, like Advanced. A launcher with one page — which is most of them — has a
+        // bookmark list of exactly the address already showing in the field above, so laid out flat
+        // it was a second copy of the answer taking up most of the dialog.
+        var headerLabel = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        headerLabel.Children.Add(new TextBlock { Text = "Bookmarks", FontSize = 14 });
+
+        // The subtitle is what has to survive the fold: collapsed, it is the only thing saying that
+        // a second page is what produces the bar, and it counts what is inside so the section is
+        // worth opening (or worth leaving shut) without opening it.
+        var headerSubtitle = new TextBlock { FontSize = 12, Opacity = 0.5, TextWrapping = TextWrapping.Wrap };
+        headerLabel.Children.Add(headerSubtitle);
+
+        void UpdateHeader()
+        {
+            int count = launcher.WebBookmarks.Count;
+            headerSubtitle.Text = count > 1
+                ? $"{count} pages, shown as a bar along the bottom of the flyout"
+                : "The first is the page this launcher opens. Add another and they show as a bar along the bottom";
+        }
+
         Rebuild();
-        RebuildDefaultCombo();
+        UpdateHeader();
 
-        return BuildStackedRow(
-            "Bookmarks",
-            "Two or more show as a bar along the bottom of the flyout, which expands when you pick one",
-            body);
+        // So the address field above the list follows an edit made down here.
+        _bookmarksChanged = () => { Rebuild(); UpdateHeader(); SyncAddressBox(); };
+        _bookmarksListChanged = UpdateHeader;
+
+        return new Expander
+        {
+            Header = headerLabel,
+            IsExpanded = false,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            Content = body,
+        };
     }
 
-    /// <summary>Host of a URL, used as a bookmark's name until the page offers a better one.</summary>
-    private static string HostOf(string url)
-    {
-        try { return new Uri(url).Host; }
-        catch (UriFormatException) { return url; }
-    }
+    /// <summary>Re-reads the bookmark count into the section header, when one is on screen.</summary>
+    private Action? _bookmarksListChanged;
 
     /// <summary>
-    /// Fetches a provisional icon for a bookmark, the same unauthenticated way the launcher's own
-    /// icon is fetched — good enough for public sites, and replaced by the page's declared icon
-    /// once it has actually been opened.
+    /// Host of a URL, used as a bookmark's name until the page offers a better one.
     /// </summary>
-    private static async Task FetchBookmarkIconAsync(Launcher launcher, WebBookmark bookmark)
-    {
-        try
-        {
-            string? cached = await Services.FaviconService.FetchAndCacheAsync(bookmark.Url);
-            if (string.IsNullOrEmpty(cached) || !File.Exists(cached)) return;
+    /// <remarks>
+    /// Both of these live on <see cref="WebFlyoutWindow"/> because the flyout's own bookmark
+    /// editing needs them too, and a bookmark named one way here and another way there would be a
+    /// difference with no reason behind it.
+    /// </remarks>
+    private static string HostOf(string url) => WebFlyoutWindow.HostOf(url);
 
-            string dest = WebFlyoutWindow.GetBookmarkIconPath(launcher.Id, bookmark.Url);
-            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-            File.Copy(cached, dest, overwrite: true);
-
-            bookmark.IconPath = dest;
-            SettingsManager.SaveSettings();
-            Services.AutoSyncService.NotifyLaunchersChanged();
-            WebFlyoutWindow.ApplyLauncherChanges(launcher.Id);
-        }
-        catch (Exception ex)
-        {
-            NLog.LogManager.GetCurrentClassLogger().Debug(ex, "Bookmark icon fetch failed for {Url}", bookmark.Url);
-        }
-    }
+    /// <inheritdoc cref="WebFlyoutWindow.FetchBookmarkIconAsync"/>
+    private static Task FetchBookmarkIconAsync(Launcher launcher, WebBookmark bookmark) =>
+        WebFlyoutWindow.FetchBookmarkIconAsync(launcher, bookmark);
 
     /// <summary>
     /// Builds the rows that only apply to a web launcher.
@@ -1061,18 +1113,20 @@ public sealed class LauncherSettingsWindow : Window
     /// Pin is doubly safe to demote: it also has a button in the flyout's own header.
     /// </remarks>
     /// <returns>
-    /// The rows that say <em>what page</em>, the rows that say <em>how to show it</em>, and a
-    /// callback that re-reads the launcher into the controls. They are returned separately
-    /// because the icon row is laid out between them — see <c>BuildForm</c>.
+    /// The rows that say <em>what page</em>, the rows that say <em>how to show it</em>, the
+    /// Advanced fold, and a callback that re-reads the launcher into the controls. All four are
+    /// returned separately because <c>BuildForm</c> interleaves them with rows of its own —
+    /// Advanced in particular goes last in the whole dialog, below even the tray and taskbar rows.
     /// </returns>
-    private (IReadOnlyList<FrameworkElement> AddressRows, IReadOnlyList<FrameworkElement> OptionRows, Action Refresh)
+    private (IReadOnlyList<FrameworkElement> AddressRows, IReadOnlyList<FrameworkElement> OptionRows,
+             FrameworkElement Advanced, Action Refresh)
         BuildWebRows(Launcher launcher)
     {
         // ── Address ─────────────────────────────────────────────
         var urlBox = new TextBox
         {
             PlaceholderText = "https://homeassistant.local:8123/lovelace/cameras",
-            Text = launcher.WebUrl,
+            Text = launcher.WebAddress,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             // Without this the box stretches to whatever height the row ends up being.
             VerticalAlignment = VerticalAlignment.Center,
@@ -1121,36 +1175,11 @@ public sealed class LauncherSettingsWindow : Window
         urlControls.Children.Add(urlBox);
         urlControls.Children.Add(bookmarkButton);
 
+        // Still the first field of the form, because it is the one a launcher cannot work without
+        // and the one a new launcher is opened to fill in. It edits the first bookmark; the list
+        // below shows the same entry marked as the address, so neither is a second source of truth.
         var urlRow = BuildStackedRow("Web Address", "The page this launcher opens", urlControls);
         var bookmarksRow = BuildBookmarksRow(launcher);
-
-        // Explicit, not inferred from the number of bookmarks: adding a second one should not
-        // silently change what the tray icon does.
-        var contentCombo = new ComboBox { MinWidth = 200 };
-        contentCombo.Items.Add(new ComboBoxItem { Content = "A single web address", Tag = false });
-        contentCombo.Items.Add(new ComboBoxItem { Content = "Bookmarks (bar along the bottom)", Tag = true });
-        contentCombo.SelectedIndex = launcher.WebUseBookmarks ? 1 : 0;
-
-        var contentRow = BuildRow("Shows", "Whether this launcher opens one page or a bar of them", contentCombo);
-
-        void UpdateContentMode()
-        {
-            bool web = launcher.IsWebLauncher;
-            urlRow.Visibility = web && !launcher.WebUseBookmarks ? Visibility.Visible : Visibility.Collapsed;
-            bookmarksRow.Visibility = web && launcher.WebUseBookmarks ? Visibility.Visible : Visibility.Collapsed;
-        }
-
-        contentCombo.SelectionChanged += (_, _) =>
-        {
-            if (contentCombo.SelectedItem is not ComboBoxItem selected || selected.Tag is not bool useBookmarks) return;
-            if (useBookmarks == launcher.WebUseBookmarks) return;
-
-            launcher.WebUseBookmarks = useBookmarks;
-            SettingsManager.SaveSettings();
-            Services.AutoSyncService.NotifyLaunchersChanged();
-            WebFlyoutWindow.ApplyLauncherChanges(launcher.Id);
-            UpdateContentMode();
-        };
 
         // ── Panel size ──────────────────────────────────────────
         var widthBox = new NumberBox
@@ -1276,6 +1305,25 @@ public sealed class LauncherSettingsWindow : Window
         };
         var reloadRow = BuildRow("Reload On Open", "Fetch the page again each time, instead of showing it as you left it", reloadToggle);
 
+        // ── Links in the real browser ───────────────────────────
+        // Its only home. It used to live in the flyout's More menu and nowhere else, which made it
+        // unfindable for anyone who had not opened that menu — and it is not a per-moment decision
+        // in the way the menu's other items are: how this launcher treats links is a property of
+        // the launcher, settled once.
+        //
+        // Named for what turning it on does rather than for the default it switches off, because
+        // "open links in tabs" is already what the launcher does.
+        var linksToggle = new ToggleSwitch { IsOn = launcher.WebLinksInBrowser, OnContent = "", OffContent = "", MinWidth = 0 };
+        linksToggle.Toggled += (_, _) =>
+        {
+            launcher.WebLinksInBrowser = linksToggle.IsOn;
+            SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
+        };
+        var linksRow = BuildRow("Open Links In Browser",
+            "Hand a link that opens a new window to your default browser, instead of opening it in a tab here",
+            linksToggle);
+
         // ── Address bar ─────────────────────────────────────────
         var addressToggle = new ToggleSwitch { IsOn = launcher.WebShowAddressBar, OnContent = "", OffContent = "", MinWidth = 0 };
         addressToggle.Toggled += (_, _) =>
@@ -1283,12 +1331,36 @@ public sealed class LauncherSettingsWindow : Window
             launcher.WebShowAddressBar = addressToggle.IsOn;
             SettingsManager.SaveSettings();
             Services.AutoSyncService.NotifyLaunchersChanged();
+            WebFlyoutWindow.ApplyLauncherChanges(launcher.Id);
         };
-        // Says where it goes when it is off, so the toggle does not read as the only way to see
-        // an address — the flyout's header keeps a button that reveals it for that visit.
+        // Not in Advanced: it is one of the few things that changes what the flyout *is* — a page
+        // versus a small browser — rather than tuning one that already works, and it is the setting
+        // the star for bookmarking the current page lives in.
         var addressRow = BuildRow("Address Bar",
-            "Keep the page address under the header. Off, the header's link button reveals it",
+            "Show the page address under the header, with a star for bookmarking it",
             addressToggle);
+
+        // ── Tab bar ─────────────────────────────────────────────
+        // Beside the address bar, because they are the same question asked twice: which rows of
+        // chrome does this launcher keep. It was reachable only from the flyout's "…" menu, which
+        // is the wrong place to be the *only* place — the menu is for changing your mind while
+        // looking at a launcher, not for finding out that an option exists.
+        //
+        // **Listed before the address bar**, in both the returned rows and the More menu,
+        // because that is the order the two strips appear in on the flyout: header, then tabs,
+        // then the address of whichever tab they chose. Two toggles for two adjacent rows read
+        // as mislabelled when the list disagrees with what is on screen.
+        var tabBarToggle = new ToggleSwitch { IsOn = launcher.WebAlwaysShowTabs, OnContent = "", OffContent = "", MinWidth = 0 };
+        tabBarToggle.Toggled += (_, _) =>
+        {
+            launcher.WebAlwaysShowTabs = tabBarToggle.IsOn;
+            SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
+            WebFlyoutWindow.ApplyLauncherChanges(launcher.Id);
+        };
+        var tabBarRow = BuildRow("Tab Bar",
+            "Keep the tab strip on screen with one page open. Off, it appears as soon as there is a second",
+            tabBarToggle);
 
         // ── Keep open on focus loss ─────────────────────────────
         var pinToggle = new ToggleSwitch { IsOn = launcher.WebPinFlyout, OnContent = "", OffContent = "", MinWidth = 0 };
@@ -1361,6 +1433,9 @@ public sealed class LauncherSettingsWindow : Window
         (string Label, int Value)[] anchors =
         [
             ("Near its tray icon", WebAnchors.Tray),
+            // Second, beside the other answer that is not a fixed spot, and named for the gesture
+            // that sets it — so the list says how to change it as well as what it does.
+            ("Where you last dragged it", WebAnchors.LastPosition),
             ("Top left", WebAnchors.TopLeft),
             ("Top centre", WebAnchors.TopCenter),
             ("Top right", WebAnchors.TopRight),
@@ -1377,9 +1452,10 @@ public sealed class LauncherSettingsWindow : Window
 
         var anchorSubtitle = new TextBlock { FontSize = 12, Opacity = 0.5, TextWrapping = TextWrapping.Wrap };
 
-        void UpdateAnchorText() => anchorSubtitle.Text = launcher.WebRememberPosition
-            ? "Where it opens the first time — after that it opens where you last left it"
-            : "Where it opens on the screen holding its tray icon";
+        void UpdateAnchorText() => anchorSubtitle.Text =
+            WebAnchors.Normalize(launcher.WebAnchor) == WebAnchors.LastPosition
+                ? "Drag the flyout anywhere and it opens there next time"
+                : "Where it opens on the screen holding its tray icon. A move lasts until you close it";
 
         anchorCombo.SelectionChanged += (_, _) =>
         {
@@ -1388,33 +1464,17 @@ public sealed class LauncherSettingsWindow : Window
 
             launcher.WebAnchor = anchor;
 
-            // A remembered position outranks the anchor, so leaving one in place would mean
-            // picking a corner and watching the flyout open exactly where it did before.
-            launcher.WebFlyoutPosition = "";
+            // Any answer but "where you last dragged it" forgets where that was — otherwise picking
+            // a corner would leave the flyout opening exactly where it did before, and switching
+            // back would restore a position the user had stopped using.
+            if (anchor != WebAnchors.LastPosition) launcher.WebFlyoutPosition = "";
 
             SettingsManager.SaveSettings();
             Services.AutoSyncService.NotifyLaunchersChanged();
+            UpdateAnchorText();
         };
 
         var anchorRow = BuildRow("Opens At", anchorSubtitle, anchorCombo);
-
-        // ── Remember position ───────────────────────────────────
-        var rememberToggle = new ToggleSwitch { IsOn = launcher.WebRememberPosition, OnContent = "", OffContent = "", MinWidth = 0 };
-        rememberToggle.Toggled += (_, _) =>
-        {
-            launcher.WebRememberPosition = rememberToggle.IsOn;
-
-            // Dropping the remembered position on the way out, so turning this off actually
-            // returns the flyout to the tray rather than leaving it parked where it last was.
-            if (!rememberToggle.IsOn) launcher.WebFlyoutPosition = "";
-
-            SettingsManager.SaveSettings();
-            Services.AutoSyncService.NotifyLaunchersChanged();
-            UpdateAnchorText();   // the anchor means "first open" only while this is on
-        };
-        var rememberRow = BuildRow("Remember Position Changes",
-            "Keep this flyout where you drag it; otherwise a move lasts until you close it",
-            rememberToggle);
 
         // ── Remember size ───────────────────────────────────────
         // Stored inverted (WebLockSize) because this one is ON by default, and a bool defaulting
@@ -1433,10 +1493,13 @@ public sealed class LauncherSettingsWindow : Window
         // ── Profile ─────────────────────────────────────────────
         // A combo rather than a toggle: "shared with other launchers" is a statement about where
         // the sign-ins live, and naming both ends of it beats an unlabelled switch.
+        //
+        // Shared leads, being what a new launcher gets. The order is display only — the value is
+        // read off each item's Tag, never off the index.
         var profileCombo = new ComboBox { MinWidth = 200 };
-        profileCombo.Items.Add(new ComboBoxItem { Content = "Private to this launcher", Tag = false });
         profileCombo.Items.Add(new ComboBoxItem { Content = "Shared with other launchers", Tag = true });
-        profileCombo.SelectedIndex = launcher.WebSharedProfile ? 1 : 0;
+        profileCombo.Items.Add(new ComboBoxItem { Content = "Private to this launcher", Tag = false });
+        profileCombo.SelectedIndex = launcher.WebSharedProfile ? 0 : 1;
 
         var clearSubtitle = new TextBlock { FontSize = 12, Opacity = 0.5, TextWrapping = TextWrapping.Wrap };
 
@@ -1460,7 +1523,8 @@ public sealed class LauncherSettingsWindow : Window
         };
 
         var profileRow = BuildRow("Sign-ins",
-            "Whether cookies and logins are this launcher's alone, or pooled with every launcher set to share",
+            "Pooled with every launcher set to share, so one sign-in covers them all. Private keeps this "
+            + "launcher's cookies to itself — for a second account on a site another launcher already uses",
             profileCombo);
 
         // ── Sign-out / clear data ───────────────────────────────
@@ -1546,7 +1610,7 @@ public sealed class LauncherSettingsWindow : Window
         // does this open?"), they are the ones a user reaches for after dragging a flyout and
         // finding the change did not stick, and Opens At's subtitle describes its interaction with
         // Remember Position, which would read oddly with the two separated by the Advanced fold.
-        foreach (var row in new[] { zoomRow, policyRow, idleRow, reloadRow, addressRow, pinRow, regularRow, autoHideRow, clickRow, trustRow, resetPermissionsRow, profileRow, clearRow })
+        foreach (var row in new[] { zoomRow, policyRow, idleRow, reloadRow, linksRow, pinRow, regularRow, autoHideRow, clickRow, trustRow, resetPermissionsRow, profileRow, clearRow })
             advancedPanel.Children.Add(row);
 
         var advanced = new Expander
@@ -1565,16 +1629,15 @@ public sealed class LauncherSettingsWindow : Window
 
         void Refresh()
         {
-            UpdateContentMode();
             UpdateProfileText();
             UpdateAnchorText();
-            urlBox.Text = launcher.WebUrl;
+            urlBox.Text = launcher.WebAddress;
             widthBox.Value = launcher.ResolvedWebFlyoutWidth;
             heightBox.Value = launcher.ResolvedWebFlyoutHeight;
             UpdateIdleVisibility();
         }
 
-        return ([contentRow, urlRow, bookmarksRow], [sizeRow, anchorRow, rememberRow, rememberSizeRow, advanced], Refresh);
+        return ([urlRow, bookmarksRow], [tabBarRow, addressRow, sizeRow, anchorRow, rememberSizeRow], advanced, Refresh);
     }
 
     private (Button Button, Grid CustomRow, Action Refresh) BuildIconChooser(Launcher launcher)

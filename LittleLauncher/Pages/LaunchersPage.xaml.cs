@@ -49,20 +49,19 @@ public sealed partial class LaunchersPage : Page
 
     // ── Build the UI dynamically (one card per launcher) ──────────────
 
+    /// <summary>Rebuilds one card per launcher, in their own container.</summary>
+    /// <remarks>
+    /// The cards used to share the page's panel with the heading and the Add button, and this
+    /// emptied it down to its last child — so the first rebuild, which happens in the constructor,
+    /// deleted the "Launchers" heading and its subtitle. They now live outside
+    /// <c>LauncherCardsPanel</c>, which this owns entirely and can simply clear.
+    /// </remarks>
     private void RebuildLauncherCards()
     {
-        // Remove all children except the Add button (last child)
-        while (LaunchersPanel.Children.Count > 1)
-            LaunchersPanel.Children.RemoveAt(0);
+        LauncherCardsPanel.Children.Clear();
 
-        var launchers = SettingsManager.Current.Launchers;
-        int insertIndex = 0;
-
-        foreach (var launcher in launchers)
-        {
-            var card = BuildLauncherCard(launcher);
-            LaunchersPanel.Children.Insert(insertIndex++, card);
-        }
+        foreach (var launcher in SettingsManager.Current.Launchers)
+            LauncherCardsPanel.Children.Add(BuildLauncherCard(launcher));
     }
 
     private static int CountLauncherItems(IEnumerable<LauncherItem> items)
@@ -92,7 +91,7 @@ public sealed partial class LaunchersPage : Page
         itemsLabel.Children.Add(new TextBlock
         {
             Text = isWeb
-                ? (string.IsNullOrWhiteSpace(launcher.WebUrl) ? "No web address set" : launcher.WebUrl)
+                ? (string.IsNullOrWhiteSpace(launcher.WebAddress) ? "No web address set" : launcher.WebAddress)
                 : $"{itemCount} item{(itemCount == 1 ? "" : "s")}",
             FontSize = 12,
             Opacity = 0.5,
@@ -445,10 +444,14 @@ public sealed partial class LaunchersPage : Page
         {
             Id = Guid.NewGuid().ToString(),
             Name = $"Launcher {SettingsManager.Current.Launchers.Count + 1}",
-            // Set here rather than as the model default: changing the default would flip
-            // ShowTitle on for every existing launcher, since the property is omitted from
-            // settings.json when it holds its default value.
+            // Both set here rather than as model defaults: changing a default would flip it on for
+            // every *existing* launcher, since the property is omitted from settings.json when it
+            // holds its default value.
             ShowTitle = true,
+            // And for WebSharedProfile that would be worse than cosmetic — it decides which folder
+            // a launcher's cookies live in, so flipping it under an existing launcher silently
+            // swaps its browser profile and signs it out.
+            WebSharedProfile = true,
         };
         SettingsManager.Current.Launchers.Add(newLauncher);
         SettingsManager.SaveSettings();
@@ -489,6 +492,10 @@ public sealed partial class LaunchersPage : Page
             Name = "Web Launcher",
             Kind = LauncherKinds.Web,
             ShowTitle = true,
+
+            // One signed-in browser behind every web launcher unless the user asks otherwise. See
+            // AddLauncherButton_Click for why this is set at creation and not as a model default.
+            WebSharedProfile = true,
         };
         SettingsManager.Current.Launchers.Add(newLauncher);
         SettingsManager.SaveSettings();
@@ -601,6 +608,11 @@ public sealed partial class LaunchersPage : Page
 
         // Dispose whichever panel this launcher owns
         LauncherPanels.Dispose(launcher.Id);
+
+        // And its browser profile, which is hundreds of megabytes for a chat app and was left on
+        // disk for good — the folder is named after the launcher id, so once the launcher is gone
+        // nothing can identify it again. After Dispose, so no browser still has its files open.
+        Services.WebProfileCleanupService.DeleteFor(launcher);
 
         SettingsManager.Current.Launchers.Remove(launcher);
         SettingsManager.SaveSettings();

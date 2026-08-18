@@ -348,11 +348,20 @@ public sealed partial class WebFlyoutWindow
         }
         else if (kind == "pageIcon")
         {
-            AdoptHighResPageIcon(message);
+            AdoptHighResPageIcon(sender, message);
+        }
+        else if (kind == "bgIntent")
+        {
+            _backgroundIntentAt = Environment.TickCount64;
+        }
+        else if (kind == "key")
+        {
+            string? id = message?["id"]?.GetValue<string>();
+            if (!string.IsNullOrEmpty(id)) InvokeShortcut(id);
         }
         else if (kind == "notify")
         {
-            ShowNotificationToast(message!);
+            ShowNotificationToast(sender, message!);
         }
         else if (kind == "actions")
         {

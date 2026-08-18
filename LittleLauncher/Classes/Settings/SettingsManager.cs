@@ -222,10 +222,18 @@ public static class SettingsManager
     }
 
     /// <summary>Normalize legacy glyph text names across all launchers' items.</summary>
+    /// <remarks>
+    /// Also the hook for <see cref="Models.Launcher.MigrateWebModel"/>, which brings a web
+    /// launcher written before single-address and bookmark-bar launchers merged onto the one
+    /// model. Both run at the same two moments — after a JSON load and after the legacy XML
+    /// migration — and both are idempotent, so a launcher already current is untouched.
+    /// </remarks>
     private static void NormalizeAllGlyphs()
     {
         foreach (var launcher in _current.Launchers)
         {
+            launcher.MigrateWebModel();
+
             foreach (var item in launcher.Items)
             {
                 item.NormalizeGlyph();

@@ -137,6 +137,50 @@ The action uses `Return="check"` so the uninstall does not report completion unt
 - **VS C++ build tools** (incl. `VC.Tools.ARM64`) for the Native AOT companion. The script prepends the **VS Installer dir to `PATH`** when `vswhere.exe` isn't resolvable, because the ILCompiler targets shell out to `vswhere`; without it the native link fails with **exit code 123**.
 - **`-NoSign`** is Store mode: skips signing and leaves the Store `Identity`/`Publisher` intact for the Store to re-sign on ingestion. Without it, the manifest publisher is rewritten to the dev cert subject so `signtool` can sign locally.
 
+### Sideloading a build over the installed package
+
+**The output filename carries the version** (`LittleLauncher-1.33.0-ARM64.msix`), so `msix-output`
+accumulates builds instead of overwriting the same two names. It used to be
+`LittleLauncher-ARM64.msix`, which meant every build replaced the last one with nothing on disk to
+say which was which — and the file you hand to Partner Center is chosen by eye. Partner Center reads
+the version from the manifest either way; the name is so the human cannot pick the wrong one. The
+same change is in the CopilotRekey and ImmichDrive copies of the script — see the sibling-app note
+in the repo memory. CI globs `LittleLauncher-*.msix`, so it was unaffected.
+
+**Plain `build-msix.ps1` (no arguments) is the wrong tool for "put my build on this machine".** It
+stamps the *dev* cert's subject (`CN=RyanEwen`) as the publisher, and the publisher is part of the
+package identity — so the result installs as a **second, separate package** with its own family
+name and its own VFS-redirected `settings.json`. It comes up with no launchers at all, and both
+copies then write to the same *physical* AppData for icons, web profiles and the companion exe.
+
+To update the package that is already installed, sign with a cert whose subject **is** the Store
+publisher, so the identity is unchanged and Windows treats it as an upgrade:
+
+```powershell
+.\LittleLauncherMSIX\build-msix.ps1 -Platform ARM64 `
+    -TrustedPfxPath .\LittleLauncherMSIX\LittleLauncher-store-identity.pfx `
+    -TrustedPfxPassword LittleLauncher
+Add-AppxPackage -Path .\LittleLauncherMSIX\bin\msix-output\LittleLauncher-1.33.0-ARM64.msix -ForceUpdateFromAnyVersion
+```
+
+`LittleLauncher-store-identity.pfx` is a self-signed cert whose subject is
+`CN=C21E6CEF-D0D1-4497-93F9-3718D054DA0E` — the publisher Partner Center assigned this app. Because
+the subject matches, `build-msix.ps1` takes its `-TrustedPfxPath` branch and stamps a publisher
+identical to the one already in the manifest, i.e. changes nothing. Settings, sign-ins and web
+profiles all survive, and the Store can still update the package later since the identity matches.
+
+- **The `.pfx`/`.cer` are gitignored and exist only on the dev machine** (as `*.pfx` / `*.cer`
+  patterns; nothing of the sort is tracked). Regenerate with `New-SelfSignedCertificate -Subject
+  "CN=C21E6CEF-D0D1-4497-93F9-3718D054DA0E"` and import the `.cer` into
+  **`LocalMachine\TrustedPeople`** (needs elevation) — without that trust the install is refused.
+- **`Get-AppxPackage … | Select SignatureKind` tells you which you are on.** `Developer` means a
+  sideloaded build is installed, `Store` means the shipped one.
+- **`0x80073D02` "resources … currently in use"** means the app is running — including a copy
+  started by clicking a tray icon or pinned shortcut a moment earlier. Kill `LittleLauncher` and
+  retry; the other packages Windows lists alongside it are usually not the real blocker.
+- **This is for testing your own build, not for shipping.** Store users get the package through the
+  Store; a sideloaded build simply sits there until the next Store update replaces it.
+
 ## Toast notifications in MSIX
 
 Packaged builds register for notifications like unpackaged ones. This needs two manifest

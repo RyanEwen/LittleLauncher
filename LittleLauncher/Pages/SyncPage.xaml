@@ -369,7 +369,7 @@
                     <TextBlock Text="Sync Interval (minutes)" FontSize="14"/>
                     <TextBlock Text="How often to download launcher items" FontSize="12" Opacity="0.5"/>
                 </StackPanel>
-                <NumberBox Grid.Column="2" Value="{Binding SftpAutoSyncInterval, Mode=TwoWay}" Minimum="1" Maximum="1440" SpinButtonPlacementMode="Inline" Width="130"/>
+                <NumberBox Grid.Column="2" Value="{Binding SftpAutoSyncInterval, Mode=TwoWay}" Minimum="1" Maximum="1440" SpinButtonPlacementMode="Compact" Width="140"/>
             </Grid>
         </Border>
 

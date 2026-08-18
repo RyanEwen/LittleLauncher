@@ -80,6 +80,16 @@ an `Auto` column. Two rules keep it from collapsing:
   squeezed "Web Address" into a three-character ribbon of wrapped text and stretched the box down
   the whole height of it.
 
+## NumberBox: inline spin buttons eat the value
+
+`SpinButtonPlacementMode="Inline"` spends about 64px on the two buttons, and the clear "✕" the
+TextBox template adds **on focus** takes ~30 more. At `Width="130"` that left nothing for the digits:
+the value was visible until you clicked into the field and then vanished behind its own chrome.
+
+Use `Compact` (the placement every other NumberBox in this app uses — the buttons appear over the
+box rather than reserving width) and leave at least ~140px. If `Inline` is genuinely wanted, budget
+the buttons *and* the focus-only clear button, not just the digits.
+
 ## Owned windows, not ContentDialog
 
 UI opened from the flyout (`ItemEditorWindow`, `TextPromptWindow`, `LauncherSettingsWindow`) uses standalone `Window`s. A `ContentDialog` renders inside its host window's content area and **cannot overflow the HWND** — hosted in a flyout that is often ~175px wide and ~130 dips tall, even a one-field dialog gets its input and buttons clipped.

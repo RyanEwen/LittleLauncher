@@ -27,7 +27,7 @@ namespace LittleLauncher.Windows;
 
 /// <summary>
 /// The flyout a web launcher opens: a tray-anchored window hosting a WebView2 on the launcher's
-/// <see cref="Launcher.WebUrl"/>. One instance per launcher, created on first use.
+/// <see cref="Launcher.WebAddress"/>. One instance per launcher, created on first use.
 /// </summary>
 /// <remarks>
 /// <para>It behaves like <see cref="FlyoutWindow"/> — anchored above the tray, always on top,
@@ -87,7 +87,6 @@ public sealed partial class WebFlyoutWindow : Window
     private readonly Grid _root;
     private readonly StackPanel _bookmarkStrip;
     private readonly Grid _bookmarkBar;
-    private readonly StackPanel _barActions;
     private readonly StackPanel _statusPanel;
     private readonly TextBlock _statusText;
     private readonly ProgressRing _statusRing;
@@ -95,23 +94,12 @@ public sealed partial class WebFlyoutWindow : Window
     private readonly SUBCLASSPROC _wndProcDelegate;
 
     private MainWindow? _owner;
-    /// <summary>The browser currently on screen. In tabs mode this is the active tab.</summary>
-    private WebView2? _webView;
 
     /// <summary>
-    /// Every live tab, keyed by the bookmark URL it was opened for. Empty unless the launcher has
-    /// <see cref="Launcher.WebBookmarksAsTabs"/> set.
+    /// The browser currently on screen — the active tab's. Every browser this launcher owns is a
+    /// tab; see <c>WebFlyoutWindow.Tabs.cs</c>.
     /// </summary>
-    /// <remarks>
-    /// <see cref="_webView"/> deliberately stays the one field the rest of this class talks to, and
-    /// always points at whichever of these is active. That is what lets zoom, navigation, the
-    /// header, permissions, notifications and the service worker bridge carry on operating on "the
-    /// browser" without every one of them learning about tabs.
-    /// </remarks>
-    private readonly Dictionary<string, WebView2> _tabs = new(StringComparer.OrdinalIgnoreCase);
-
-    /// <summary>True when each bookmark keeps its own browser rather than sharing one.</summary>
-    private bool TabsEnabled => IsBarMode && _launcher.WebBookmarksAsTabs;
+    private WebView2? _webView;
 
     /// <summary>
     /// True once the user has put keyboard focus into the page, so a reopen should put it back.
@@ -137,7 +125,6 @@ public sealed partial class WebFlyoutWindow : Window
     /// it finishes. See <see cref="PrepareContentAsync"/>.
     /// </summary>
     private bool _revealOnNavigationCompleted;
-    private string _navigatedUrl = "";
 
     private bool _isOpen;
     private bool _isShowing;
@@ -177,20 +164,21 @@ public sealed partial class WebFlyoutWindow : Window
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _foregroundWatchTimer;
 
     /// <summary>
-    /// In bar mode, whether the content area is showing. A dismissed flyout is always collapsed
-    /// again on the next open — the bar is what a bookmark launcher opens as.
-    /// </summary>
-    private bool _isExpanded;
-    private WebBookmark? _activeBookmark;
-
-    /// <summary>
-    /// The bookmark showing when the flyout was last dismissed, restored on the next open.
+    /// Where this launcher's own tab was last explicitly sent, so a reopen returns there.
     /// </summary>
     /// <remarks>
-    /// Cleared when the user collapses back to the bar, because that is an explicit "close this
-    /// page" — reopening onto something they just closed would be the wrong kind of memory.
+    /// <para>A URL rather than a <see cref="WebBookmark"/>, because the bar does not decide what is
+    /// showing — the tab does. Typing an address moves this exactly as clicking a bookmark does,
+    /// which is the whole of what "the bar is stateless" means here: it opens pages, it does not
+    /// own the one that is open.</para>
+    /// <para>Set only by the two gestures that mean "go here" — a bookmark click and the address
+    /// box — never from inside <c>Navigate</c>. Empty therefore means "the user has not steered
+    /// this launcher anywhere", which is what lets a settings change to its address still move the
+    /// page while a page the user chose is left alone.</para>
+    /// <para>Session state, not settings: it survives an idle unload, which is the point, and not a
+    /// restart, which would be a promise the resource model does not make.</para>
     /// </remarks>
-    private WebBookmark? _rememberedBookmark;
+    private string _rememberedUrl = "";
 
     /// <summary>
     /// Identifies the bookmark set the bar was last built from, so it is only rebuilt when the
@@ -408,25 +396,52 @@ public sealed partial class WebFlyoutWindow : Window
             // Sized by its content, not pinned: a fixed height clips the box on any scale or font
             // where the default TextBox is taller than the number chosen here. It eats into the
             // page rather than the window, so nothing downstream depends on how tall it comes out.
-            Padding = new Thickness(12, 0, 12, 5),
+            //
+            // Padded top as well as bottom. With no top padding the box sat directly on the tab
+            // strip's hairline, which read as one control growing out of another rather than as two
+            // rows of chrome.
+            Padding = new Thickness(12, 6, 8, 6),
             Visibility = Visibility.Collapsed,
             // A hairline below, not above: the header and this read as one block of chrome, and
             // the line that matters is the one separating chrome from page.
             BorderBrush = (Brush)Application.Current.Resources["DividerStrokeColorDefaultBrush"],
             BorderThickness = new Thickness(0, 0, 0, 1),
         };
-        _addressBar.Children.Add(_addressBox);
 
-        // Header and address bar travel together in root row 0, so the root's own rows — and the
-        // resize grips' row spans — stay exactly as they were.
+        // The star sits at the end of the address, where every browser puts it, because it is
+        // about the address rather than about the window — the same reasoning that keeps Back and
+        // Reload on the left of the header instead of among the window controls.
+        _bookmarkStar = BuildBookmarkStar();
+
+        _addressBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        _addressBar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        Grid.SetColumn(_addressBox, 0);
+        Grid.SetColumn(_bookmarkStar, 1);
+        _addressBar.Children.Add(_addressBox);
+        _addressBar.Children.Add(_bookmarkStar);
+
+        // The star answers for whatever the box says, so it has to follow it while it is being
+        // typed into — an address half-typed is not one the bar holds, and a star still showing
+        // filled would be claiming otherwise.
+        _addressBox.TextChanged += (_, _) => UpdateBookmarkStar();
+
+        // Header, tab strip and address bar travel together in root row 0, so the root's own rows —
+        // and the resize grips' row spans — stay exactly as they were. The tabs sit between the two
+        // for the reason a browser puts them there: they choose the page, the address bar describes
+        // whichever one they chose.
         var chrome = new StackPanel();
         chrome.Children.Add(header);
+        chrome.Children.Add(BuildTabBar());
         chrome.Children.Add(_addressBar);
 
         // Everything that hides the header — collapsing to a bookmark bar, a page going
-        // fullscreen — means to hide the chrome, so the address bar follows it rather than
-        // needing a matching line added at each of those call sites.
-        header.RegisterPropertyChangedCallback(UIElement.VisibilityProperty, (_, _) => ApplyAddressBarVisibility());
+        // fullscreen — means to hide the chrome, so the address bar and the tab strip follow it
+        // rather than needing a matching line added at each of those call sites.
+        header.RegisterPropertyChangedCallback(UIElement.VisibilityProperty, (_, _) =>
+        {
+            ApplyAddressBarVisibility();
+            ApplyTabBarVisibility();
+        });
 
         // ── Status overlay (loading / error) ────────────────────────
         _statusRing = new ProgressRing
@@ -508,12 +523,6 @@ public sealed partial class WebFlyoutWindow : Window
             HorizontalContentAlignment = HorizontalAlignment.Center,
         };
 
-        // Collapsed, the bar is the entire window, so it carries the two actions there is no
-        // header to hold. Expanded, the header takes over and these hide rather than duplicate.
-        _barActions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2, VerticalAlignment = VerticalAlignment.Center };
-        _barActions.Children.Add(BuildHeaderButton("", "Launcher settings", (_, _) => _ = OpenLauncherSettingsAsync()));
-        _barActions.Children.Add(BuildHeaderButton("", "Close", (_, _) => HideFlyout(), redOnHover: true));
-
         _bookmarkBar = new Grid
         {
             Height = BookmarkBarHeightDips,
@@ -527,16 +536,35 @@ public sealed partial class WebFlyoutWindow : Window
             BorderBrush = (Brush)Application.Current.Resources["DividerStrokeColorDefaultBrush"],
             BorderThickness = new Thickness(0, 1, 0, 0),
         };
+        // One column, all of it the strip. There were two — the second held a settings and a close
+        // button, for a bar that was the whole window while it was collapsed to a strip. There is
+        // no collapsed state now, so the header is always there to carry both.
         _bookmarkBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        _bookmarkBar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         Grid.SetColumn(stripScroller, 0);
-        Grid.SetColumn(_barActions, 1);
         _bookmarkBar.PointerPressed += BeginWindowMove;
         _bookmarkBar.PointerMoved += ContinueWindowMove;
         _bookmarkBar.PointerReleased += EndWindowMove;
         _bookmarkBar.PointerCaptureLost += EndWindowMove;
         _bookmarkBar.Children.Add(stripScroller);
-        _bookmarkBar.Children.Add(_barActions);
+
+        // The caret that marks where a dragged bookmark will land, in a layer of its own over the
+        // strip's own cell. Drawn rather than mimed by shuffling the buttons, for the reason
+        // recorded on BookmarkStrip_DragOver — and in an overlay so it adds nothing to the strip's
+        // layout, which is what the caret's position is measured from.
+        _dropCaret = new Border
+        {
+            Width = 2,
+            Height = DropCaretHeightDips,
+            CornerRadius = new CornerRadius(1),
+            Background = (Brush)Application.Current.Resources["AccentFillColorDefaultBrush"],
+            Visibility = Visibility.Collapsed,
+        };
+        _barOverlay = new Canvas { IsHitTestVisible = false };
+        _barOverlay.Children.Add(_dropCaret);
+        Grid.SetColumn(_barOverlay, 0);
+        _bookmarkBar.Children.Add(_barOverlay);
+
+        WireBookmarkStripDrop();
 
         var root = _root = new Grid();
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -553,6 +581,11 @@ public sealed partial class WebFlyoutWindow : Window
         // Escape closes the panel. This only fires while focus is on the XAML tree; once the
         // page has focus the browser owns the key, which is why the header keeps a close button.
         root.KeyboardAcceleratorPlacementMode = KeyboardAcceleratorPlacementMode.Hidden;
+
+        // The browser keys, for when focus is on the chrome rather than in the page. The page has
+        // its own copy; both end in InvokeShortcut.
+        InstallShortcutAccelerators(root);
+
         var escape = new KeyboardAccelerator { Key = global::Windows.System.VirtualKey.Escape };
         escape.Invoked += (_, e) =>
         {
@@ -570,6 +603,7 @@ public sealed partial class WebFlyoutWindow : Window
 
         // The header's visibility callback only fires on a change, so the first state is set here.
         ApplyAddressBarVisibility();
+        ApplyTabBarVisibility();
 
         int exStyle = GetWindowLong(_hwnd, GWL_EXSTYLE);
         SetWindowLong(_hwnd, GWL_EXSTYLE, exStyle | WS_EX_TOOLWINDOW);
@@ -759,23 +793,7 @@ public sealed partial class WebFlyoutWindow : Window
         SetWindowPos(_hwnd, IntPtr.Zero, left, top, right - left, bottom - top,
             SWP_NOZORDER | SWP_NOACTIVATE);
 
-        // In bar mode the root grid is held at a fixed height so that *expanding* is a pure reveal
-        // rather than a reflow. That height was only recomputed when the drag ended, so the window
-        // grew while the page stayed the size it started at — the drag showed empty space instead
-        // of more page, and there was no way to judge the size until letting go. A manual resize
-        // has no reveal to protect, so the height tracks the window as it is dragged.
-        StretchRootDuringResize(bottom - top, scale);
-
         e.Handled = true;
-    }
-
-    /// <summary>Keeps bar mode's fixed root height in step with a drag in progress.</summary>
-    private void StretchRootDuringResize(int windowHeightPixels, double scale)
-    {
-        if (!IsBarMode || _isMaximized || _isFullScreen) return;
-        if (!_isExpanded) return;   // a collapsed bar is its own height and is not being revealed
-
-        _root.Height = Math.Max(1, windowHeightPixels / (scale <= 0 ? 1 : scale));
     }
 
     private void Grip_PointerReleased(object sender, PointerRoutedEventArgs e)
@@ -825,7 +843,6 @@ public sealed partial class WebFlyoutWindow : Window
         _launcher.WebFlyoutWidth = Math.Clamp(width, Launcher.MinWebFlyoutWidth, Launcher.MaxWebFlyoutDimension);
         _launcher.WebFlyoutHeight = Math.Clamp(height, Launcher.MinWebFlyoutHeight, Launcher.MaxWebFlyoutDimension);
         SettingsManager.SaveSettings();
-        ApplyRootAnchor();
     }
 
     /// <summary>An edge strip that shows a resize cursor and carries its edges in <c>Tag</c>.</summary>
@@ -1007,10 +1024,6 @@ public sealed partial class WebFlyoutWindow : Window
         // A slide still in flight would otherwise keep writing its own geometry over this one.
         _animationVersion++;
 
-        // Releases the bar-mode root height, which is fixed to the launcher's configured size:
-        // without this the window grows around content still laid out for the old size.
-        ApplyRootAnchor();
-
         var monitorInfo = new MONITORINFOEX { cbSize = Marshal.SizeOf<MONITORINFOEX>() };
         GetMonitorInfo(MonitorFromWindow(_hwnd, MONITOR_DEFAULTTONEAREST), ref monitorInfo);
         var area = monitorInfo.rcWork;
@@ -1023,8 +1036,7 @@ public sealed partial class WebFlyoutWindow : Window
     /// </summary>
     /// <param name="restoreGeometry">
     /// False only when the caller is about to place the window itself — <see cref="ParkOffScreen"/>
-    /// parks it at the pre-maximize size — so the rect is not written twice. Collapsing a bookmark
-    /// bar passes true: that path resizes *from* the current rect, so it needs the real one back.
+    /// parks it at the pre-maximize size — so the rect is not written twice.
     /// </param>
     private void ExitMaximized(bool restoreGeometry)
     {
@@ -1033,7 +1045,6 @@ public sealed partial class WebFlyoutWindow : Window
         _isMaximized = false;
         UpdateMaximizeButton();
         UpdateResizeGripVisibility();
-        ApplyRootAnchor();
 
         if (!restoreGeometry || _hwnd == IntPtr.Zero || !IsWindow(_hwnd)) return;
 
@@ -1101,7 +1112,8 @@ public sealed partial class WebFlyoutWindow : Window
 
             var window = new WebFlyoutWindow(owner, launcher);
             Instances[launcher.Id] = window;
-            window.PreRenderBarOffScreen();
+            window.RebuildBookmarkBar(force: true);
+            window.PreRenderOffScreen();
         }
     }
 
@@ -1185,9 +1197,8 @@ public sealed partial class WebFlyoutWindow : Window
 
     private static bool ShouldPreload(Launcher launcher) =>
         launcher.IsWebLauncher &&
-        !launcher.HasWebBookmarkBar &&
         WebHiddenPolicies.Normalize(launcher.WebHiddenPolicy) == WebHiddenPolicies.KeepRunning &&
-        !string.IsNullOrWhiteSpace(launcher.ResolvedSingleWebUrl);
+        !string.IsNullOrWhiteSpace(launcher.WebAddress);
 
     /// <summary>
     /// True when this launcher wants preloading and has no browser yet.
@@ -1213,7 +1224,7 @@ public sealed partial class WebFlyoutWindow : Window
 
         _preloadPending = true;
         PreRenderOffScreen();
-        _ = CreateWebViewAsync();
+        _ = ShowHomeContentAsync();
 
         // A page that never finishes loading must not be left rendering for the session. The
         // navigation is not cancelled — only the "it has settled" decision is forced.
@@ -1255,11 +1266,9 @@ public sealed partial class WebFlyoutWindow : Window
     {
         if (_hwnd == IntPtr.Zero || !IsWindow(_hwnd)) return;
 
-        ApplyRootAnchor();
-
         double scale = GetScale();
         int width = (int)Math.Ceiling(_launcher.ResolvedWebFlyoutWidth * scale);
-        int height = (int)Math.Ceiling(CurrentContentHeightDips() * scale);
+        int height = (int)Math.Ceiling(_launcher.ResolvedWebFlyoutHeight * scale);
         int left = GetSystemMetrics(SM_XVIRTUALSCREEN) - width - 64;
         int top = GetSystemMetrics(SM_YVIRTUALSCREEN) - height - 64;
 
@@ -1270,26 +1279,6 @@ public sealed partial class WebFlyoutWindow : Window
         _hasBeenShown = true;
     }
 
-    /// <summary>Parks the window outside the virtual screen at bar height so it composes a frame.</summary>
-    private void PreRenderBarOffScreen()
-    {
-        if (_hwnd == IntPtr.Zero || !IsWindow(_hwnd)) return;
-
-        RebuildBookmarkBar(force: true);
-        ApplyRootAnchor();
-
-        double scale = GetScale();
-        int width = (int)Math.Ceiling(_launcher.ResolvedWebFlyoutWidth * scale);
-        int height = (int)Math.Ceiling(BookmarkBarHeightDips * scale);
-        int left = GetSystemMetrics(SM_XVIRTUALSCREEN) - width - 64;
-        int top = GetSystemMetrics(SM_YVIRTUALSCREEN) - height - 64;
-
-        SetWindowPos(_hwnd, IntPtr.Zero, left, top, width, height,
-            SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
-
-        // Drawn once, so the first real open can slide like every one after it.
-        _hasBeenShown = true;
-    }
 
     /// <summary>Destroys the flyout for a launcher that was deleted or is no longer a web launcher.</summary>
     public static void DisposeLauncher(string launcherId)
@@ -1398,285 +1387,6 @@ public sealed partial class WebFlyoutWindow : Window
             _ = panel.PrepareContentAsync();
     }
 
-    // ── Bookmark bar ────────────────────────────────────────────────
-
-    /// <summary>True when this launcher opens as a bar of bookmarks rather than a single page.</summary>
-    private bool IsBarMode => _launcher.HasWebBookmarkBar;
-
-    /// <summary>
-    /// Rebuilds the bar from the launcher's bookmarks, in the shape a browser uses: a small icon
-    /// with its label beside it, packed left, scrolling horizontally when there are too many.
-    /// </summary>
-    private void RebuildBookmarkBar(bool force = false)
-    {
-        if (!IsBarMode)
-        {
-            _bookmarkBar.Visibility = Visibility.Collapsed;
-            _bookmarkStrip.Children.Clear();
-            _barSignature = "";
-            return;
-        }
-
-        // Icons-only is part of the signature: it changes what every button contains, so
-        // toggling it has to rebuild rather than hand back the buttons built for the other mode.
-        string signature = _launcher.WebBookmarkIconsOnly + "|" + string.Join("", _launcher.WebBookmarks.Select(b => $"{b.Name}{b.Url}{b.IconPath}"));
-        if (!force && signature == _barSignature && _bookmarkStrip.Children.Count > 0)
-        {
-            // Same bookmarks as last time — the buttons are already built, laid out and decoded.
-            _bookmarkBar.Visibility = Visibility.Visible;
-            UpdateBookmarkBarSelection();
-            return;
-        }
-
-        _barSignature = signature;
-        _bookmarkStrip.Children.Clear();
-
-        foreach (var bookmark in _launcher.WebBookmarks)
-            _bookmarkStrip.Children.Add(BuildBookmarkButton(bookmark));
-
-        _bookmarkBar.Visibility = Visibility.Visible;
-        UpdateBookmarkBarSelection();
-    }
-
-    private Button BuildBookmarkButton(WebBookmark bookmark)
-    {
-        var icon = new Image { Width = 16, Height = 16, VerticalAlignment = VerticalAlignment.Center };
-        if (!string.IsNullOrEmpty(bookmark.IconPath) && File.Exists(bookmark.IconPath))
-            icon.Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(bookmark.IconPath));
-
-        // A page with no icon yet gets a globe rather than a hole in the row.
-        var fallback = new FontIcon
-        {
-            Glyph = "",
-            FontSize = 14,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
-            Visibility = icon.Source == null ? Visibility.Visible : Visibility.Collapsed,
-        };
-
-        string caption = string.IsNullOrWhiteSpace(bookmark.Name) ? bookmark.Url : bookmark.Name;
-
-        var label = new TextBlock
-        {
-            Text = caption,
-            FontSize = 12,
-            VerticalAlignment = VerticalAlignment.Center,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            MaxWidth = 140,
-            // Icons-only hides the label rather than omitting it, so the name is still there to
-            // become a tooltip and the button rebuilds the same way either way.
-            Visibility = _launcher.WebBookmarkIconsOnly ? Visibility.Collapsed : Visibility.Visible,
-        };
-
-        // Both icons share one fixed 16px slot rather than sitting side by side in the stack.
-        // An Image with no Source still takes its Width, so a button showing the placeholder
-        // reserved space for two icons and then shrank the moment its favicon arrived — which
-        // shunted every button after it along the bar.
-        var iconSlot = new Grid
-        {
-            Width = 16,
-            Height = 16,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        iconSlot.Children.Add(icon);
-        iconSlot.Children.Add(fallback);
-
-        var content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
-        content.Children.Add(iconSlot);
-        content.Children.Add(label);
-
-        var button = new Button
-        {
-            Content = content,
-            Tag = bookmark,
-            Padding = new Thickness(8, 4, 8, 4),
-            MinWidth = 0,
-            MinHeight = 0,
-            VerticalAlignment = VerticalAlignment.Center,
-            Background = (Brush)Application.Current.Resources["SubtleFillColorTransparentBrush"],
-            BorderThickness = new Thickness(0),
-        };
-        // With the labels hidden the name is the only thing identifying the button, so it leads the
-        // tooltip; with them shown the name is already on screen and the address is the useful part.
-        ToolTipService.SetToolTip(button,
-            _launcher.WebBookmarkIconsOnly ? $"{caption}\n{bookmark.Url}" : bookmark.Url);
-        button.Click += (_, _) => OnBookmarkClicked(bookmark);
-
-        // The icon arrives after the bookmark does — first from a favicon fetch, later replaced by
-        // whatever the signed-in page declares — so the row keeps itself current.
-        bookmark.PropertyChanged += (_, e) =>
-        {
-            string? changed = e.PropertyName;
-            DispatcherQueue.TryEnqueue(() =>
-            {
-                if (changed == nameof(WebBookmark.IconPath))
-                {
-                    if (string.IsNullOrEmpty(bookmark.IconPath) || !File.Exists(bookmark.IconPath)) return;
-                    icon.Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(bookmark.IconPath))
-                    {
-                        // The file is rewritten in place when a page reports a new icon, so the
-                        // decoded-image cache would otherwise keep serving the old one.
-                        CreateOptions = Microsoft.UI.Xaml.Media.Imaging.BitmapCreateOptions.IgnoreImageCache,
-                    };
-                    fallback.Visibility = Visibility.Collapsed;
-                }
-                else if (changed == nameof(WebBookmark.Name))
-                {
-                    label.Text = string.IsNullOrWhiteSpace(bookmark.Name) ? bookmark.Url : bookmark.Name;
-                }
-            });
-        };
-
-        return button;
-    }
-
-    /// <summary>Tints the bookmark whose page is currently showing.</summary>
-    private void UpdateBookmarkBarSelection()
-    {
-        var accent = (Brush)Application.Current.Resources["AccentFillColorDefaultBrush"];
-        var clear = (Brush)Application.Current.Resources["SubtleFillColorTransparentBrush"];
-
-        foreach (var child in _bookmarkStrip.Children)
-        {
-            if (child is not Button button) continue;
-            bool active = _isExpanded && ReferenceEquals(button.Tag, _activeBookmark);
-            button.Background = active ? accent : clear;
-        }
-    }
-
-    /// <summary>
-    /// Clicking a bookmark expands the flyout onto it; clicking the one already showing collapses
-    /// back to just the bar, so the same button both opens and closes it.
-    /// </summary>
-    private void OnBookmarkClicked(WebBookmark bookmark)
-    {
-        if (_isExpanded && ReferenceEquals(bookmark, _activeBookmark))
-        {
-            CollapseToBar();
-            return;
-        }
-
-        _activeBookmark = bookmark;
-        _rememberedBookmark = bookmark;
-        UpdateBookmarkBarSelection();
-
-        if (_isExpanded)
-        {
-            // Already open on another bookmark — just go there.
-            _ = PrepareContentAsync();
-            return;
-        }
-
-        ExpandToContent();
-    }
-
-    /// <summary>
-    /// Grows the window from bar height to full height, away from the edge it is anchored to.
-    /// </summary>
-    /// <remarks>
-    /// The flyout sits against the taskbar, so the anchored edge is the one that must not move:
-    /// growing upwards from a bottom-anchored bar keeps the bar exactly where the pointer already
-    /// is. Anchored at the top, the same rule means growing downwards instead.
-    /// </remarks>
-    private void ExpandToContent()
-    {
-        if (_isExpanded) return;
-        _isExpanded = true;
-
-        _header.Visibility = Visibility.Visible;
-        _barActions.Visibility = Visibility.Collapsed;
-        UpdateBookmarkBarSelection();
-
-        ApplyExpansionGeometry();
-        _ = PrepareContentAsync();
-    }
-
-    /// <summary>Returns to just the bar, and lets the browser go with it.</summary>
-    private void CollapseToBar()
-    {
-        if (!_isExpanded) return;
-
-        // Going back to just the bar ends the maximized state with it, geometry included: the
-        // collapse below keeps the current width and anchored edge, and a bar left the width of
-        // the whole screen is not a bar the launcher has ever had.
-        ExitMaximized(restoreGeometry: true);
-
-        _isExpanded = false;
-        _activeBookmark = null;
-        _rememberedBookmark = null;
-
-        _header.Visibility = Visibility.Collapsed;
-        _barActions.Visibility = Visibility.Visible;
-        UpdateBookmarkBarSelection();
-
-        ApplyExpansionGeometry();
-
-        // Collapsed is hidden as far as the page is concerned: none of it is on screen, so it gets
-        // the same treatment as a dismissed flyout rather than being left running behind a bar.
-        ApplyHiddenPolicy();
-    }
-
-    /// <summary>
-    /// Fixes the XAML layout at its expanded size and pins it to the anchored edge.
-    /// </summary>
-    /// <remarks>
-    /// This is what makes the expansion feel anchored. Left to itself the root grid is sized by
-    /// the window, so every frame of a growing window is a fresh layout pass — and XAML's
-    /// re-layout does not land in the same frame as the window move, so the content appears to
-    /// drift downwards at its own rate while the frame grows. Sizing the root once, to the
-    /// expanded height, and aligning it to the edge that is not moving turns the animation into
-    /// a pure reveal: the content never re-flows, the window just uncovers more of it.
-    /// </remarks>
-    private void ApplyRootAnchor()
-    {
-        // A window filling the screen has nothing to reveal: the fixed height exists to stop the
-        // layout re-flowing as the bar grows, and holding the launcher's configured height while
-        // the window is bigger than it would clip the page to the size the flyout used to be.
-        if (!IsBarMode || _isMaximized || _isFullScreen)
-        {
-            _root.ClearValue(FrameworkElement.HeightProperty);
-            _root.VerticalAlignment = VerticalAlignment.Stretch;
-            return;
-        }
-
-        _root.Height = _launcher.ResolvedWebFlyoutHeight;
-        _root.VerticalAlignment = _lastEntranceEdge == SlideEdge.Top
-            ? VerticalAlignment.Top
-            : VerticalAlignment.Bottom;
-    }
-
-    /// <summary>Moves and resizes the window for the current expanded state.</summary>
-    private void ApplyExpansionGeometry()
-    {
-        if (_hwnd == IntPtr.Zero || !IsWindow(_hwnd) || !GetWindowRect(_hwnd, out var rect)) return;
-
-        ApplyRootAnchor();
-
-        double scale = GetScale();
-        int targetHeight = (int)Math.Ceiling(CurrentContentHeightDips() * scale);
-        int width = rect.Right - rect.Left;
-        int currentHeight = rect.Bottom - rect.Top;
-        if (targetHeight == currentHeight) return;
-
-        // Keep the anchored edge still and move the other one.
-        int targetTop = _lastEntranceEdge == SlideEdge.Top ? rect.Top : rect.Bottom - targetHeight;
-
-        // Deliberately not animated, after two attempts at it.
-        //
-        // A window hosting a browser cannot be smoothly resized frame by frame: the window frame,
-        // the XAML island's surface and WebView2's own composition surface are resized by
-        // different parts of the system and do not land in the same frame. The content therefore
-        // lags the frame and appears to drift downwards while the window grows upwards, however
-        // the geometry is eased — pinning the layout to the anchored edge reduced the reflow but
-        // could not fix the surface lag. Snapping to the target has no in-between state to be
-        // wrong, so the bar stays exactly where it was and the page is simply there.
-        _animationVersion++;
-        MoveResize(rect.Left, targetTop, width, targetHeight);
-    }
-
-    /// <summary>Window height for the current state, in DIPs.</summary>
-    private double CurrentContentHeightDips() =>
-        IsBarMode && !_isExpanded ? BookmarkBarHeightDips : _launcher.ResolvedWebFlyoutHeight;
 
     // ── Show / hide ─────────────────────────────────────────────────
 
@@ -1685,29 +1395,10 @@ public sealed partial class WebFlyoutWindow : Window
         // Rebuilt per open: bookmarks can have been added or renamed since the last one.
         RebuildBookmarkBar();
 
-        // A bar launcher always opens as just the bar. Anything else would mean remembering a
-        // page across dismissals, which is exactly the state the resource policy tears down.
-        if (IsBarMode)
-        {
-            // Whatever was open when it was last dismissed wins; the configured default only
-            // applies when there is nothing to restore. Without either, it opens as just the bar
-            // and nothing loads until the user picks something.
-            var remembered = _rememberedBookmark != null && _launcher.WebBookmarks.Contains(_rememberedBookmark)
-                ? _rememberedBookmark
-                : null;
-            _activeBookmark = remembered ?? _launcher.DefaultWebBookmark;
-            _isExpanded = _activeBookmark != null;
-            _header.Visibility = _isExpanded ? Visibility.Visible : Visibility.Collapsed;
-            _barActions.Visibility = _isExpanded ? Visibility.Collapsed : Visibility.Visible;
-        }
-        else
-        {
-            _header.Visibility = Visibility.Visible;
-        }
+        _header.Visibility = Visibility.Visible;
 
         var placement = CalculatePlacement(screenX, screenY);
         _lastEntranceEdge = placement.Edge;
-        ApplyRootAnchor();
 
         _idleUnloadTimer?.Stop();
 
@@ -1729,10 +1420,7 @@ public sealed partial class WebFlyoutWindow : Window
 
         // Kicked off after the window is on screen so the panel (and its loading state) is
         // visible while the browser starts, rather than the click appearing to do nothing.
-        // A collapsed bar starts nothing at all: the whole point is that opening the flyout
-        // costs nothing until a bookmark is actually chosen.
-        if (!IsBarMode || _isExpanded)
-            _ = PrepareContentAsync();
+        _ = PrepareContentAsync();
     }
 
     private void ShowWithoutAnimation(FlyoutPlacement placement)
@@ -1847,8 +1535,7 @@ public sealed partial class WebFlyoutWindow : Window
                 _hasTemporaryResize = false;
                 double parkScale = GetScale();
                 rect.Right = rect.Left + (int)Math.Ceiling(_launcher.ResolvedWebFlyoutWidth * parkScale);
-                rect.Bottom = rect.Top + (int)Math.Ceiling(CurrentContentHeightDips() * parkScale);
-                ApplyRootAnchor();
+                rect.Bottom = rect.Top + (int)Math.Ceiling(_launcher.ResolvedWebFlyoutHeight * parkScale);
             }
 
             int width = Math.Max(1, rect.Right - rect.Left);
@@ -1992,138 +1679,61 @@ public sealed partial class WebFlyoutWindow : Window
         }
     }
 
-    /// <summary>Tears the browser down completely; the next open builds a fresh one.</summary>
+    /// <summary>Tears every browser down completely; the next open builds a fresh one.</summary>
     private void UnloadWebView()
     {
-        if (_webView == null) return;
+        if (_tabs.Count == 0) return;
 
         if (_isFullScreen) ApplyFullScreen(false);
 
-        var webView = _webView;
-
-        // In tabs mode the active browser is itself one of the tabs, so CloseAllTabs closes it and
-        // closing it again below would be a second Close on a dead control — the class of mistake
-        // that takes the process with it rather than throwing.
-        bool activeIsTab = webView != null && _tabs.ContainsValue(webView);
-
         _webView = null;
-        _navigatedUrl = "";
         _revealOnNavigationCompleted = false;
 
+        // Every browser is a tab, the launcher's own included, so this is the whole teardown.
         CloseAllTabs();
-        if (activeIsTab) webView = null;
 
         // A permission request whose deferral is never completed leaves the page waiting for an
         // answer that can no longer be given.
         CancelPendingPermissions();
 
-        if (webView != null)
-        {
-            try
-            {
-                _contentHost.Children.Remove(webView);
-                webView.Close();
-            }
-            catch (Exception ex)
-            {
-                Logger.Warn(ex, "Closing WebView2 failed for launcher {Name}", _launcher.Name);
-            }
-        }
-
         SetStatus("Loading…", busy: true, showRetry: false);
         UpdateNavigationButtons();   // the history went with the browser
-    }
-
-    // ── Tabs ────────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Brings the tab for <paramref name="url"/> to the front, creating it if this is its first
-    /// showing.
-    /// </summary>
-    /// <returns>
-    /// True when the switch has been handled here. False only when there is no tab yet and one has
-    /// to be built the ordinary way, so the caller carries on into <see cref="CreateWebViewAsync"/>.
-    /// </returns>
-    /// <remarks>
-    /// <para>Switching is a visibility change and nothing else. The outgoing tab is collapsed —
-    /// which stops it rendering, exactly as a background tab in a browser — but is deliberately
-    /// <b>not</b> suspended: suspending would freeze its scripts, and a launcher whose bookmarks are
-    /// tabs is one where the other tabs are expected to keep receiving. The launcher's hidden policy
-    /// still governs all of them together when the whole flyout goes away.</para>
-    /// <para><c>_navigatedUrl</c> is set from the tab rather than from a navigation, because in this
-    /// mode a tab only ever shows the one address, and that is what stops the reload-on-show check
-    /// below deciding a switch was a navigation.</para>
-    /// </remarks>
-    private async Task<bool> ActivateTabAsync(string url)
-    {
-        if (_tabs.TryGetValue(url, out var existing))
-        {
-            foreach (var (key, tab) in _tabs)
-                tab.Visibility = string.Equals(key, url, StringComparison.OrdinalIgnoreCase)
-                    ? Visibility.Visible
-                    : Visibility.Collapsed;
-
-            _webView = existing;
-            _navigatedUrl = url;
-
-            ResumeWebView();
-            ApplyZoom();
-            UpdateNavigationButtons();
-            HideStatus();
-            return true;
-        }
-
-        // First showing of this bookmark. Everything already open stays open behind it.
-        foreach (var tab in _tabs.Values)
-            tab.Visibility = Visibility.Collapsed;
-
-        _webView = null;
-        _navigatedUrl = "";
-
-        await CreateWebViewAsync();
-        return true;
-    }
-
-    /// <summary>Files a freshly created browser under the bookmark it was made for.</summary>
-    private void RegisterTab(string url, WebView2 webView)
-    {
-        if (!TabsEnabled || string.IsNullOrEmpty(url)) return;
-        _tabs[url] = webView;
-    }
-
-    /// <summary>Closes every tab. Used by the unload path, which takes the whole launcher down.</summary>
-    private void CloseAllTabs()
-    {
-        foreach (var tab in _tabs.Values)
-        {
-            try
-            {
-                _contentHost.Children.Remove(tab);
-                tab.Close();
-            }
-            catch (Exception ex)
-            {
-                Logger.Warn(ex, "Closing a tab failed for launcher {Name}", _launcher.Name);
-            }
-        }
-
-        _tabs.Clear();
-    }
-
-    /// <summary>Every live browser this launcher owns — its tabs, or its single one.</summary>
-    private IEnumerable<WebView2> LiveWebViews()
-    {
-        if (_tabs.Count > 0) return _tabs.Values;
-        return _webView == null ? [] : [_webView];
+        RefreshTabBar();
     }
 
     // ── Content ─────────────────────────────────────────────────────
 
     /// <summary>The address the content area should be showing right now.</summary>
+    /// <remarks>
+    /// Where the user last steered this launcher, falling back to its address — which is its first
+    /// bookmark. Empty only for a launcher with no bookmarks at all, which is one that has not been
+    /// set up yet and is told so rather than navigated anywhere.
+    /// </remarks>
     private string CurrentTargetUrl() =>
-        IsBarMode ? (_activeBookmark?.Url ?? "") : _launcher.ResolvedSingleWebUrl;
+        !string.IsNullOrEmpty(_rememberedUrl) ? _rememberedUrl : _launcher.WebAddress;
 
+    /// <summary>
+    /// Puts the right thing on screen for a show or an expansion.
+    /// </summary>
+    /// <remarks>
+    /// A tab the user opened from a link is *their* place in this launcher, so a dismissal and
+    /// reopen returns to it rather than yanking them back to the launcher's own page. Everything
+    /// that names a page deliberately — a bookmark click, a settings change, a profile reload —
+    /// goes through <see cref="ShowHomeContentAsync"/> instead and is unaffected by this.
+    /// </remarks>
     private async Task PrepareContentAsync()
+    {
+        if (_activeTab is { HomeKey: null } link && link.View.CoreWebView2 != null)
+        {
+            ActivateTab(link);
+            return;
+        }
+
+        await ShowHomeContentAsync();
+    }
+
+    /// <summary>Shows the page the launcher is configured to show right now.</summary>
+    private async Task ShowHomeContentAsync()
     {
         string url = NormalizeUrl(CurrentTargetUrl());
         if (string.IsNullOrEmpty(url))
@@ -2134,20 +1744,22 @@ public sealed partial class WebFlyoutWindow : Window
             return;
         }
 
-        // Tabs mode answers "show this bookmark" by switching browsers rather than navigating one,
-        // which is the whole point: nothing is torn down, so nothing loses its place.
-        if (TabsEnabled && await ActivateTabAsync(url)) return;
+        // One home tab, whatever the launcher's bookmarks say. A bookmark is a place to send it,
+        // not a browser of its own — extra browsers are made by the user asking for one, with a
+        // middle-click, a Shift-click or Open in new tab.
+        var tab = FindHomeTab(PrimaryTabKey);
 
-        if (_webView == null)
+        if (tab == null)
         {
-            await CreateWebViewAsync();
+            // First showing of this address. Everything already open stays open behind it.
+            await CreateTabAsync(PrimaryTabKey, url);
             return;   // creation navigates once the core is ready
         }
 
-        ResumeWebView();
-        ApplyZoom();
+        ActivateTab(tab);
+        if (tab.View.CoreWebView2 == null) return;   // still starting; its own creation navigates
 
-        bool navigating = !string.Equals(_navigatedUrl, url, StringComparison.OrdinalIgnoreCase);
+        bool navigating = !string.Equals(tab.NavigatedUrl, url, StringComparison.OrdinalIgnoreCase);
         bool reloading = !navigating && _launcher.WebReloadOnShow;
 
         // Resuming a suspended browser puts its last painted frame back on screen instantly, so
@@ -2157,7 +1769,7 @@ public sealed partial class WebFlyoutWindow : Window
         if (navigating || reloading)
         {
             _revealOnNavigationCompleted = true;
-            _webView.Visibility = Visibility.Collapsed;
+            tab.View.Visibility = Visibility.Collapsed;
             SetStatus("Loading…", busy: true, showRetry: false);
 
             if (navigating) Navigate(url);
@@ -2166,26 +1778,50 @@ public sealed partial class WebFlyoutWindow : Window
         }
 
         // Nothing queued: the page is live and current, so show it straight away.
-        _webView.Visibility = Visibility.Visible;
+        tab.View.Visibility = Visibility.Visible;
         RestorePageFocus();
     }
 
-    private async Task CreateWebViewAsync()
+    /// <summary>
+    /// Builds one browser, files it as a tab and makes it the active one.
+    /// </summary>
+    /// <param name="homeKey">
+    /// <see cref="PrimaryTabKey"/> for the launcher's own tab; null for one the user asked for,
+    /// which nothing configured may re-navigate.
+    /// </param>
+    /// <param name="navigateTo">
+    /// Where to send it once its core is ready, or null when the caller navigates it — which is
+    /// what handing the browser to <c>NewWindowRequested.NewWindow</c> does.
+    /// </param>
+    /// <param name="background">
+    /// Build it without bringing it forward, for the gestures that mean "open this but leave me
+    /// where I am" — a middle-click, a Shift/Ctrl-click, <b>Open in new tab</b>. The chip appears
+    /// and the page loads behind whatever is on screen.
+    /// </param>
+    /// <returns>The tab, with its core ready, or null when the browser could not be started.</returns>
+    private async Task<WebTab?> CreateTabAsync(string? homeKey, string? navigateTo, bool background = false)
     {
-        if (_webViewInitializing) return;
-        _webViewInitializing = true;
-        SetStatus("Loading…", busy: true, showRetry: false);
+        // Re-entrancy only matters for the launcher's own page: two shows racing must not build two
+        // browsers for it. A link tab is a distinct request every time and is never deduplicated.
+        if (homeKey != null && _webViewInitializing) return null;
+        if (homeKey != null) _webViewInitializing = true;
 
-        var webView = new WebView2 { Visibility = Visibility.Visible };
+        // The status overlay is shared chrome, so a background tab must not put a spinner over the
+        // page the user is reading.
+        if (!background) SetStatus("Loading…", busy: true, showRetry: false);
+
+        var webView = new WebView2 { Visibility = background ? Visibility.Collapsed : Visibility.Visible };
         Grid.SetRow(webView, 1);   // row 0 belongs to the prompt bar
         _contentHost.Children.Insert(0, webView);
-        _webView = webView;
 
-        // Filed under the address it is being built for, so a later switch back finds it rather
-        // than building a second one. Read before the awaits below, since the active bookmark can
-        // change while a browser is starting.
-        string tabKey = NormalizeUrl(CurrentTargetUrl());
-        RegisterTab(tabKey, webView);
+        var tab = new WebTab { View = webView, HomeKey = homeKey };
+        _tabs.Add(tab);
+
+        // Background: the strip has to learn about the chip, but nothing else moves — _webView goes
+        // on pointing at the tab in front, which is what keeps the header, the address box, zoom and
+        // focus describing the page the user is actually looking at.
+        if (background) RefreshTabBar();
+        else ActivateTab(tab);
 
         // Clicking into the page is what arms the focus restore; see _pageHadFocus.
         webView.GotFocus += (_, _) => _pageHadFocus = true;
@@ -2200,7 +1836,8 @@ public sealed partial class WebFlyoutWindow : Window
             // dashboard on every app restart. Launchers opted into the shared profile point at
             // one folder instead; safe to do from several environments in this process because
             // every one of them is created with identical options (WebView2 rejects a second
-            // environment on the same folder only when the options differ).
+            // environment on the same folder only when the options differ). Tabs of one launcher
+            // share the folder for the same reason: they are tabs of one browser.
             var environment = await CoreWebView2Environment.CreateWithOptionsAsync(
                 browserExecutableFolder: "",
                 userDataFolder: userDataFolder,
@@ -2211,43 +1848,68 @@ public sealed partial class WebFlyoutWindow : Window
         catch (Exception ex)
         {
             Logger.Error(ex, "WebView2 initialisation failed for launcher {Name}", _launcher.Name);
-            UnloadWebView();
+
+            // Only this tab, never the launcher: with the runtime missing there is nothing to lose,
+            // but a link tab that failed for any other reason must not take the pages already open
+            // down with it.
+            _tabs.Remove(tab);
+            DestroyTab(tab);
+            _activeTab = null;
+            _webView = null;
+
+            if (_tabs.Count > 0)
+            {
+                ActivateTab(_tabs[^1]);
+                return null;
+            }
+
+            RefreshTabBar();
             SetStatus(
                 "This panel needs the Microsoft Edge WebView2 Runtime, which could not be started. " +
                 "Install it from microsoft.com/edge/webview2 and try again.",
                 busy: false, showRetry: true);
-            _webViewInitializing = false;
-            return;
+            return null;
         }
         finally
         {
-            _webViewInitializing = false;
+            if (homeKey != null) _webViewInitializing = false;
         }
 
-        if (_webView == null) return;   // unloaded while initialising
+        // Closed while it was starting — a dismissal that unloaded, or the tab being closed.
+        if (!_tabs.Contains(tab) || webView.CoreWebView2 == null) return null;
 
-        ConfigureCore(_webView.CoreWebView2);
+        ConfigureCore(webView.CoreWebView2, tab);
 
         // Awaited, and before Navigate: a document-created script added after the navigation has
         // started misses the very page the flyout was opened to show.
-        await InstallNotificationBridgeAsync(_webView.CoreWebView2);
+        await InstallNotificationBridgeAsync(webView.CoreWebView2);
+        if (!_tabs.Contains(tab)) return null;
 
-        if (_webView == null) return;   // unloaded while the script was being installed
+        await InstallServiceWorkerBridgeAsync(webView.CoreWebView2);
+        if (!_tabs.Contains(tab)) return null;
 
-        await InstallServiceWorkerBridgeAsync(_webView.CoreWebView2);
+        // Keys the host owns rather than Chromium — see WebFlyoutWindow.Shortcuts.cs. Same
+        // document-created timing as the two bridges above, for the same reason.
+        await InstallShortcutBridgeAsync(webView.CoreWebView2);
+        if (!_tabs.Contains(tab)) return null;
 
-        if (_webView == null) return;
+        ApplyZoom(webView.CoreWebView2);
+        UpdateTabChip(tab);
 
-        ApplyZoom();
+        // CurrentTargetUrl is resolved by the caller, not read again here: in bar mode the address
+        // is whichever bookmark was clicked, and reading the launcher's single address at this
+        // point meant the first click on any bookmark loaded the launcher's own URL instead — and
+        // then the page's favicon was adopted onto the bookmark that had been clicked, so it took
+        // that page's icon too.
+        // NavigateTab, not Navigate: Navigate drives whichever tab is in front, so a background tab
+        // would otherwise load its address into the page the user is reading. That was safe only
+        // while every new tab was activated on creation.
+        if (!string.IsNullOrEmpty(navigateTo)) NavigateTab(tab, navigateTo);
 
-        // CurrentTargetUrl, not WebUrl: in bar mode the address is whichever bookmark was
-        // clicked. Reading the launcher's single address here meant the first click on any
-        // bookmark loaded the launcher's own URL instead — and then the page's favicon was
-        // adopted onto the bookmark that had been clicked, so it took that page's icon too.
-        Navigate(NormalizeUrl(CurrentTargetUrl()));
+        return tab;
     }
 
-    private void ConfigureCore(CoreWebView2 core)
+    private void ConfigureCore(CoreWebView2 core, WebTab tab)
     {
         var settings = core.Settings;
         settings.IsStatusBarEnabled = false;
@@ -2255,24 +1917,48 @@ public sealed partial class WebFlyoutWindow : Window
         settings.IsPasswordAutosaveEnabled = true;
         settings.IsGeneralAutofillEnabled = true;
 
-        // A panel has nowhere to put a second window, and a popup would be an unowned browser
-        // window floating over the desktop — hand those to the real browser instead.
-        core.NewWindowRequested += (_, e) =>
+        // A link asking for a new window becomes another tab of this launcher — see
+        // HandleNewWindowRequested for why the browser's own NewWindow is used rather than reading
+        // the URI and navigating by hand. Launchers set to WebLinksInBrowser hand it to the real
+        // browser instead, which is what web launchers shipped with.
+        core.NewWindowRequested += (_, e) => HandleNewWindowRequested(e);
+
+        // Whether this page makes its own notification sound, which decides whether ours does.
+        WatchPageAudio(core);
+
+        // window.close() from a popup closes that popup, not the launcher. Only a page the launcher
+        // itself opened is speaking for the whole flyout.
+        core.WindowCloseRequested += (_, _) =>
         {
-            e.Handled = true;
-            OpenExternally(e.Uri);
+            if (tab.HomeKey == null) CloseTab(tab);
+            else HideFlyout();
         };
 
-        core.WindowCloseRequested += (_, _) => HideFlyout();
+        // Every handler below that writes shared chrome asks IsActiveCore first: a background tab
+        // navigates on its own — a chat app pushing history, a dashboard refreshing — and without
+        // the check it would drive the header of a page nobody is looking at.
+        core.NavigationStarting += (_, _) =>
+        {
+            if (IsActiveCore(core)) SetStatus("Loading…", busy: true, showRetry: false);
+        };
 
-        core.NavigationStarting += (_, _) => SetStatus("Loading…", busy: true, showRetry: false);
+        core.HistoryChanged += (_, _) =>
+        {
+            if (IsActiveCore(core)) UpdateNavigationButtons();
+            UpdateTabChip(tab);
+        };
 
-        core.HistoryChanged += (_, _) => UpdateNavigationButtons();
+        // The chip is the only place a background tab says what it is, so its title follows the
+        // page whether or not the tab is on screen.
+        core.DocumentTitleChanged += (_, _) => UpdateTabChip(tab);
 
         // A page going fullscreen only resizes its own element; making the window fill the
         // screen is the host's job. Without this, "fullscreen" video is still boxed inside
         // whatever size the flyout happens to be.
-        core.ContainsFullScreenElementChanged += (_, _) => ApplyFullScreen(core.ContainsFullScreenElement);
+        core.ContainsFullScreenElementChanged += (_, _) =>
+        {
+            if (IsActiveCore(core)) ApplyFullScreen(core.ContainsFullScreenElement);
+        };
 
         // Every WebView2 object handed to a handler is released here, on the UI thread, rather than
         // left for the finalizer — see ReleaseWebViewObject. The captured crash was one of these
@@ -2281,15 +1967,23 @@ public sealed partial class WebFlyoutWindow : Window
         {
             try
             {
+            bool active = IsActiveCore(core);
+
             if (e.IsSuccess)
             {
+                ApplyZoom(core);   // CSS zoom lives in the document, so each navigation drops it
+                UpdateTabChip(tab);
+                if (!active) return;
+
                 HideStatus();
-                ApplyZoom();   // CSS zoom lives in the document, so each navigation drops it
                 UpdateNavigationButtons();
                 RevealWebViewIfPending();
                 CompletePreload();   // loaded off screen at startup: collapse it, keep it connected
                 return;
             }
+
+            UpdateTabChip(tab);
+            if (!active) return;
 
             // A failed navigation still has to give the browser back, or the flyout is stuck
             // showing a spinner over a hidden page with no way out but Reload.
@@ -2299,7 +1993,7 @@ public sealed partial class WebFlyoutWindow : Window
             // stop rendering. The error is left on screen for whenever it is opened.
             CompletePreload();
 
-            SetStatus($"Could not load {NormalizeUrl(_launcher.WebUrl)} ({e.WebErrorStatus}).",
+            SetStatus($"Could not load {NormalizeUrl(_launcher.WebAddress)} ({e.WebErrorStatus}).",
                 busy: false, showRetry: true);
             }
             finally { ReleaseWebViewObject(e); }
@@ -2307,6 +2001,7 @@ public sealed partial class WebFlyoutWindow : Window
 
         core.ProcessFailed += (_, _) =>
         {
+            if (!IsActiveCore(core)) return;
             SetStatus("The page stopped responding.", busy: false, showRetry: true);
             RevealWebViewIfPending();
         };
@@ -2315,7 +2010,7 @@ public sealed partial class WebFlyoutWindow : Window
         // source that can get it: FaviconService fetches over plain HTTP with no session, so a
         // self-hosted dashboard behind a login hands it a redirect instead of an icon. The
         // browser here is signed in and reads whatever the page actually declares.
-        core.FaviconChanged += (_, _) => _ = AdoptPageIconAsync(core);
+        core.FaviconChanged += (_, _) => _ = AdoptPageIconAsync(core, tab);
 
         // Camera, microphone, location, notifications: asked for in the flyout's own bar, since an
         // unhandled request falls back to WebView2's browser-sized prompt. See
@@ -2411,18 +2106,30 @@ public sealed partial class WebFlyoutWindow : Window
     }
 
     /// <summary>Saves the page's declared icon and makes it the launcher's tray icon.</summary>
-    private async Task AdoptPageIconAsync(CoreWebView2 core)
+    private async Task AdoptPageIconAsync(CoreWebView2 core, WebTab tab)
     {
         if (string.IsNullOrEmpty(core.FaviconUri)) return;
 
-        // In bar mode the icon identifies the bookmark, not the launcher: the tray icon has to
-        // keep standing for the launcher as a whole, which is several sites rather than one.
-        if (IsBarMode)
-        {
-            if (_activeBookmark != null)
-                await AdoptBookmarkIconAsync(core, _activeBookmark);
-            return;
-        }
+        // The chip's icon is per tab and is written nowhere, so every tab gets it.
+        await UpdateTabIconAsync(core, tab);
+
+        // A link tab is showing whatever site the page sent the user to. It must never rewrite the
+        // launcher's tray icon or a bookmark's — both stand for an address the *user* chose, and an
+        // icon quietly replaced by a page they merely passed through reads as data corruption.
+        if (tab.HomeKey == null) return;
+
+        // Whichever bookmark this page *is* — matched on its own address rather than remembered,
+        // since the bar no longer tracks what is showing, and matching also declines to write an
+        // icon onto a bookmark the user has navigated away from.
+        string source = NormalizeUrl(core.Source);
+        if (FindBookmark(source) is { } bookmark)
+            await AdoptBookmarkIconAsync(core, bookmark);
+
+        // The tray icon stands for the launcher, and the launcher is its address — its first
+        // bookmark. Any page further along the bar is one of several this launcher holds, and
+        // letting each one rewrite the tray icon as it was visited would leave the icon meaning
+        // "the last thing I looked at" rather than "this launcher".
+        if (!string.Equals(source, NormalizeUrl(_launcher.WebAddress), StringComparison.OrdinalIgnoreCase)) return;
 
         if (!MayAdoptPageIcon(_launcher)) return;
 
@@ -2479,12 +2186,15 @@ public sealed partial class WebFlyoutWindow : Window
     /// <para>Only ever replaces an icon that is still ours to replace (<see cref="MayAdoptPageIcon"/>)
     /// — a user who has chosen an icon has made a decision, and a better favicon is not a reason to
     /// undo it. In bar mode nothing is adopted at all: the tray icon stands for the launcher, which
-    /// is several sites rather than one.
+    /// is several sites rather than one. Nor from a link tab, for the reason
+    /// <see cref="AdoptPageIconAsync"/> gives: the launcher's icon must name an address the user
+    /// chose, not one a page sent them to.
     /// </para>
     /// </remarks>
-    private void AdoptHighResPageIcon(JsonNode? message)
+    private void AdoptHighResPageIcon(CoreWebView2 core, JsonNode? message)
     {
         if (IsBarMode || !MayAdoptPageIcon(_launcher)) return;
+        if (TabFor(core) is not { HomeKey: not null }) return;
 
         string dataUrl = message?["icon"]?.GetValue<string>() ?? "";
         int comma = dataUrl.IndexOf(',', StringComparison.Ordinal);
@@ -2521,12 +2231,21 @@ public sealed partial class WebFlyoutWindow : Window
         }
     }
 
-    private void Navigate(string url)
+    private void Navigate(string url) => NavigateTab(_activeTab, url);
+
+    /// <summary>Sends one named tab somewhere, whether or not it is the tab in front.</summary>
+    /// <remarks>
+    /// The address is recorded on the tab rather than on the window: the reload-on-open and
+    /// settings-changed checks both ask "is the home tab already showing this", and another tab
+    /// answering for it would make them read the wrong page's address.
+    /// </remarks>
+    private void NavigateTab(WebTab? tab, string url)
     {
-        var core = _webView?.CoreWebView2;
+        var core = tab?.View.CoreWebView2;
         if (core == null || string.IsNullOrEmpty(url)) return;
 
-        _navigatedUrl = url;
+        tab!.NavigatedUrl = url;
+
         try
         {
             core.Navigate(url);
@@ -2603,13 +2322,13 @@ public sealed partial class WebFlyoutWindow : Window
     /// Stores where the flyout was dragged to, when the launcher is set to remember it.
     /// </summary>
     /// <remarks>
-    /// Without <see cref="Launcher.WebRememberPosition"/> the move is deliberately not written
-    /// anywhere: it holds for as long as the flyout stays open, and the next one anchors to the
-    /// tray as usual.
+    /// Under any other anchor the move is deliberately not written anywhere: it holds for as long as
+    /// the flyout stays open, and the next one goes back to the tray or to the corner it is set to.
+    /// That is the whole difference between the last-position anchor and the other ten.
     /// </remarks>
     private void RememberFlyoutPosition()
     {
-        if (!_launcher.WebRememberPosition) return;
+        if (WebAnchors.Normalize(_launcher.WebAnchor) != WebAnchors.LastPosition) return;
         if (!GetWindowRect(_hwnd, out var rect)) return;
 
         string position = $"{rect.Left},{rect.Top}";
@@ -2667,14 +2386,12 @@ public sealed partial class WebFlyoutWindow : Window
         _isFullScreen = false;
         UpdateResizeGripVisibility();
 
-        // Back to whatever the flyout was: bar mode restores its own chrome and anchoring.
-        _header.Visibility = IsBarMode && !_isExpanded ? Visibility.Collapsed : Visibility.Visible;
+        _header.Visibility = Visibility.Visible;
         _contentHost.Margin = new Thickness(GripThickness, 0, GripThickness, GripThickness);
         int roundedCorners = DWMWCP_ROUND;
         DwmSetWindowAttribute(_hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref roundedCorners, sizeof(int));
 
         RebuildBookmarkBar();
-        ApplyRootAnchor();
 
         SetWindowPos(_hwnd, IntPtr.Zero, _preFullScreenRect.Left, _preFullScreenRect.Top,
             _preFullScreenRect.Right - _preFullScreenRect.Left,
@@ -2713,6 +2430,11 @@ public sealed partial class WebFlyoutWindow : Window
         _backButton.IsEnabled = core?.CanGoBack == true;
         _forwardButton.IsEnabled = core?.CanGoForward == true;
         SyncAddressBox();
+
+        // Not left to the box's own TextChanged: a switch back to a tab already showing this
+        // address writes the same string, which raises nothing at all — and the star would then
+        // still be answering for the page before it.
+        UpdateBookmarkStar();
     }
 
     // ── Address bar ─────────────────────────────────────────────────
@@ -2736,6 +2458,10 @@ public sealed partial class WebFlyoutWindow : Window
         _addressBar.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
 
         if (visible) SyncAddressBox();
+
+        // Unconditional: the star is hidden for a launcher with no bookmark bar to write into, and
+        // that is a launcher setting rather than something the address bar's own visibility decides.
+        UpdateBookmarkStar();
     }
 
     /// <summary>Puts the page's own address back in the box, unless the user is mid-edit.</summary>
@@ -2867,7 +2593,7 @@ public sealed partial class WebFlyoutWindow : Window
 
     private void OpenInBrowser()
     {
-        string url = _webView?.CoreWebView2?.Source ?? NormalizeUrl(_launcher.WebUrl);
+        string url = _webView?.CoreWebView2?.Source ?? NormalizeUrl(_launcher.WebAddress);
         OpenExternally(url);
     }
 
@@ -2894,9 +2620,15 @@ public sealed partial class WebFlyoutWindow : Window
     /// browser zoom does, but it lives in the document, so it has to be re-applied on every
     /// navigation rather than set once on the control.
     /// </remarks>
-    private void ApplyZoom()
+    private void ApplyZoom() => ApplyZoom(_webView?.CoreWebView2);
+
+    /// <inheritdoc cref="ApplyZoom()"/>
+    /// <remarks>
+    /// Takes the browser explicitly so a background tab finishing a navigation of its own re-applies
+    /// its own zoom rather than the active tab's document's.
+    /// </remarks>
+    private void ApplyZoom(CoreWebView2? core)
     {
-        var core = _webView?.CoreWebView2;
         if (core == null) return;
 
         double factor = _launcher.ResolvedWebZoomFactor;
@@ -2915,6 +2647,7 @@ public sealed partial class WebFlyoutWindow : Window
         Title = _launcher.Name;
         ApplyZoom();
         ApplyAddressBarVisibility();
+        ApplyTabBarVisibility();
 
         // Regular-window mode can have been switched on or off in the window that just closed, and
         // all of it is window state rather than something re-read per open. The pin button's label
@@ -2930,13 +2663,23 @@ public sealed partial class WebFlyoutWindow : Window
         // here yanked an open bookmark over to it, and the arriving page's icon was then adopted
         // onto whichever bookmark was showing. An empty target means the bar is collapsed with
         // nothing open, which is not an instruction to navigate anywhere.
+        //
+        // And never a link tab, which is the same trap one tab over: a favicon fetch completing
+        // would otherwise pull a page the user opened from a link over to the launcher's own
+        // address, with no user action at all.
+        //
+        // Safe to compare against CurrentTargetUrl now that _rememberedUrl tracks the two gestures
+        // that mean "go here": a page the user chose answers for itself, so this fires only when
+        // the launcher's own address has actually changed under a tab still sitting on the old one.
         string url = NormalizeUrl(CurrentTargetUrl());
-        if (!string.IsNullOrEmpty(url) && !string.Equals(_navigatedUrl, url, StringComparison.OrdinalIgnoreCase))
+        if (_activeTab is { HomeKey: not null } home &&
+            !string.IsNullOrEmpty(url) &&
+            !string.Equals(home.NavigatedUrl, url, StringComparison.OrdinalIgnoreCase))
         {
-            if (_webView?.CoreWebView2 != null)
+            if (home.View.CoreWebView2 != null)
                 Navigate(url);
             else
-                _navigatedUrl = "";
+                home.NavigatedUrl = "";
         }
 
         // Not while the window has deliberately been grown past its configured size. This runs
@@ -2952,7 +2695,7 @@ public sealed partial class WebFlyoutWindow : Window
         double scale = GetScale();
         GetWindowRect(_hwnd, out var rect);
         int width = (int)Math.Ceiling(_launcher.ResolvedWebFlyoutWidth * scale);
-        int height = (int)Math.Ceiling(CurrentContentHeightDips() * scale);
+        int height = (int)Math.Ceiling(_launcher.ResolvedWebFlyoutHeight * scale);
         MoveResize(rect.Left, rect.Top, width, height);
     }
 
@@ -3019,7 +2762,7 @@ public sealed partial class WebFlyoutWindow : Window
         // same rule the item flyout applies to edit mode and its editors.
         // An open question pins the flyout too: a prompt that disappears when the user clicks
         // elsewhere is a request the page never gets an answer to.
-        if (_isShowing || !_isOpen || _launcher.WebPinFlyout || StaysOpenAsWindow || _isModalOpen || _isResizing || _isMovingWindow || _isFullScreen || IsPromptOpen || _isMenuOpen) return;
+        if (_isShowing || !_isOpen || _launcher.WebPinFlyout || StaysOpenAsWindow || _isModalOpen || _isResizing || _isMovingWindow || _isBookmarkDragging || _isFullScreen || IsPromptOpen || _isMenuOpen) return;
 
         // The browser's own HWNDs are children of this window, so clicking into the page
         // deactivates the XAML window without the user having gone anywhere. Read the
@@ -3032,7 +2775,7 @@ public sealed partial class WebFlyoutWindow : Window
             // at one moment and acting on it at another is exactly how a pinned flyout ends up
             // dismissed anyway.
             if (!_isOpen || _isShowing || _isHiding) return;
-            if (_launcher.WebPinFlyout || StaysOpenAsWindow || _isModalOpen || _isResizing || _isMovingWindow || _isFullScreen || IsPromptOpen || _isMenuOpen) return;
+            if (_launcher.WebPinFlyout || StaysOpenAsWindow || _isModalOpen || _isResizing || _isMovingWindow || _isBookmarkDragging || _isFullScreen || IsPromptOpen || _isMenuOpen) return;
 
             if (IsForegroundStillOurs())
             {
@@ -3130,7 +2873,7 @@ public sealed partial class WebFlyoutWindow : Window
     private void ForegroundWatchTimer_Tick(Microsoft.UI.Dispatching.DispatcherQueueTimer sender, object args)
     {
         // Nothing left to watch for: the flyout has gone, or something else is now holding it open.
-        if (!_isOpen || _isHiding || _launcher.WebPinFlyout || _isModalOpen || _isResizing || _isMovingWindow || _isFullScreen || IsPromptOpen)
+        if (!_isOpen || _isHiding || _launcher.WebPinFlyout || _isModalOpen || _isResizing || _isMovingWindow || _isBookmarkDragging || _isFullScreen || IsPromptOpen)
         {
             StopForegroundWatch();
             return;
@@ -3191,7 +2934,7 @@ public sealed partial class WebFlyoutWindow : Window
         var workArea = monitorInfo.rcWork;
 
         int width = (int)Math.Ceiling(_launcher.ResolvedWebFlyoutWidth * scale);
-        int height = (int)Math.Ceiling(CurrentContentHeightDips() * scale);
+        int height = (int)Math.Ceiling(_launcher.ResolvedWebFlyoutHeight * scale);
         width = Math.Min(width, workArea.Right - workArea.Left);
         height = Math.Min(height, workArea.Bottom - workArea.Top);
 
@@ -3214,9 +2957,11 @@ public sealed partial class WebFlyoutWindow : Window
         if (top + height > workArea.Bottom) top = workArea.Bottom - height;
         if (top < workArea.Top) top = workArea.Top;
 
-        // A flyout that has been moved opens where it was left, not back at the tray — clamped
-        // into the work area so a screen that has since gone away cannot strand it.
-        if (_launcher.WebRememberPosition && _launcher.GetWebFlyoutPosition() is { } saved)
+        // Anchored to its last position, and there is one — clamped into the work area so a screen
+        // that has since gone away cannot strand it. Nothing dragged yet falls through to the tray
+        // placement below, which is what the first open of such a launcher gets.
+        int anchor = WebAnchors.Normalize(_launcher.WebAnchor);
+        if (anchor == WebAnchors.LastPosition && _launcher.GetWebFlyoutPosition() is { } saved)
         {
             var savedPoint = new POINT { X = saved.X, Y = saved.Y };
             var savedMonitor = new MONITORINFOEX { cbSize = Marshal.SizeOf<MONITORINFOEX>() };
@@ -3230,10 +2975,10 @@ public sealed partial class WebFlyoutWindow : Window
 
         // A fixed anchor replaces the tray-relative placement — on the monitor whose tray icon
         // was clicked, so a corner still means a corner of the screen the user is working on.
-        // It ranks below the remembered position above, which is what makes it "where this opens
-        // until you move it".
-        int anchor = WebAnchors.Normalize(_launcher.WebAnchor);
-        if (anchor != WebAnchors.Tray)
+        //
+        // LastPosition is excluded alongside Tray: it is not a corner, and reaching here means it had
+        // no position to open at, so the tray placement below is the right fallback.
+        if (anchor != WebAnchors.Tray && anchor != WebAnchors.LastPosition)
         {
             int anchoredLeft =
                 WebAnchors.IsLeft(anchor) ? workArea.Left + gap :

@@ -78,16 +78,38 @@ public sealed partial class WebFlyoutWindow
 
         menu.Items.Add(new MenuFlyoutSeparator());
 
+        // ── This page ───────────────────────────────────────────
+        // The address bar carries a star for this and is off by default, so without the item here
+        // the only way to bookmark what is on screen would be to turn on a row of chrome first.
+        // An action rather than a toggle: its two readings are "add" and "remove", and a check
+        // beside it would be claiming the page has a property, which is the bar’s property.
+        var bookmarkItem = new MenuFlyoutItem
+        {
+            Text = IsCurrentAddressBookmarked() ? "Remove from bookmarks" : "Add to bookmarks",
+            IsEnabled = !string.IsNullOrEmpty(CurrentAddressUrl()),
+        };
+        bookmarkItem.Click += (_, _) => ToggleBookmarkForAddress();
+        menu.Items.Add(bookmarkItem);
+
+        menu.Items.Add(new MenuFlyoutSeparator());
+
         // ── What it shows ───────────────────────────────────────
+        // Tabs above the address, which is the order the two strips sit in on the flyout —
+        // header, then tabs, then the address of whichever tab they chose. The settings dialog
+        // lists them the same way round.
+        // Off, the strip appears on its own as soon as there is a second tab and goes away again
+        // when there is not — so this reads as "keep it", not "switch tabs on". Turning it on with
+        // one tab open is also the only way to reach the "+" without following a link first.
+        menu.Items.Add(Toggle("Tab bar", _launcher.WebAlwaysShowTabs, on =>
+        {
+            _launcher.WebAlwaysShowTabs = on;
+            ApplyTabBarVisibility();
+        }));
+
         menu.Items.Add(Toggle("Address bar", _launcher.WebShowAddressBar, on =>
         {
             _launcher.WebShowAddressBar = on;
             ApplyAddressBarVisibility();
-        }));
-
-        menu.Items.Add(Toggle("Reload when opened", _launcher.WebReloadOnShow, on =>
-        {
-            _launcher.WebReloadOnShow = on;
         }));
 
         menu.Items.Add(new MenuFlyoutSeparator());
@@ -95,21 +117,10 @@ public sealed partial class WebFlyoutWindow
         // ── Where and how big it opens ──────────────────────────
         menu.Items.Add(BuildAnchorSubmenu());
 
-        // The pair a user reaches for straight after dragging a flyout and finding the change did
+        // The one a user reaches for straight after dragging a flyout and finding the change did
         // not stick — which is exactly a moment spent looking at the flyout, so the menu is the
-        // right place for them rather than two windows away.
-        // "…changes", not "…position": what is remembered is the *edit*, not the value. Without it
-        // the label reads as "does this launcher have a position", which it always does — the
-        // question is whether dragging it somewhere else outlives the visit.
-        menu.Items.Add(Toggle("Remember position changes", _launcher.WebRememberPosition, on =>
-        {
-            _launcher.WebRememberPosition = on;
-
-            // Dropping the remembered position on the way out, so turning this off actually
-            // returns the flyout to its anchor rather than leaving it parked where it last was.
-            if (!on) _launcher.WebFlyoutPosition = "";
-        }));
-
+        // right place for it rather than two windows away. "Where you last dragged it" is one of the
+        // Opens at values, because remembering a position and choosing one are the same question.
         // WebLockSize is the inverse of what is shown, because this one is on by default and a
         // bool defaulting to true cannot be turned off under WhenWritingDefault. Inverted here, in
         // the line that builds the item — never in the model.
@@ -120,9 +131,20 @@ public sealed partial class WebFlyoutWindow
 
         menu.Items.Add(new MenuFlyoutSeparator());
 
+        var shortcuts = new MenuFlyoutItem { Text = "Keyboard shortcuts" };
+        shortcuts.Click += (_, _) => _ = ShowShortcutsAsync();
+        menu.Items.Add(shortcuts);
+
         var settings = new MenuFlyoutItem { Text = "Launcher settings…" };
         settings.Click += (_, _) => _ = OpenLauncherSettingsAsync();
         menu.Items.Add(settings);
+
+        // Below it, and reached from the same place: the item flyout's context menu has carried
+        // App Settings all along, and a web launcher had no way to the app's own settings without
+        // going to the tray icon it was opened from.
+        var appSettings = new MenuFlyoutItem { Text = "App settings…" };
+        appSettings.Click += (_, _) => OpenAppSettings();
+        menu.Items.Add(appSettings);
 
         // The flyout must not dismiss itself while the menu is up, and must be free to again the
         // moment it closes — including when the menu is dismissed by clicking away, which is the
@@ -152,6 +174,7 @@ public sealed partial class WebFlyoutWindow
         (string Label, int Value)[] anchors =
         [
             ("Near its tray icon", WebAnchors.Tray),
+            ("Where you last dragged it", WebAnchors.LastPosition),
             ("Top left", WebAnchors.TopLeft),
             ("Top centre", WebAnchors.TopCenter),
             ("Top right", WebAnchors.TopRight),
@@ -177,7 +200,9 @@ public sealed partial class WebFlyoutWindow
                 if (WebAnchors.Normalize(_launcher.WebAnchor) == value) return;
 
                 _launcher.WebAnchor = value;
-                _launcher.WebFlyoutPosition = "";
+
+                // Except the value that *is* the remembered position — see the settings row.
+                if (value != WebAnchors.LastPosition) _launcher.WebFlyoutPosition = "";
                 SettingsManager.SaveSettings();
                 Services.AutoSyncService.NotifyLaunchersChanged();
             };
@@ -205,6 +230,25 @@ public sealed partial class WebFlyoutWindow
             Services.AutoSyncService.NotifyLaunchersChanged();
         };
         return item;
+    }
+
+    /// <summary>
+    /// Opens the app's own settings window, and gets out of its way.
+    /// </summary>
+    /// <remarks>
+    /// A flyout is dismissed first, exactly as the item flyout's App Settings does: it is
+    /// always-on-top, so leaving it up would park it over the window it had just opened. A regular
+    /// window is left alone — it is not topmost unless the user pinned it, and closing the page
+    /// they still have open would be a steep price for reaching a settings window.
+    /// </remarks>
+    private void OpenAppSettings()
+    {
+        var owner = _owner ?? MainWindow.Current;
+        if (owner == null) return;
+
+        if (!_launcher.WebRegularWindow) HideFlyout();
+
+        SettingsWindow.ShowInstance(owner);
     }
 
     /// <summary>The pin's label, which names what it does in this launcher's current mode.</summary>

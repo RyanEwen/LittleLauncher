@@ -92,6 +92,28 @@
             </Grid>
         </Border>
 
+        <!-- Unused browser profiles -->
+        <TextBlock Text="Storage" FontSize="14" FontWeight="SemiBold" Margin="0,16,0,6"/>
+        <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1" CornerRadius="4" Padding="16" Margin="0,0,0,4">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <FontIcon Glyph="&#xE74E;" FontSize="20" Margin="0,0,16,0" VerticalAlignment="Center"/>
+                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                    <TextBlock Text="Unused Browser Profiles" FontSize="14"/>
+                    <TextBlock x:Name="ProfileCleanupSubtitle" FontSize="12" Opacity="0.5" TextWrapping="Wrap"
+                               Text="Checking…"/>
+                </StackPanel>
+                <Button Grid.Column="2" x:Name="ProfileCleanupButton" Content="Delete"
+                        Click="ProfileCleanupButton_Click" IsEnabled="False"/>
+            </Grid>
+        </Border>
+
         <!-- Backup and Restore -->
         <TextBlock Text="Backup &amp; Restore" FontSize="14" FontWeight="SemiBold" Margin="0,16,0,6"/>
         <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"

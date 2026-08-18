@@ -136,8 +136,22 @@ public static class WebAnchors
     public const int BottomCenter = 8;
     public const int BottomRight = 9;
 
+    /// <summary>Wherever the user last dragged it to.</summary>
+    /// <remarks>
+    /// <para>One of the answers to "where does this open?", not a modifier on the other ten. It used
+    /// to be a separate <c>WebRememberPosition</c> flag, and the pair had a dead cell: with
+    /// remembering on, nine of the ten anchors decided only where the <em>very first</em> open
+    /// landed — before the drag that is the next thing the user does. Follow the tray, sit in a
+    /// fixed spot, and stay where I put it are three mutually exclusive answers, so they are three
+    /// values of one setting.</para>
+    /// <para>With nothing dragged yet — a launcher just set to this, or one that arrived over sync,
+    /// since <c>WebFlyoutPosition</c> deliberately does not travel — it places like
+    /// <see cref="Tray"/>, and the first drag settles it.</para>
+    /// </remarks>
+    public const int LastPosition = 10;
+
     public static int Normalize(int value) =>
-        value >= Tray && value <= BottomRight ? value : Tray;
+        value >= Tray && value <= LastPosition ? value : Tray;
 
     public static bool IsTop(int a) => a is TopLeft or TopCenter or TopRight;
     public static bool IsBottom(int a) => a is BottomLeft or BottomCenter or BottomRight;
@@ -286,7 +300,17 @@ public partial class Launcher : ObservableObject
     [ObservableProperty]
     public partial int Kind { get; set; }
 
-    /// <summary>The page a web launcher shows. Ignored unless <see cref="Kind"/> is Web.</summary>
+    /// <summary>
+    /// Legacy: the single page a web launcher used to show, before one address and a bar of them
+    /// became the same thing. Read once and turned into the first bookmark.
+    /// </summary>
+    /// <remarks>
+    /// Kept only so settings written before the merge still load, and so a launcher arriving from
+    /// an older machine over sync can be brought forward the same way — see
+    /// <see cref="MigrateWebModel"/>, which clears it. Nothing should read it: the launcher's
+    /// address is <see cref="WebAddress"/>, which is the first entry in
+    /// <see cref="WebBookmarks"/>.
+    /// </remarks>
     [ObservableProperty]
     public partial string WebUrl { get; set; } = "";
 
@@ -439,49 +463,28 @@ public partial class Launcher : ObservableObject
     /// launcher that sets it, instead of its own private one.
     /// </summary>
     /// <remarks>
-    /// Isolation is the default because it is the one that cannot surprise anyone — two launchers
-    /// can be two accounts on the same site. Sharing is for the opposite case: several launchers
-    /// onto the same system, where a private profile means signing in to it once per launcher and
-    /// again whenever a session expires.
-    /// <para>
-    /// Off by default, so the CLR default under <c>WhenWritingDefault</c> is the isolated
-    /// behaviour that shipped first — an existing launcher cannot be moved onto a profile it was
-    /// never signed in to by an upgrade.
+    /// Sharing is what a **new** launcher gets, because signing in once and having every launcher
+    /// onto the same system already signed in is what people expect; a private profile means signing
+    /// in per launcher, and again whenever a session expires. Isolation is still there for the
+    /// opposite case — two launchers as two accounts on the same site.
+    /// <para><b>The model default stays <c>false</c>, and new launchers are given <c>true</c> at
+    /// creation</b> (<c>LaunchersPage.AddLauncherButton_Click</c> and its web twin). It cannot be a
+    /// model default: <c>WhenWritingDefault</c> omits a property holding the CLR default, so a
+    /// <c>= true</c> initialiser would read as <c>true</c> for every launcher that never stored the
+    /// field — silently moving existing launchers onto a profile they were never signed in to, and
+    /// making <c>false</c> impossible to persist. Same reason <c>ShowTitle</c> is set at creation.
     /// </para>
     /// </remarks>
     [ObservableProperty]
     public partial bool WebSharedProfile { get; set; }
 
     /// <summary>
-    /// When true this web launcher shows a bookmark bar; when false it opens
-    /// <see cref="WebUrl"/> directly.
-    /// </summary>
-    /// <remarks>
-    /// An explicit choice rather than one inferred from how many bookmarks exist. Inferring it
-    /// meant adding a second bookmark silently changed what the tray icon did, and removing one
-    /// changed it back.
-    /// </remarks>
-    [ObservableProperty]
-    public partial bool WebUseBookmarks { get; set; }
-
-    /// <summary>
-    /// The bookmark opened as soon as the flyout is shown. Empty means none — the flyout opens
-    /// as just the bar, and nothing loads until a bookmark is picked.
-    /// </summary>
-    /// <remarks>
-    /// Held as a URL rather than an index so reordering the bar cannot silently change which
-    /// page opens, and so the CLR default (empty) means "none" under
-    /// <c>WhenWritingDefault</c> rather than accidentally meaning "the first one".
-    /// </remarks>
-    [ObservableProperty]
-    public partial string WebDefaultBookmarkUrl { get; set; } = "";
-
-    /// <summary>
     /// Where this web flyout opens when it has not been moved. See <see cref="WebAnchors"/>.
     /// </summary>
     /// <remarks>
-    /// Ranks below <see cref="WebFlyoutPosition"/>: a flyout the user has dragged somewhere opens
-    /// where they left it, so with <see cref="WebRememberPosition"/> on this decides the *first*
+    /// Ranks below <see cref="WebFlyoutPosition"/> when it holds
+    /// <see cref="WebAnchors.LastPosition"/>: a flyout dragged somewhere opens where it was left,
+    /// so that value decides the *first*
     /// open and nothing after it. Changing it clears the remembered position, or picking a corner
     /// would appear to do nothing at all.
     /// </remarks>
@@ -489,15 +492,16 @@ public partial class Launcher : ObservableObject
     public partial int WebAnchor { get; set; }
 
     /// <summary>
-    /// Keep a moved flyout where it was put, across dismissals and restarts.
+    /// Legacy: whether a dragged position outlived the visit, before that became
+    /// <see cref="WebAnchors.LastPosition"/> — an answer to "where does this open?" rather than a
+    /// flag on top of the answers.
     /// </summary>
     /// <remarks>
-    /// Off by default, which makes a move temporary: it holds while the flyout stays open, and
-    /// the next one anchors to the tray again. Some moves are "shove it aside for a minute" and
-    /// some are "this lives here now", and only the user knows which.
+    /// Read once by <see cref="MigrateWebModel"/>, which turns it into that anchor and clears it.
+    /// Not observable, and nothing else should read it. Still synced, so a launcher edited on a
+    /// machine running an older build still says it remembered its position when it gets here.
     /// </remarks>
-    [ObservableProperty]
-    public partial bool WebRememberPosition { get; set; }
+    public bool WebRememberPosition { get; set; }
 
     /// <summary>
     /// Screen position a web flyout was last moved to, as "x,y" in physical pixels.
@@ -530,19 +534,31 @@ public partial class Launcher : ObservableObject
     public partial bool WebLockSize { get; set; }
 
     /// <summary>
-    /// Keep every bookmark in its own live browser, so switching between them is a switch rather
-    /// than a navigation.
+    /// Hand a link that asks for a new window to the default browser instead of opening it in a
+    /// tab of this flyout.
     /// </summary>
     /// <remarks>
-    /// <para>Off (the default), a bar-mode launcher has one browser and clicking a bookmark
-    /// navigates it — cheap, and correct for a bar of pages you glance at. On, each bookmark keeps
-    /// its own: scroll position, a half-typed message, an open thread and a signed-in session all
-    /// survive flipping to another bookmark and back, exactly as browser tabs do.</para>
-    /// <para>The cost is the honest one: N browsers rather than one, so it is opt-in per launcher
-    /// and lives in Advanced. The launcher's hidden policy still governs all of them together.</para>
+    /// <para>Off (the default) a <c>target="_blank"</c> link, a <c>window.open</c> or a Ctrl-click
+    /// becomes another tab of the launcher, which is what a browser does and what keeps a signed-in
+    /// page's popups — an OAuth sign-in, a "compose in a new window" — working inside the flyout at
+    /// all. On restores the behaviour web launchers shipped with: the link leaves for the real
+    /// browser and the flyout stays on its one page.</para>
+    /// <para>Phrased as "in the browser" rather than "in tabs" so <c>false</c> is the default
+    /// behaviour, per the <c>WhenWritingDefault</c> rule.</para>
     /// </remarks>
     [ObservableProperty]
-    public partial bool WebBookmarksAsTabs { get; set; }
+    public partial bool WebLinksInBrowser { get; set; }
+
+    /// <summary>
+    /// Keep the tab bar on screen even while the launcher has only one tab.
+    /// </summary>
+    /// <remarks>
+    /// Off (the default) the bar appears as soon as there is a second tab and goes away again when
+    /// there is not, so a launcher that never opens one never pays for it. On is for a launcher
+    /// used as a small browser, where the "+" and the close buttons are wanted from the first page.
+    /// </remarks>
+    [ObservableProperty]
+    public partial bool WebAlwaysShowTabs { get; set; }
 
     /// <summary>
     /// Show only icons in the bookmark bar, without their labels.
@@ -563,10 +579,17 @@ public partial class Launcher : ObservableObject
     public bool IsWebLauncher => LauncherKinds.IsWeb(Kind);
 
     /// <summary>
-    /// True when the flyout should open as a bookmark bar rather than straight into a page.
+    /// True when the flyout should draw its bookmark bar: this launcher holds more than one page.
     /// </summary>
+    /// <remarks>
+    /// Not a setting, and deliberately so. One bookmark is the launcher's address and there is
+    /// nothing to pick between, so a bar would be a strip holding the page already on screen; two
+    /// is a choice, and a choice wants a bar. Adding the second — in settings, or with the star in
+    /// the flyout — is therefore the whole of "turn the bar on", which is one act instead of two
+    /// that would each be useless without the other.
+    /// </remarks>
     [JsonIgnore]
-    public bool HasWebBookmarkBar => IsWebLauncher && WebUseBookmarks && WebBookmarks.Count > 0;
+    public bool ShowsBookmarkBar => IsWebLauncher && WebBookmarks.Count > 1;
 
     /// <summary>Parses <see cref="WebFlyoutPosition"/>, or null when it has never been moved.</summary>
     public (int X, int Y)? GetWebFlyoutPosition()
@@ -577,19 +600,86 @@ public partial class Launcher : ObservableObject
         return (x, y);
     }
 
-    /// <summary>The bookmark to open on show, or null when the flyout should open as just the bar.</summary>
+    /// <summary>
+    /// The address this web launcher opens: its first bookmark.
+    /// </summary>
+    /// <remarks>
+    /// Position, not a stored pointer. A separate "which one opens" setting was tried and is
+    /// redundant once one address and a bar of them are the same thing — it could disagree with
+    /// the order on screen, and reordering the bar then changed nothing while a hidden field
+    /// decided the answer. First is a rule the user can see and can drag.
+    /// </remarks>
     [JsonIgnore]
-    public WebBookmark? DefaultWebBookmark =>
-        string.IsNullOrWhiteSpace(WebDefaultBookmarkUrl)
-            ? null
-            : WebBookmarks.FirstOrDefault(b => string.Equals(b.Url, WebDefaultBookmarkUrl, StringComparison.OrdinalIgnoreCase));
+    public string WebAddress => WebBookmarks.Count > 0 ? WebBookmarks[0].Url : "";
 
     /// <summary>
-    /// The address a web launcher opens when it is not showing a bar: its single bookmark if it
-    /// has exactly one, otherwise <see cref="WebUrl"/>.
+    /// Brings a launcher written before single-address and bookmark-bar launchers merged onto the
+    /// one model. Idempotent, and safe to run on a launcher that is already current.
     /// </summary>
-    [JsonIgnore]
-    public string ResolvedSingleWebUrl => WebUrl;
+    /// <remarks>
+    /// <para>Run on load <em>and</em> on every sync merge, not just on load: a launcher edited on a
+    /// machine still running the older build arrives over the wire carrying the old fields, so the
+    /// one-time-at-startup migration would miss it and the launcher would come back with no
+    /// address at all.</para>
+    /// <para>Two moves, in this order. <c>WebUrl</c> becomes the first bookmark, because a
+    /// single-address launcher's address is what it opens. Then whichever bookmark
+    /// <c>WebDefaultBookmarkUrl</c> named is moved to the front, because that field said the same
+    /// thing for bar launchers and position now says it for both.</para>
+    /// </remarks>
+    public void MigrateWebModel()
+    {
+        if (!IsWebLauncher) return;
+
+        if (!string.IsNullOrWhiteSpace(WebUrl))
+        {
+            var existing = WebBookmarks.FirstOrDefault(
+                b => string.Equals(b.Url, WebUrl, StringComparison.OrdinalIgnoreCase));
+
+            if (existing != null) WebBookmarks.Move(WebBookmarks.IndexOf(existing), 0);
+            else WebBookmarks.Insert(0, new WebBookmark(HostOfUrl(WebUrl), WebUrl));
+
+            WebUrl = "";
+        }
+
+        // Remembering a dragged position was a flag beside the anchor and is now one of the
+        // anchor's own values, so a launcher that had it on is one anchored to its last position.
+        // WebFlyoutPosition is kept — it is the position in question.
+        if (WebRememberPosition)
+        {
+            WebAnchor = WebAnchors.LastPosition;
+            WebRememberPosition = false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(WebDefaultBookmarkUrl))
+        {
+            var wanted = WebBookmarks.FirstOrDefault(
+                b => string.Equals(b.Url, WebDefaultBookmarkUrl, StringComparison.OrdinalIgnoreCase));
+
+            if (wanted != null) WebBookmarks.Move(WebBookmarks.IndexOf(wanted), 0);
+            WebDefaultBookmarkUrl = "";
+        }
+    }
+
+    /// <summary>
+    /// Legacy: the bookmark a bar launcher opened on. Read once by <see cref="MigrateWebModel"/>,
+    /// which moves that bookmark to the front and clears this.
+    /// </summary>
+    /// <remarks>
+    /// Not observable and not a property anything should read — it exists so old settings and
+    /// launchers synced from an older build still say which page they opened at.
+    /// </remarks>
+    public string WebDefaultBookmarkUrl { get; set; } = "";
+
+    /// <summary>Host of a URL, for naming a bookmark migrated out of <see cref="WebUrl"/>.</summary>
+    private static string HostOfUrl(string url)
+    {
+        string trimmed = (url ?? "").Trim();
+        if (trimmed.Length > 0 && !trimmed.Contains("://", StringComparison.Ordinal))
+            trimmed = "https://" + trimmed;
+
+        try { return new Uri(trimmed).Host; }
+        catch (UriFormatException) { return url ?? ""; }
+    }
 
     /// <summary>
     /// The launcher items (shortcuts, groups, headings, column breaks) in this launcher.

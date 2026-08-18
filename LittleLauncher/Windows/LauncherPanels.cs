@@ -61,7 +61,7 @@ internal static class LauncherPanels
         // Bar-mode web launchers warm up too — the bar is XAML, not a browser. A single-address
         // web launcher still builds nothing: its first frame is the page, so there would be
         // nothing to pre-render but an empty window.
-        WebFlyoutWindow.WarmUp(owner, all.Where(l => l.HasWebBookmarkBar));
+        WebFlyoutWindow.WarmUp(owner, all.Where(l => l.ShowsBookmarkBar));
 
         // The one kind that does start a browser up front, because the user asked for it: a
         // launcher set to keep running is one whose notifications are meant to arrive without it

@@ -120,23 +120,38 @@ model default, which would have flipped it on for every existing launcher.
   rest of that visit, and **that reveal is window state, never written back to this property** —
   see [web-launchers.md](web-launchers.md)
 - `WebSharedProfile` (`bool`) — pool cookies and logins in `WebProfiles\Shared` with every other
-  launcher that sets it, instead of a private per-launcher folder. Defaults `false`, which is both
-  the safe direction under `WhenWritingDefault` and the behaviour that shipped first — an upgrade
-  must not move a launcher onto a profile it was never signed in to
-- `WebAnchor` (`int`) — where the flyout opens when it has not been moved: `WebAnchors.Tray`
-  (0, default) or one of the nine corner/edge/centre positions. Outranked by `WebFlyoutPosition`,
-  so with `WebRememberPosition` on it decides only the first open; changing it clears
-  `WebFlyoutPosition` so the new choice actually takes effect
+  launcher that sets it, instead of a private per-launcher folder. **What a new launcher gets**, but
+  set to `true` at *creation* rather than as a model default: `WhenWritingDefault` omits a property
+  holding the CLR default, so a `= true` initialiser would read as `true` for every launcher that
+  never stored the field — silently moving existing launchers onto a profile they were never signed
+  in to, and making `false` impossible to persist. This one is not merely cosmetic to get wrong; it
+  decides which folder a launcher's cookies live in. Same treatment as `ShowTitle`
+- `WebAnchor` (`int`) — **the whole answer to "where does this open?"**: `WebAnchors.Tray`
+  (0, default), one of the nine corner/edge/centre positions, or `WebAnchors.LastPosition` (10) for
+  "wherever you last dragged it". Those are three mutually exclusive answers, which is why they are
+  one setting; see `WebAnchors.LastPosition` for the dead cell the old `WebRememberPosition` flag
+  produced beside it. Changing it to anything but `LastPosition` clears `WebFlyoutPosition`, so the
+  new choice actually takes effect
+- `WebRememberPosition` (`bool`) — **legacy**, and deliberately not `[ObservableProperty]`. Whether a
+  dragged position outlived the visit. `MigrateWebModel` turns it into `WebAnchors.LastPosition` and
+  clears it. Still synced, so an older build's launcher still says so when it arrives
 - `WebLockSize` (`bool`) — hold the flyout at its configured size, so dragging its edges only
   lasts while it is open. **Surfaced as "Remember Size", which is on by default — this property is
   its inverse**, which is the only phrasing that survives `WhenWritingDefault`; a `bool` defaulting
   to `true` cannot be turned off. `WebFlyoutWidth`/`WebFlyoutHeight` are then set deliberately, in
   launcher settings, and a drag cannot overwrite them
-- `WebBookmarksAsTabs` (`bool`) — give every bookmark its own live browser so switching never
-  loses its place, instead of navigating a single one. Bar-mode only; costs one browser per
-  bookmark, so it is opt-in and off by default
+- `WebLinksInBrowser` (`bool`) — hand a link that asks for a new window to the default browser
+  instead of opening it in a tab of the flyout. Defaults `false` (a tab), which is both the new
+  behaviour and the direction that survives `WhenWritingDefault` — hence "in browser" rather than
+  "in tabs". In launcher settings under **Advanced**; it was in the flyout's "…" menu and nowhere
+  else, which is neither discoverable nor a per-moment decision. See
+  [web-launchers.md](web-launchers.md) for why the browser's own `NewWindowRequested.NewWindow` is
+  used rather than the URI
+- `WebAlwaysShowTabs` (`bool`) — keep the tab strip on screen with only one tab. Defaults `false`,
+  which is not "no tabs": the strip appears on its own as soon as there is a second one, so this
+  reads as "keep it" and is what a launcher used as a small browser wants
 - `WebBookmarkIconsOnly` (`bool`) — hide the labels in the bookmark bar, leaving just the
-  favicons; names become tooltips rather than being discarded. Bar-mode only, and edited in
+  favicons; names become tooltips rather than being discarded. Only meaningful with a bar, and edited in
   the Bookmarks section rather than Advanced, because Advanced is shown for single-address
   launchers too. It is part of the bar's rebuild signature, so toggling it re-renders
   rather than handing back buttons built for the other mode
@@ -167,14 +182,24 @@ model default, which would have flipped it on for every existing launcher.
   `WhenWritingDefault`. A request answered by this toggle is **not** saved into the WebView2
   profile, so turning it off returns the launcher to asking — see
   [web-launchers.md](web-launchers.md)
-- `WebUseBookmarks` (`bool`) — bar of bookmarks instead of a single address. Defaults `false`, so
-  the safe direction under `WhenWritingDefault`
-- `WebDefaultBookmarkUrl` (`string`) — which bookmark opens with the flyout; empty means none, and
-  it is a URL rather than an index so reordering cannot change what opens
-- `WebBookmarks` (`ObservableCollection<WebBookmark>`) — the bar's entries. `WebBookmark`
+- `WebBookmarks` (`ObservableCollection<WebBookmark>`) — **the launcher's content**, not an extra:
+  the first entry is the address it opens and the rest are the bar. `WebBookmark`
   (`Models/WebBookmark.cs`) is `Name` + `Url` + `IconPath`, observable because the icon arrives
   after the bookmark does
-- `IsWebLauncher` / `HasWebBookmarkBar` / `DefaultWebBookmark` — `[JsonIgnore]` conveniences
+- `WebUrl` (`string`) — **legacy**. The single address a web launcher used to hold, before one
+  address and a bar of them became the same thing. `MigrateWebModel` turns it into the first
+  bookmark and clears it; nothing else should read it. Still synced, because a machine on an older
+  build goes on writing it
+- `WebDefaultBookmarkUrl` (`string`) — **legacy**, and deliberately not `[ObservableProperty]`:
+  which bookmark a bar launcher opened on. `MigrateWebModel` moves that bookmark to the front and
+  clears it, because position is the answer now — one the user can see and drag
+- `IsWebLauncher` / `ShowsBookmarkBar` / `WebAddress` — `[JsonIgnore]` conveniences.
+  **`ShowsBookmarkBar` is `WebBookmarks.Count > 1` and is deliberately not backed by a setting:**
+  one bookmark is the launcher's address and there is nothing to pick between, two is a choice.
+  Adding the second page and wanting somewhere to click it are the same act, so a toggle would be
+  a second step that is useless without the first.
+  `MigrateWebModel()` is the one-way door onto this model and runs both on load
+  (`SettingsManager.NormalizeAllGlyphs`) and on every sync merge (`LauncherPayload.MergeInto`)
 
 **Why every one of those defaults to 0 / false:** `WhenWritingDefault` omits a property holding the
 CLR default, so a non-zero field initialiser is silently restored on the next load. Numeric settings

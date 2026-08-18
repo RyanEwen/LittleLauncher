@@ -90,11 +90,10 @@ Measured end to end: opening the flyout started six `msedgewebview2` processes, 
 suspended, and the idle timer returned the process count to exactly its pre-open baseline. Reopening
 after that rebuilds from nothing and lands at the same anchored position.
 
-A web launcher can also hold a set of bookmarks instead of a single address, in which case the
-flyout opens as a browser-style bar along the bottom and expands onto whichever bookmark is
-clicked — several web launchers in one tray icon. Expansion snaps rather than animating; see
-[.claude/docs/web-launchers.md](.claude/docs/web-launchers.md) for why, and for the single-source
-rule that keeps "which URL is showing" answerable in one place.
+A web launcher holds a list of bookmarks; the first is the page it opens and the rest show as a
+browser-style bar along the bottom — several web launchers in one tray icon. See
+[.claude/docs/web-launchers.md](.claude/docs/web-launchers.md) for the single-source rule that keeps
+"which URL is showing" answerable in one place.
 
 The flyout is resized by dragging its edges — invisible XAML grips, since a window with no
 non-client area has no system sizing border to grab — and the dragged size is persisted onto the
@@ -107,13 +106,48 @@ the configured size again. That is a different thing from page fullscreen, which
 which takes the whole monitor over the taskbar, and which hides the chrome for the duration.
 
 The header's **"…" menu** carries the per-launcher options that are per-moment decisions — window
-mode, whether it closes on focus loss, the pin, address bar, reload on open, where it opens and
-whether drags to its position and size are remembered — with launcher settings one item below them.
+mode, whether it closes on focus loss, the pin, bookmarking the page on screen, the tab and address
+bars, where it opens (including "where you last dragged it") and whether a resize is remembered —
+with launcher settings one item below them. Reload on open and whether links go to the real browser
+were here and are now Advanced-only: how a launcher treats a reload or a link is settled once, not
+reconsidered while looking at it.
 
-An **address bar** can sit under the header (`Launcher.WebShowAddressBar`, off by default, in
-Advanced). Off, the header's link button reveals it for the rest of that visit — a reveal which is
-window state dropped on dismissal, exactly like maximize, so clicking it never rewrites the
-launcher.
+An **address bar** can sit under the header (`Launcher.WebShowAddressBar`, off by default). It is
+switched on from that menu; there is no separate reveal-for-this-visit button, because one
+affordance beats two that differ only in how long they last.
+
+**A web launcher is a list of bookmarks whose first entry is the address it opens.** "A single web
+address" is simply a launcher with one bookmark; add a second — in settings, or with the star in the
+flyout — and they appear as a bar along the bottom. There is no mode switch between the two and no
+setting for the bar: one page has nothing to pick between, two does. A launcher written before
+the two merged is brought forward by `Launcher.MigrateWebModel`, which runs on load *and* on every
+sync merge — the older build goes on sending the legacy fields for as long as another machine has
+not been upgraded.
+
+The bar behaves like a browser's and holds no state of its own
+(`Windows/WebFlyoutWindow.Bookmarks.cs`): clicking a bookmark loads it in the tab in front, a
+middle-click or a Shift/Ctrl-click opens it in a new one, clicking the bookmark for the page already
+showing loads it again, and nothing in the bar is highlighted — what is showing is the tab's
+business. Extra browsers are only ever made by a gesture that asks for one.
+
+That bar is also **edited from itself**, not only from settings: a star at the end of the address
+bar adds or removes whatever the address box shows — the page you are on, or an address you have
+typed but not yet visited — and the "…" menu carries the same action, since the address bar is off
+by default. Right-clicking a bookmark opens it here or in a new tab, renames it, points it somewhere
+else, copies or opens its address, makes it the one that opens by default, moves it or removes it;
+and dragging one along the bar reorders it, with an accent caret marking where it will land. Neither
+editing nor deleting a bookmark disturbs the page on screen. Launcher settings still holds the full
+list, which is the right shape for a launcher being set up rather than one being used. See
+[.claude/docs/web-launchers.md](.claude/docs/web-launchers.md).
+
+**Every browser a web launcher owns is a tab** (`Windows/WebFlyoutWindow.Tabs.cs`), and a link
+asking for a new window becomes one instead of leaving for the real browser — using the browser's
+own `NewWindowRequested.NewWindow`, so an OAuth popup keeps its opener and can hand its result back.
+A strip between the header and the address bar switches between them, appearing on its own once
+there are two. The load-bearing distinction is **who chose the address**: tabs the launcher owns
+(its own page) may write its icon and be re-navigated when its settings change; a tab opened from a
+link — or from a middle-clicked bookmark — is the user's own place and nothing configured may move
+it. See [.claude/docs/web-launchers.md](.claude/docs/web-launchers.md).
 
 Web launchers also get a **Start Menu shortcut each**, in a `Programs\Little Launcher\` group kept
 in sync by `Services/StartMenuShortcutService`, so they can be opened from Start search, PowerToys

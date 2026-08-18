@@ -64,7 +64,7 @@ This is the whole point of the feature, so it is the thing not to regress.
   parked off the virtual screen, loaded normally — *visible*, so the page defers nothing a
   background tab would — then put through `ParkOffScreen` once it settles. It is **staggered**
   (10s, then one every 6s) because this runs at sign-in, and a settle timeout collapses a page that
-  never finishes loading. Bar-mode launchers are skipped: until a bookmark is picked there is no
+  never finishes loading. Launchers are skipped when: until a bookmark is picked there is no
   page to keep running. `NeedsPreload` also skips anything already loaded, because warm-up runs
   again on every launcher change — including every auto-sync.
 - The **window** does outlive a dismissal, parked off the virtual screen like the flyout. An empty
@@ -128,8 +128,9 @@ time it opened on a smaller screen.
 
 ### Remember Size — locking a size in
 
-**Remember Size** (Advanced, beside Remember Position) is on by default and is what makes a drag
-stick. Turned off, the flyout can still be dragged to any size and stays there for as long as it is
+**Remember Size** (beside Opens At) is on by default and is what makes a resize stick. It stays a
+toggle where position became a value in a list, because size has no equivalent of "top left" to
+collide with — there is nothing for it to be mutually exclusive *with*. Turned off, the flyout can still be dragged to any size and stays there for as long as it is
 open, but nothing is written: the next open is at `WebFlyoutWidth` × `WebFlyoutHeight` as set in
 launcher settings. That is how a size is pinned down — set it in the form, switch this off, and no
 amount of dragging can drift it afterwards.
@@ -176,67 +177,9 @@ Three things follow from that, and each is a guard rather than a convention:
   launcher, a bookmark's favicon fetch completing included, so without the guard a maximized
   flyout snapped back to its normal size with no user action at all. Same trap as
   `CurrentTargetUrl` below, one field over.
-- **`ApplyRootAnchor` releases the bar-mode fixed height.** That height exists to make expansion a
-  pure reveal; held at the launcher's configured size while the window is screen-sized, it clips
-  the page to the size the flyout used to be. `CollapseToBar` exits maximize first, geometry
-  included — the collapse keeps the current width, and a bar as wide as the screen is not a bar.
-
-It is *not* the same thing as page fullscreen (`ApplyFullScreen`), which is entered by the page,
-takes the whole monitor over the taskbar, hides the chrome and squares the corners. Maximize keeps
-the header, the corners and the taskbar — the tray icon it was opened from stays reachable. The
-two compose in the obvious direction: a page going fullscreen from a maximized flyout restores to
-maximized afterwards.
-
-## Restoring keyboard focus
-
-Dismissing the flyout while typing and reopening it used to land the caret nowhere: the show path
-calls `SetFocus` on the flyout's top-level window and nothing routes that into the WebView2, so the
-page came back unfocused and the user had to click into it again.
-
-Chromium keeps everything else by itself — measured, a caret left at offset 9 in a textarea came back
-at offset 9 across a hide/show, with `document.activeElement` unchanged. So the fix is only to hand
-focus back: `RestorePageFocus` calls `Focus(FocusState.Programmatic)` on the control once it is
-visible, queued rather than inline because focusing a control in the same layout pass that revealed
-it does not take.
-
-**Only when the page had focus before** (`_pageHadFocus`, armed by the browser's `GotFocus`). That
-restriction is what keeps it free: focus in the page means Escape belongs to the page — `WM_KEYDOWN`
-goes to the browser's child windows and never reaches this window's subclass — so restoring it
-unconditionally would quietly take Escape-to-dismiss away from every launcher. Restoring it only for
-someone who was already typing trades the key away exactly where they had already given it up.
-
-Skipped while a permission prompt is up: a question that cannot be typed into is worse than a caret
-that has to be clicked back into.
-
-## Opening launcher settings from the flyout
-
-The header's gear runs `OpenLauncherSettingsAsync`, which follows the item flyout's `RunModalAsync`
-contract: pin the flyout (`_isModalOpen`), **drop always-on-top** — owner relationship alone does
-not beat a topmost owner, so the settings window would open behind the flyout that spawned it —
-then restore both, re-apply the launcher's settings, and hand activation back so the flyout can
-dismiss itself again.
-
-Everything after the `await` must tolerate the window being gone: switching `Kind` to Shortcuts in
-that window disposes this very flyout.
-
-## The header
-
-Back / forward / reload on the left, where a browser puts them — they act on the page, not on the
-flyout — and on the right, launcher settings / show address / open in browser / pin / maximize /
-close: the page actions first, then the two that decide how the flyout behaves as a window. Back is
-driven by `HistoryChanged` rather than `NavigationCompleted`: a dashboard is usually a single-page
-app, so most of its navigation is history pushed by script with no document load to hang the update
-off.
-
-Reload moved to the nav group for the same reason Back is there in the first place, and the two
-groups now divide cleanly by what they act on. Only the reload button carries the trailing margin
-that separates the nav group from the title; keep that on whichever button ends up last.
-
-**Close tints its glyph red on hover** (`BuildHeaderButton`'s `redOnHover`) — the glyph, not a
-title-bar-style red fill behind it, which would be the only solid shape in a header of flat
-transparent buttons and reads as an application's close rather than a flyout's. Both close buttons
-take it: the header's and the bookmark bar's. Two details:
-
+- **(Historical) the root grid used to be pinned to a fixed height** so that growing a collapsed
+  bar into a page was a pure reveal rather than a reflow. There is no collapsed state now, so
+  `ApplyRootAnchor` and its maximize/fullscreen escape hatches are gone with it.
 - It overrides `ButtonForegroundPointerOver` / `ButtonForegroundPressed` on the **button's own**
   `Resources`, the same mechanism the disabled state above uses — the templated parent is in the
   lookup chain, so a `ThemeResource` in the default template resolves there first, and the
@@ -254,10 +197,26 @@ data folder does not isolate them.
 ## The header's More menu
 
 `WebFlyoutWindow.MoreMenu.cs`. The header's "…" replaced the gear: it opens a menu of the
-per-launcher options whose right value is a per-moment judgement — Regular window, Close when focus
-is lost (window mode only), the pin, Address bar, Reload when opened, **Opens at** (a submenu of
-radio items, being a ten-way choice rather than a toggle), Remember position changes, Remember size
-changes — with **Launcher settings…** one item below them.
+per-launcher options whose right value is a **per-moment judgement** — Regular window, Close when
+focus is lost (window mode only), the pin, add/remove this page from the bookmarks, **Tab bar**,
+**Address bar**, **Opens at** (a submenu of radio items, being an eleven-way choice rather than a
+toggle — "Where you last dragged it" is one of its values, not a separate toggle), Remember size
+changes — with **Keyboard shortcuts**, **Launcher settings…** and **App settings…** at its foot.
+
+App settings dismisses a flyout on its way, as the item flyout’s context menu does: the flyout is
+always-on-top and would otherwise sit over the window it just opened. A regular window is left
+alone — it is not topmost unless pinned, and closing the page the user still has open would be a
+steep price for reaching a settings window.
+
+**Per-moment is the whole membership test, and two items failed it.** Reload when opened and Open
+links in the browser were here and are now Advanced-only: how a launcher treats a reload or a link
+is a property of the launcher, settled once when it is set up, not something to reconsider while
+looking at it. Open links in the browser had no settings row at all before it was demoted, so it was
+unreachable for anyone who had never opened this menu — worth checking when moving an item *out* of
+here, because the menu is where several of these were born.
+
+Tab bar is named for what turning it *on* does, not for the default it switches off: it reads as
+"keep it", because the strip already appears on its own with a second tab.
 
 The address bar's header button was removed in favour of its menu item. That button revealed the
 bar for one visit without changing the launcher, and the temporary state went with it: one
@@ -320,6 +279,118 @@ reveals something already on screen reads as broken.
   `NavigationCompleted` pair as Back and Forward — and the tab switch in `ActivateTabAsync`, which
   already calls it. **Never while the box has focus**: `HistoryChanged` fires freely on a
   single-page app, and overwriting a half-typed address is indistinguishable from a bug.
+
+## Tabs
+
+`WebFlyoutWindow.Tabs.cs`. **Every browser this flyout owns is a tab** — its own page included —
+and `_webView` always points at the active one. That is what lets zoom, navigation, the header, the
+address bar, permissions, notifications and the worker bridge carry on operating on "the browser"
+without any of them learning about tabs.
+
+There are two kinds, and the difference is **who chose the address**:
+
+| | Home tab (`HomeKey` non-null) | Link tab (`HomeKey` null) |
+|---|---|---|
+| Stands for | The launcher's own address | A page the user or the page asked for |
+| Key | `PrimaryTabKey` | — |
+| May write the launcher's / a bookmark's icon | Yes | **Never** |
+| Re-navigated by `ApplyLauncherChanges` | Yes | **Never** |
+| Reload On Open applies | Yes (single-address only) | No |
+
+That table is the whole safety story, and both "never"s are the same trap `CurrentTargetUrl` exists
+for, one tab over. A favicon fetch completing runs `ApplyLauncherChanges`, so without the guard a
+page the user opened from a link would be yanked to the launcher's own address **with no user action
+at all** — and a site they merely passed through would rewrite the tray icon and the taskbar pin.
+
+### Opening a link in a tab
+
+**A middle-click opens behind, and the gesture does not arrive with the request.**
+`CoreWebView2NewWindowRequestedEventArgs` carries `Uri`, `IsUserInitiated` and `WindowFeatures` —
+no modifier or button state — so nothing on the event separates "middle-clicked this link" from
+"clicked this link", which a browser treats oppositely. The page reports the gesture instead: the
+shortcut bridge posts `bgIntent` on a mousedown that is a middle button or a Ctrl/Shift-click, and
+`WantsBackgroundWindow` pairs it to the next new-window request within a second. Nothing is
+prevented in the page — it does exactly what it would have done, and only where the result lands
+changes.
+
+A **sized** window is never sent behind, whatever the intent flag says: an OAuth popup is a
+`window.open` with width and height, so it arrives with `WindowFeatures.HasSize`, and opening one
+behind the page that raised it leaves the user waiting on a window they cannot see. It follows an
+ordinary left-click and so fails the gesture test anyway — the features check is the belt to that
+pair of braces, because this failure is invisible until someone cannot sign in.
+
+`NewWindowRequested` used to be answered with `Handled = true` + `OpenExternally`, because a flyout
+had nowhere to put a second page. It now becomes a tab, unless `Launcher.WebLinksInBrowser`
+("Open links in the browser", in the "…" menu) restores the old behaviour.
+
+- **The browser's own `e.NewWindow` is used, not `e.Uri` + `Navigate`.** Handing WebView2 the new
+  browser keeps the opener relationship, so `window.opener.postMessage` works and an **OAuth sign-in
+  popup can hand its result back to the page that raised it**. Reading the URI and navigating a tab
+  by hand severs that, and the sign-in simply never completes — which is the failure that makes
+  this worth the extra code.
+- **The request is held open by a deferral**, because building a browser is asynchronous and the
+  answer *is* the browser. Every path completes it, including both failure paths, which fall back to
+  the external browser — a deferral never completed leaves the page waiting forever, the same rule
+  the permission prompts follow.
+- **`window.close()` closes the tab, not the flyout** — for a link tab. Only a page the launcher
+  itself opened speaks for the whole window. OAuth popups close themselves, so without this
+  splitting the handler, signing in dismissed the launcher at the moment it succeeded.
+
+### The strip
+
+A row of chrome between the header and the address bar, for the reason both of those are rows and
+not overlays: anything floating over a hosted browser depends on how WebView2 routes input, and a
+tab you cannot click is worse than one that costs a little height. It eats into the page rather
+than the window, so no geometry arithmetic depends on how tall it comes out.
+
+- **It appears on its own** once there is a second tab and goes away again when there is not, so a
+  launcher that never opens one never pays for it. `Launcher.WebAlwaysShowTabs` pins it on — which
+  is also the only way to reach the "+" without following a link first.
+- **Its visibility is gated on the header's**, exactly like the address bar's, so collapsing to a
+  bookmark bar and a page going fullscreen carry it with them without a line at each call site.
+- **Chips are built once per tab and kept on the tab**, never rebuilt per refresh — a rebuild would
+  throw away a decoded favicon and a measured label on every switch, which is the mistake the
+  bookmark bar's rebuild signature exists to avoid. `DestroyTab` drops them, so nothing survives its
+  browser (see the container-leak note in [drag-drop.md](drag-drop.md) for why that matters in a
+  window that lives for the whole session).
+- **A chip's favicon is never written to disk.** It is read into a byte array and handed to the
+  bitmap through a stream of our own — nothing that came out of the browser is left for the
+  finalizer — and lives exactly as long as the tab. Only home tabs write a file, and only onto the
+  launcher or the bookmark they stand for.
+- **The strip is the only thing that says which page is in front.** The bookmark bar used to tint
+  the active bookmark and had to suppress it whenever a link tab was showing; that whole rule is
+  gone with the tint, because the bar was claiming to know something only the tab knew. Clicking a
+  bookmark now loads it wherever you are, so there is nothing for the bar to be right or wrong
+  about.
+- **The active chip is marked the Fluent way** — a quiet raised surface
+  (`LayerFillColorDefaultBrush`), a 2px accent underline, and the inactive chips at 0.6 opacity.
+  A solid `AccentFillColorDefaultBrush` was tried first and is wrong here: across a strip of tabs it
+  is a block of colour sitting directly above the page it belongs to, and it shouts. Dimming carries
+  the favicon with it, which is the point — an inactive tab should read as further away rather than
+  merely as a different colour, and that is what lets the underline be a hairline. The underline
+  lives **inside**
+  the button's content, in a fixed 2px row, so appearing cannot widen the chip or shift the strip —
+  the same non-reflowing rule the flyout's edit-mode affordances follow.
+
+### Every shared-chrome handler asks `IsActiveCore` first
+
+A background tab navigates on its own — a chat app pushing history, a dashboard refreshing — so
+`NavigationStarting`, `HistoryChanged`, `NavigationCompleted`, `ProcessFailed` and
+`ContainsFullScreenElementChanged` all check whether the browser raising them is the one on screen
+before touching the status overlay, the back/forward buttons, the address box or the window's
+geometry. Without it a hidden tab drives the header of a page nobody is looking at — and a hidden
+tab going fullscreen would resize the window.
+
+The two things that are *per tab* and so run either way: the chip's title and icon, and
+`ApplyZoom(core)`, which takes its browser explicitly so a background tab re-applies its own
+document's zoom rather than the active tab's.
+
+### Closing
+
+Closing the last tab is the same gesture as closing a browser's last tab: the launcher goes
+back to just its bar, anything else dismisses the flyout. Both leave the launcher with no browser at
+all, which the next open rebuilds — so closing a **home** tab is simply "unload this", and the
+bookmark or the tray icon brings it straight back.
 
 ## Regular-window mode, and why the taskbar and Alt-Tab are one switch
 
@@ -459,120 +530,220 @@ Two mechanisms, doing different jobs:
   channel that reaches those users; a Windows toast would not, because `AppNotificationManager`
   is registered for unpackaged builds only.
 
-## Bookmark bars
+## One kind of web launcher
 
-A web launcher shows either **one address** or **a bar of bookmarks**, chosen explicitly with
-`Launcher.WebUseBookmarks`. It is a stored choice, not one inferred from how many bookmarks exist:
-inferring it meant adding a second bookmark silently changed what the tray icon did, and deleting
-one changed it back.
+A web launcher is a **list of bookmarks whose first entry is the address it opens**. "A single
+address" is a launcher with one bookmark. There is no mode switch, and no `WebUseBookmarks`.
 
-In bar mode the flyout opens as just the bar — a strip along the bottom, browser-style: 16px icon,
-label beside it, centred, scrolling horizontally when there are more than fit. Clicking a bookmark
-expands the flyout onto that page; clicking the one already showing collapses it again.
+| Concept | Where it lives |
+|---|---|
+| The page the tray icon opens | `Launcher.WebAddress` — `WebBookmarks[0].Url` |
+| Whether the strip is drawn | `Launcher.ShowsBookmarkBar` — more than one bookmark, and nothing else |
+| What is on screen right now | The tab. Never the launcher, never the bar |
 
-| State | Window | Browser |
+**First place is a rule the user can see and can drag.** A stored "which one opens" pointer
+(`WebDefaultBookmarkUrl`) was tried and is redundant once the two modes are one: it could disagree
+with the order on screen, so reordering the bar changed nothing while a hidden field decided the
+answer. The bar's context menu therefore carries **Open the launcher here**, which is a move to the
+front, rather than a checkbox.
+
+**The bar appears at the second bookmark, and there is no setting for it.** With one there is
+nothing to pick between, and the strip would hold the address the launcher already opened at.
+Adding the second page — in settings, or with the star in the flyout — *is* "turn the bar on"; a
+toggle beside it would be a second step that does nothing without the first, and a first step that
+does nothing without the second.
+
+This is not the mode-inferred-from-count trap the old `WebUseBookmarks` guarded against. That flag
+existed because crossing the threshold changed **what the tray icon opened**; now it changes only
+what is drawn under the page, and the page is the same either way.
+
+### Migration
+
+`Launcher.MigrateWebModel()` brings a launcher written before the merge onto this model: `WebUrl`
+becomes the first bookmark, then whichever bookmark `WebDefaultBookmarkUrl` named is moved to the
+front. Both legacy fields are cleared. It is idempotent.
+
+It runs from **two** places, and needs both:
+
+- `SettingsManager.NormalizeAllGlyphs` — after a JSON load and after the legacy XML migration.
+- `LauncherPayload.MergeInto` — after **every** sync merge. A launcher edited on a machine still
+  running the older build arrives over the wire carrying `WebUrl` and no bookmarks; a
+  once-at-startup migration would miss it and the launcher would land here with no address at all.
+  This is why `WebUrl` and `WebDefaultBookmarkUrl` are still synced.
+
+### Every browser is asked for
+
+There is no setting that gives each bookmark its own browser. `WebBookmarksAsTabs` ("Treat as Tabs")
+is gone: it made a plain click on a bookmark mean "switch to its tab", so the bar could not do the
+one thing a bookmarks bar does. Extra browsers are now made by the gestures that ask for one — a
+middle-click, a Shift/Ctrl-click, **Open in new tab**, the "+", or a page opening a window — which
+puts the cost and the gesture in the same place, one page at a time.
+
+### The bar holds no state
+
+
+It opens pages. It does not own the one that is open, mark it, or close it — the same contract a
+browser's bookmarks bar has, and the reason there is no active-bookmark field anywhere in the class.
+
+| Gesture | What happens |
+|---|---|
+| Click | Loads it in the tab in front — *whichever* tab that is, a link tab included |
+| Click the bookmark for the page already showing | Loads it again. It does **not** collapse or close anything |
+| Middle-click, Shift-click, Ctrl-click, **Open in new tab** | Opens it in a tab of its own |
+| Remove the bookmark for the page showing | Nothing happens to the page. It does change where the launcher opens if it was the first one |
+
+An earlier version toggled: clicking the active bookmark collapsed the flyout back to a strip, and
+the bar tinted whichever bookmark was showing. Both are gone. They made the bar a mode switch that
+happened to navigate, and the tint had to be suppressed whenever a link tab was in front — a rule
+that only existed because the bar was claiming to know something the tab actually knew.
+
+**There is no collapsed state.** A launcher used to open as a bare 34px strip and grow when a
+bookmark was clicked; with one mode and an address that always exists, nothing could ever put it
+back, so `_isExpanded`, `ExpandToContent`/`CollapseToBar`, `ApplyRootAnchor`,
+`ApplyExpansionGeometry`, `StretchRootDuringResize` and `PreRenderBarOffScreen` are all gone. The
+window is one size — the launcher's — and the bar is a row inside it. The strip's own settings and
+close buttons went with it: they existed because a collapsed bar was the whole window and had no
+header.
+
+**What opens on show**, in priority order: a tab that is still alive (which settles it outright —
+returning a live page to the launcher's address would throw away where the user was), then
+`_rememberedUrl`, then `Launcher.WebAddress`. A launcher with no bookmarks at all has nothing to
+open and is told so.
+
+`_rememberedUrl` is where the launcher's **own tab was last explicitly sent** — by a bookmark click
+or the address box, and by nothing else. It is deliberately *not* written from inside `Navigate`,
+which is what keeps "empty" meaning **the user has not steered this launcher anywhere**: that is the
+state in which a settings change to the launcher's address may still move the page, while a page the
+user chose is left alone. Session state, not settings — it survives an idle unload, which is the
+point, and not a restart. Closing the last tab clears it.
+
+### Editing the bar from the flyout
+
+`Windows/WebFlyoutWindow.Bookmarks.cs` owns the bar and every way it is edited from inside the
+flyout. Launcher settings still holds the full list, and for a launcher being set up that is the
+right place — but the moments that *produce* a bookmark all happen with the page on screen, and
+walking to a settings window and back to act on one is the whole cost.
+
+| Gesture | Where | What it does |
 |---|---|---|
-| Collapsed | Bar height only | None — nothing loads until a bookmark is picked |
-| Expanded | Full configured height | Loaded, showing the active bookmark |
+| Star at the end of the address bar | Address bar (off by default) | Adds or removes whatever the **address box shows** |
+| "Add to / Remove from the bookmarks bar" | The header's "…" menu | The same action, without needing the address bar on |
+| Right-click a bookmark | The bar | Open, Open in new tab, Rename, Edit address, Copy address, Open in browser, Opens by default, Move left/right, Remove |
+| Drag a bookmark | The bar | Reorders it, with an accent caret marking where it lands |
 
-**What opens on show**, in priority order: the bookmark that was open when it was last dismissed,
-then `WebDefaultBookmarkUrl`, then nothing (just the bar). Collapsing clears the remembered
-bookmark — that is an explicit "close this page", and reopening onto something just closed is the
-wrong kind of memory. The default is stored as a URL rather than an index, so reordering the bar
-cannot silently change which page opens, and empty naturally means "none".
+Rules worth not rediscovering:
 
-Collapsing is treated as hidden for the browser: it gets the same `ApplyHiddenPolicy` as a
-dismissal rather than being left running behind a bar.
+- **The star acts on the address box, not on the live page.** The two differ only while the box is
+  being typed into, and at that moment what is on screen is no longer what the user means — so
+  typing an address and starring it without visiting it first works, and is the same gesture. The
+  box's `TextChanged` keeps the glyph honest as it is typed; `UpdateNavigationButtons` re-asks
+  after every navigation *and* every tab switch, because switching back to a tab already on that
+  address writes the same string and raises no `TextChanged` at all.
+- **The star is always offered.** Every web launcher is a list of bookmarks, so there is always
+  somewhere for it to write. It gated on `WebUseBookmarks` while two modes existed, which meant the
+  most obvious way to *get* a second page was missing from exactly the launchers that had one.
+- **Starring appends; it never inserts.** The first bookmark is the launcher's address, and starring
+  the page you happen to be on is not a request to change what the tray icon opens. Dragging it to
+  the front is — a gesture with the consequence visible in it.
+- **A bookmark's address is a key.** The cached icon is filed under the URL
+  (`GetBookmarkIconPath`), so re-addressing one drops the icon and re-fetches, or the bookmark wears
+  another site's logo. `_rememberedUrl` follows the edit when it pointed at that bookmark.
+- **Neither editing nor removing a bookmark moves the page on screen.** Re-addressing one changes
+  where it goes next time it is clicked; deleting one is a change to the bar. Both would be
+  statefulness sneaking back in — the bar deciding what the window shows.
+- **The drag draws a caret; it does not shuffle the buttons.** Moving them as the pointer passes is
+  the more literal preview and cannot be done here — the element that would move is the drag
+  source, and taking it out of the panel and putting it back unloads it mid-gesture. The caret
+  lives in a `Canvas` overlay in the bar's own cell, so it adds nothing to the strip's layout,
+  which is what its position is measured from; a caret that reflowed the row would oscillate
+  between two slots. Move left / Move right stay in the context menu beside it, because a bar with
+  more bookmarks than fit scrolls and dragging past the edge of a scroller is the gesture they
+  avoid.
+- **`_isBookmarkDragging` pins the flyout**, alongside `_isModalOpen`, `_isMenuOpen` and the resize
+  and move flags. The drag carries the address as text so it can end in another application, and
+  that deactivates this window — which would dismiss the flyout mid-gesture and take the bar being
+  reordered with it. (Dropping a bookmark into a browser or an editor is the payoff for carrying
+  the text at all.)
+- **The strip accepts nothing else.** `BookmarkStrip_DragOver` returns before setting
+  `AcceptedOperation` when the drag did not start on a bookmark, so a file or a link dragged over
+  the bar never shows a drop cursor. A drop cursor is a promise — the same rule the item flyout's
+  external drops follow.
+- **`PersistBookmarks` is the one way out.** Save, `AutoSyncService.NotifyLaunchersChanged`, rebuild
+  the bar, re-ask the star. A launcher change saved without telling the sync service is reverted by
+  the next periodic download.
 
 ### `CurrentTargetUrl` is the only answer to "which URL"
 
-Bar mode added a second possible answer — the active bookmark — beside `Launcher.WebUrl`, and
-**three** separate places navigate. Two of them were missed when the bar was added, and both
-produced the same confusing pair of symptoms: the wrong page opened, *and* the bookmark that was
-clicked took the wrong page's icon, because the arriving page's favicon is adopted onto whatever
-bookmark is active.
+Bar mode added a second possible answer beside `Launcher.WebUrl`, and **three** separate places
+navigate. Two of them were missed when the bar was added, and both produced the same confusing pair
+of symptoms: the wrong page opened, *and* the bookmark that was clicked took the wrong page's icon,
+because the arriving page's favicon is adopted onto whichever bookmark the page belongs to.
 
-- `CreateWebViewAsync` — the first click after the browser has been torn down
-- `PrepareContentAsync` — every subsequent click
+- `ShowHomeContentAsync` — every show; it resolves the address once and hands it to
+  `CreateTabAsync`, which no longer reads it again
 - `ApplyLauncherChanges` — anything that touches the launcher, **including a bookmark's own
   favicon fetch completing**, which is how it recurred with no user action at all
 
-All three now call `CurrentTargetUrl()`. An empty result means the bar is collapsed with nothing
-open, which is not an instruction to navigate anywhere. If a fourth navigation path is ever added,
-it must use the same helper.
+Both call `CurrentTargetUrl()`. An empty result means a launcher with no bookmarks at all, which is
+not an instruction to navigate anywhere. If another navigation path is ever added, it must use the
+same helper.
 
-Icon adoption independently checks that the loaded page's host matches the bookmark's before
-writing (`SameHost`). A wrong page is obvious; a wrong icon persists and looks like data
-corruption.
+**`CurrentTargetUrl` answers "where does this launcher open", not "what is it showing".** Once a
+page is up, the tab owns that — and `_rememberedUrl` is what keeps the two from fighting. It is
+written by exactly the two gestures that mean *go here*, a bookmark click and the address box, and
+deliberately **not** from inside `Navigate`. So `CurrentTargetUrl` already equals what the home tab
+is on whenever the user has steered it, and `ApplyLauncherChanges` re-navigating on a mismatch fires
+only when the launcher's own address has genuinely changed under a tab still sitting on the old one.
+Writing `_rememberedUrl` from `Navigate` instead would look equivalent and is not: the initial load
+navigates too, so "the user has not steered this anywhere" would stop being a state the flyout could
+recognise, and editing a launcher's address would no longer move its page.
 
-### Treat as Tabs
+`OpenBookmark` drives the browser directly rather than routing through `CurrentTargetUrl` — the bar
+names the page, so there is nothing to resolve.
 
-`Launcher.WebBookmarksAsTabs` (Advanced, in the Bookmarks section) gives every bookmark its own
-browser instead of navigating one. Switching then costs nothing and loses nothing: scroll position,
-a half-typed message, an open thread and a signed-in view all survive flipping away and back.
+Tabs added a **second half** to the same rule: `CurrentTargetUrl` answers "which URL", and
+`HomeKey` answers "may this tab be sent there". `ApplyLauncherChanges` checks both, or a favicon
+fetch completing drags a link tab to the launcher's address. `PrepareContentAsync` is where the two
+meet — a reopen returns to an active link tab, and only falls through to `ShowHomeContentAsync`
+when the launcher's own page is what should be showing.
 
-`_webView` deliberately stays the single field the rest of the class talks to, and always points at
-the active tab; `_tabs` holds them all, keyed by bookmark URL. That is what lets zoom, navigation,
-the header, permissions, notifications and the worker bridge carry on operating on "the browser"
-without any of them learning about tabs.
+Icon adoption finds its bookmark by **matching the page's own address** against the bar
+(`FindBookmark`) — never by remembering which bookmark was clicked, which the bar no longer tracks.
+The **tray** icon is written only when the page is the launcher's own address, so a launcher holding
+six sites does not end up wearing whichever one was looked at last. Matching is the better answer regardless: it also declines
+to write an icon onto a bookmark the user has since navigated away from. It then independently
+checks that the loaded page's host matches the bookmark's before writing (`SameHost`). A wrong page
+is obvious; a wrong icon persists and looks like data corruption.
 
-- **Switching is a visibility change and nothing else.** The outgoing tab is collapsed — so it stops
-  rendering, like a background tab — but deliberately **not** suspended: suspending freezes its
-  scripts, and the whole reason to keep the others loaded is that they go on receiving.
-- **Reload On Open does not apply to an existing tab.** `ActivateTabAsync` returns before that check,
-  because reloading is exactly the "lose your place" this mode exists to prevent.
-- **The hidden policy still governs all of them together.** `ApplyHiddenPolicy` iterates every live
-  browser, not just the visible one, or a dismissal would leave N background tabs awake and undo the
-  resource promise N times over. The idle unload closes the lot.
-- **Two traps that only appear with more than one browser**, both closed:
-  `UnloadWebView` must not `Close()` the active tab twice (it is also in `_tabs`, and a second
-  `Close` on a dead control takes the process rather than throwing); and the worker bridge's watched
-  script set is keyed **per browser**, since a resource filter belongs to one `CoreWebView2` and two
-  tabs on the same site share a script URL. A toast's action is likewise routed back to the tab that
-  raised it (`_notificationSources`), not to whichever is in front — with tabs on, the two are
-  usually not the same.
+### Geometry
 
-The cost is the honest one: N browsers rather than one. Hence opt-in, per launcher, default off.
+The window is always the launcher's configured size, so there is no expansion to animate and no
+fixed root height to keep in step with a drag. Both were needed only while a bar could grow into a
+page, and both are gone with it — see the note above.
 
-### Geometry: reveal, do not animate
-
-Expansion **snaps**. Two attempts at animating it were removed, for a reason worth not
-rediscovering: a window hosting a browser cannot be smoothly resized frame by frame, because the
-window frame, the XAML island's surface and WebView2's composition surface are resized by
-different parts of the system and do not land on the same frame. The content lags the frame and
-appears to drift downwards while the window grows upwards, however the geometry is eased.
-
-Two things make the snap look deliberate:
-
-- `ApplyRootAnchor` pins the root grid to the anchored edge (`Bottom`, or `Top` for a flyout under
-  a top taskbar) and gives it a **fixed height equal to the expanded size**. The layout is then
-  computed once and never reflows; the window simply uncovers more of it. Re-applied after a
-  manual resize, which changes that height.
-- **A manual resize is the exception, and must track the drag.** That fixed height used to be
-  recomputed only when the pointer was released, so dragging an expanded bar-mode flyout grew the
-  window while the page stayed the size it started at — the drag revealed empty space and the new
-  size could not be judged until letting go. `StretchRootDuringResize` keeps the root height in
-  step with each move. There is no reveal to protect during a drag: the reveal that height exists
-  for is *expansion*, which is a different gesture. Both endings still agree with it — a normal
-  resize recomputes to the size just written, and a locked size keeps the dragged height.
-- The anchored edge never moves, so the bar stays exactly under the pointer that clicked it.
-
-The open/close slide is untouched — that moves a fixed-size window, which has none of this
-problem.
+The open/close slide is untouched: that moves a fixed-size window, which never had the problem.
 
 ### Warm-up
 
-Bar-mode launchers **are** warmed up (`WebFlyoutWindow.WarmUp`), parked off screen at bar height
-so WinUI composes their first frame before they are ever shown — otherwise the first open showed
-buttons measuring and favicons decoding on screen. This does not weaken the resource promise: what
-is built is a strip of XAML, and no browser is created until a bookmark is clicked.
+Launchers that **show a bar** are warmed up (`WebFlyoutWindow.WarmUp`), parked off screen so WinUI
+composes the strip before it is ever shown — otherwise the first open showed buttons measuring and
+favicons decoding on screen. This does not weaken the resource promise: what is built is a strip of
+XAML and an empty window, and no browser is created until the flyout is opened.
 
-Single-address web launchers are still excluded — their first frame *is* the page, so there would
-be nothing to pre-render but an empty window.
+Launchers with one bookmark are excluded — their first frame *is* the page, so there would be
+nothing to pre-render but an empty window.
 
 The bar is also only rebuilt when the bookmarks actually change, keyed on a signature of their
-names, URLs and icon paths. Rebuilding per open threw away laid-out buttons and decoded icons
-every time.
+names, URLs and icon paths **in order** — so a drag that reorders the launcher invalidates it
+exactly as an edit does. Rebuilding per open threw away laid-out buttons and decoded icons every
+time.
+
+**Every rebuild detaches what the old buttons were listening to** (`ClearBookmarkButtons`). A
+`WebBookmark` lives in settings and outlives every bar built from it, so a `PropertyChanged`
+handler left attached pins that button's `Image`, its `TextBlock` and the bitmap it decoded for the
+life of the app. That cost little while the bar was rebuilt once per open; editing it from the bar
+itself rebuilds far more often, which is the shape of the item flyout's container leak — see
+[drag-drop.md](drag-drop.md).
 
 ### Resuming shows a stale frame
 
@@ -588,19 +759,55 @@ page updating itself, not a stale frame.
 
 ## Settings layout
 
-Launcher settings show **Web Address**, **Flyout Size**, and the three geometry rows that go with
-it — **Opens At**, **Remember Position**, **Remember Size**. Those three were in Advanced and were
-promoted: they answer the same question Flyout Size does, they are what a user reaches for straight
-after dragging a flyout and finding the change did not stick, and Opens At's subtitle describes its
-interaction with Remember Position, which reads oddly with the two separated by the Advanced fold.
+`BuildForm` lays the dialog out as **three questions and then the fold**, and the grouping is the
+point — a row read beside the wrong neighbours is a row the user misreads:
 
-Zoom, When Hidden, Unload After, Reload On Open, Address Bar, Pin Open, Regular Window, Close On
-Focus Loss, Taskbar Click and Browsing Data live in a collapsed **Advanced** expander: they tune a launcher that already works, and putting all of them on one
-surface made the common case (paste a URL, pick a size) read as a form to fill in. Pin and Address
-Bar are safe to demote twice over — the flyout's own header has a button for each.
+| Group | Rows |
+|---|---|
+| What it is | Name, Type, Web Address, Bookmarks |
+| How it shows that content | View Mode / Icons Per Row / Show Title (shortcut launchers), Tab Bar, Address Bar, Flyout Size, Opens At, Remember Size |
+| How it appears in the shell | Icon, custom icon path, Show In Tray, Show In Taskbar |
+| Everything else | **Advanced** |
+
+- **Advanced is last in the whole dialog, not last among the web rows.** It is the fold for what a
+  working launcher does not need, so anything below it is something the user has to scroll past a
+  collapsed section to reach. `BuildWebRows` therefore returns it separately from its option rows.
+- **The icon sits with the rows that decide where it is seen.** It used to sit directly under the
+  launcher's content, where "Icon" read as the icon of the thing being configured; beside Show In
+  Tray and Show In Taskbar it reads as what it is — the tray icon, and the only place it appears.
+  The "address before icon" rule below still holds, and now holds by a wide margin.
+- **Bookmarks is a collapsed `Expander`**, like Advanced. Most launchers hold one page, so laid out
+  flat the list was a second copy of the address already in the field above, taking up most of the
+  dialog. Its header carries the count and the sentence that has to survive being folded away —
+  that a *second* bookmark is what produces the bar. Every edit inside it moves that count
+  (`_bookmarksListChanged`), or the header describes the list as it was when the window opened.
+- **Tab Bar and Address Bar are promoted out of Advanced.** Both change what the flyout *is* — a
+  page versus a small browser — rather than tuning one that already works, and Address Bar is where
+  the star for bookmarking the current page lives. Tab Bar was reachable only from the flyout's "…"
+  menu, which is the wrong place to be the *only* place: that menu is for changing your mind while
+  looking at a launcher, not for discovering that an option exists.
+- **They are listed tabs-then-address, in the dialog and in the "…" menu both**, because that is the
+  order the strips appear in on the flyout: header, then tabs, then the address of whichever tab the
+  tabs chose. Two toggles for two adjacent rows of chrome read as mislabelled when the list
+  disagrees with the window.
+- **Opens At and Remember Size were promoted too**, for the same kind of reason: they answer the
+  question Flyout Size does, and they are what a user reaches for straight after dragging a flyout
+  and finding the change did not stick. Opens At used to sit beside a Remember Position toggle whose
+  subtitle it had to describe; that toggle is now one of its own values, so there is nothing to
+  explain across two rows.
+
+Zoom, When Hidden, Unload After, Reload On Open, Open Links In Browser, Pin Open, Regular Window,
+Close On Focus Loss, Taskbar Click, Site Permissions, Profile and Browsing Data stay in Advanced: they tune a launcher
+that already works, and all of them on one surface made the common case (paste a URL, pick a size)
+read as a form to fill in. Pin is safe to demote twice over — the flyout's header has a button for it.
 
 New per-launcher web settings should default to Advanced unless a launcher is unusable without
-them.
+them, or unless the setting changes what the flyout is rather than how well it is tuned.
+
+**A promoted toggle applies to the open flyout immediately.** Address Bar and Tab Bar both call
+`WebFlyoutWindow.ApplyLauncherChanges`, so they behave like their "…" menu twins rather than taking
+effect on the next open — a toggle whose effect is invisible until the window is reopened is
+indistinguishable from one that did nothing.
 
 **The window does not resize when Advanced expands.** Growing it to fit was tried and rejected:
 the window sizes to its form once on `Loaded`, so re-sizing afterwards lands a beat *after* the
@@ -803,6 +1010,59 @@ Three things this has to get right, each of which broke a working build first:
   away, and the bridge would not take effect for the session the user is in. This is a deliberate
   change to the site's behaviour.
 
+### A click has two audiences, and a page has only one of them
+
+**This is what made Teams show the same notification inside itself after its toast was clicked.**
+There are two ways a page raises one, and they listen in different places:
+
+| Raised with | Listens on |
+|---|---|
+| `new Notification(...)` | `onclick`, on the object the page kept |
+| `registration.showNotification(...)` | `notificationclick`, **in the service worker** |
+
+Only the first was ever told. A toast *button* went the whole way — through the page, into the
+worker, out as a real `notificationclick` — but a click on the toast **body** only raised `onclick`
+on the shim object, which a `showNotification` app is not listening to. Its handler never ran, so
+the real persistent notification (the one `nativeShow` creates and WebView2 never displays) was
+never closed and was still sitting in `getNotifications()` when the flyout came forward — at which
+point Teams, now visible with an unacknowledged notification in hand, drew it in-app. Clicking
+slowly hid it, because by then Teams had expired the notification itself.
+
+`HandleNotificationActivation` now sends **both**: `notifyClicked` to the page, and the same
+empty-action message a button sends to the worker — whose handler already answers an empty action by
+closing the notification and dispatching a genuine `notificationclick`. Each is inert for the other
+kind of page: a `new Notification` app has nothing under that tag in `getNotifications()`, and a
+`showNotification` app has no `onclick` listener.
+
+The worker's handler is the app's own, so what happens next is the app's business — usually
+`clients.matchAll()` then `focus()`, since the flyout is a live client. An app that instead called
+`clients.openWindow()` would land in `NewWindowRequested` and open a tab, which is the same answer
+the launcher gives any other link.
+
+### Deferring to the page's own sound
+
+Teams and WhatsApp play a notification sound of their own, so the toast's Windows chime made two.
+There is no declarative signal to read: the sound is an `Audio` element or WebAudio and has nothing
+to do with the Notification API. What *can* be observed is the browser making noise —
+`CoreWebView2.IsDocumentPlayingAudio` and `IsDocumentPlayingAudioChanged` — which is what
+`WatchPageAudio` listens for. A toast is muted (`AppNotificationBuilder.MuteAudio`) when:
+
+- the page asked for a **silent** notification. That flag has always crossed the bridge and was
+  simply never read, so a page politely asking for silence got the chime anyway;
+- the page **is making a sound now, or started one in the last 2.5 s**. This is the common case and
+  it usually catches even the first notification, because the sound is played synchronously while
+  the notification takes the bridge's icon fetch — a network round-trip — to reach the host;
+- this launcher has been seen to **sound for itself within the last hour**, recorded when page audio
+  starts just after a toast of ours.
+
+That last one exists because the sound can also arrive *after* the toast, and nothing un-rings a
+toast that has already played. So a launcher may double up once and defers from then on. It lapses
+rather than latching, so turning the site's own sound off gets the Windows one back.
+
+**Deliberately not a setting**, and deliberately imperfect. A launcher playing a video or sitting in
+a call is making noise for other reasons and its toasts go quiet while that lasts — which is the
+right way round, since a chime over a call is worse than a missing one.
+
 ### Action buttons and inline reply
 
 `CoreWebView2Notification` has no actions on it — it only ever carries non-persistent notifications,
@@ -836,7 +1096,7 @@ Each web launcher gets `%AppData%\LittleLauncher\WebProfiles\{launcherId}` as it
 folder (via `MainWindow.GetPhysicalAppDataDir()`, so it survives MSIX VFS redirection). That is what
 keeps a dashboard signed in across restarts, and keeps two launchers signed in as different users.
 
-**Cookies and sessions are therefore per launcher, not per bookmark.** Every bookmark in one
+**Cookies and sessions are per launcher, not per bookmark.** Every bookmark in one
 launcher's bar shares that launcher's profile — they are tabs of the same browser, so signing in
 on one is a sign-in for all of them, and a site that both use sees a single session. Two launchers
 share nothing by default: separate cookies, storage and cache, which is what makes two accounts on
@@ -850,15 +1110,25 @@ above it did not apply:
 
 | Rank | Source | Applies when |
 |---|---|---|
-| 1 | `WebFlyoutPosition` | `WebRememberPosition` is on *and* the flyout has been dragged |
+| 1 | `WebFlyoutPosition` | `WebAnchor` is `WebAnchors.LastPosition` *and* the flyout has been dragged |
 | 2 | `WebAnchor` (`WebAnchors`) | A corner, edge or centre has been chosen |
-| 3 | The tray icon | The default — above a bottom taskbar, below a top one |
+| 3 | The tray icon | The default, and the fallback for `LastPosition` with nothing dragged yet |
 
-So with **Remember Position** on, the anchor decides the *first* open and nothing after it; with it
-off, the anchor decides every open. That ranking is why **changing the anchor clears
-`WebFlyoutPosition`** — otherwise picking a corner on a flyout that had been dragged would appear
-to do nothing at all, the remembered position silently outranking the choice just made. The row's
-subtitle states which of the two behaviours is currently in force.
+**`WebAnchor` is the whole answer**, `LastPosition` included. It used to be an anchor plus a
+`WebRememberPosition` flag, and that pair had a dead cell: with remembering on, nine of the ten
+anchors decided only where the *very first* open landed — before the drag that is the next thing the
+user does. Follow the tray, sit in a fixed spot, and stay where I put it are three mutually exclusive
+answers to one question, so they are three values of one setting. `MigrateWebModel` turns the old
+flag into the new value.
+
+Rank 1 is why **changing the anchor clears `WebFlyoutPosition`** — otherwise picking a corner on a
+flyout that had been dragged would appear to do nothing, the remembered position silently outranking
+the choice just made. The exception is picking `LastPosition` itself, which *is* that position, and
+switching away and back deliberately does not resurrect it.
+
+`RememberFlyoutPosition` gates on the same value: under any other anchor a drag is not written
+anywhere, so it holds while the flyout stays open and the next open goes back to the tray or the
+corner. That is the entire difference between `LastPosition` and the other ten.
 
 An anchored flyout is placed on the **work area of the monitor whose tray icon was clicked**, not
 the primary monitor: a corner should mean a corner of the screen being worked on. It also slides in
@@ -868,10 +1138,24 @@ across the screen from wherever the tray happens to be.
 ### The shared profile
 
 `Launcher.WebSharedProfile` (Advanced → **Sign-ins**) points a launcher at `WebProfiles\Shared`
-instead of its own folder, pooling it with every other launcher that sets it. Isolation stays the
-default — it is the setting that cannot surprise anyone, and it is what shipped — but several
-launchers onto one system otherwise means signing in to that system once per launcher, and again
-every time a session expires.
+instead of its own folder, pooling it with every other launcher that sets it. **New launchers are
+created shared**: several launchers onto one system otherwise means signing in to that system once
+per launcher, and again every time a session expires. Private is still there for the case that
+argued for isolation originally — two launchers as two accounts on the same site.
+
+**It is `true` at creation, never a model default.** `WhenWritingDefault` omits a property holding
+the CLR default, so a `= true` initialiser would read as `true` for every launcher that never stored
+the field. That is not a cosmetic mistake here: it decides which folder a launcher's cookies live in,
+so it would silently move every existing launcher onto a profile it had never signed in to, and
+`false` could never be persisted afterwards. `ShowTitle` is set at creation for the same reason, one
+consequence less severe.
+
+**Existing launchers are deliberately untouched**, and there is no migration. Profiles cannot be
+merged — cookies are one encrypted SQLite database per profile and local storage one leveldb, so
+N private profiles cannot become one shared one without signing each site in again. Switching a
+launcher across is reversible, though: nothing deletes a profile folder except the explicit
+**Clear** button (`ClearBrowsingDataAsync`), so a launcher flipped to shared can be flipped back and
+its old session is still in place.
 
 `GetUserDataFolder(Launcher)` is the resolution point; the `(string launcherId)` overload it calls
 still names a private folder and is what makes the shared name safe (launcher ids are GUIDs, so

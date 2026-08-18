@@ -240,16 +240,26 @@ internal static class LauncherPayload
         // A web launcher carries no items, so without these it would arrive on the
         // other machine as an empty shortcut launcher.
         existing.Kind = downloaded.Kind;
+
+        // Legacy, and synced for exactly one reason: a launcher edited on a machine still running
+        // a build from before one address and a bar of them merged arrives carrying its address
+        // here and nothing in WebBookmarks. MigrateWebModel at the foot of this method turns it
+        // into the first bookmark, the same way loading an old settings file does.
         existing.WebUrl = downloaded.WebUrl;
+        existing.WebDefaultBookmarkUrl = downloaded.WebDefaultBookmarkUrl;
         existing.WebFlyoutWidth = downloaded.WebFlyoutWidth;
         existing.WebFlyoutHeight = downloaded.WebFlyoutHeight;
         existing.WebZoomPercent = downloaded.WebZoomPercent;
         existing.WebHiddenPolicy = downloaded.WebHiddenPolicy;
         existing.WebIdleUnloadMinutes = downloaded.WebIdleUnloadMinutes;
         existing.WebReloadOnShow = downloaded.WebReloadOnShow;
+        existing.WebLinksInBrowser = downloaded.WebLinksInBrowser;
         existing.WebPinFlyout = downloaded.WebPinFlyout;
         existing.WebSharedProfile = downloaded.WebSharedProfile;
         existing.WebAnchor = downloaded.WebAnchor;
+        // Legacy, and synced for the same reason WebUrl is: a launcher edited on a machine running
+        // an older build arrives saying it remembered its position, and MigrateWebModel at the foot
+        // of this method turns that into the WebAnchors.LastPosition it now means.
         existing.WebRememberPosition = downloaded.WebRememberPosition;
 
         // Travels, unlike WebFlyoutPosition below, because it is a decision about the launcher
@@ -264,10 +274,7 @@ internal static class LauncherPayload
         // is the part the user actually chose, and it does travel.
 
         // ── Bookmark bar ────────────────────────────────────────────
-        existing.WebUseBookmarks = downloaded.WebUseBookmarks;
         existing.WebBookmarkIconsOnly = downloaded.WebBookmarkIconsOnly;
-        existing.WebBookmarksAsTabs = downloaded.WebBookmarksAsTabs;
-        existing.WebDefaultBookmarkUrl = downloaded.WebDefaultBookmarkUrl;
 
         // IconPath travels with the bookmark even though it is a local path: it is derived from
         // the launcher id and URL, so it names the same location on both machines. The file may
@@ -281,6 +288,12 @@ internal static class LauncherPayload
         existing.Items.Clear();
         foreach (var item in downloaded.Items)
             existing.Items.Add(item);
+
+        // Last, and after the bookmarks are in place: a launcher sent by an older build carries its
+        // address in the legacy fields, and this is what turns that into a first bookmark. Running
+        // it on every merge rather than only at startup is the whole point — the old build goes on
+        // writing those fields for as long as the other machine is not upgraded.
+        existing.MigrateWebModel();
     }
 
     /// <summary>
