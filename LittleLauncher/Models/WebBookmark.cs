@@ -32,6 +32,22 @@ public partial class WebBookmark : ObservableObject
     [ObservableProperty]
     public partial string IconPath { get; set; } = "";
 
+    /// <summary>Show this one as its icon alone, without its label.</summary>
+    /// <remarks>
+    /// <para>Per bookmark, and separate from the launcher's <c>WebBookmarkIconsOnly</c>, which does
+    /// the same to all of them. Both exist because they answer different questions: a bar of
+    /// familiar sites wants every label gone, while a bar with one awkwardly long name wants that
+    /// one collapsed and the rest left readable — and a launcher-wide switch cannot express the
+    /// second.</para>
+    /// <para>The launcher-wide setting wins where they disagree. It is the blunter instrument and
+    /// the one the user reached for last; a bookmark left un-collapsed under "icons only" would be
+    /// the setting quietly failing to do what it says.</para>
+    /// <para>Off by default, which is both the shipped behaviour and the direction that survives
+    /// <c>WhenWritingDefault</c>.</para>
+    /// </remarks>
+    [ObservableProperty]
+    public partial bool IconsOnly { get; set; }
+
     public WebBookmark() { }
 
     public WebBookmark(string name, string url)

@@ -97,7 +97,7 @@ public sealed partial class WebFlyoutWindow
     /// </summary>
     private string BookmarkBarSignature() =>
         _launcher.WebBookmarkIconsOnly + "|" +
-        string.Join("", _launcher.WebBookmarks.Select(b => $"{b.Name}{b.Url}{b.IconPath}"));
+        string.Join("", _launcher.WebBookmarks.Select(b => $"{b.Name}{b.Url}{b.IconPath}{b.IconsOnly}"));
 
     /// <summary>
     /// Rebuilds the bar from the launcher's bookmarks, in the shape a browser uses: a small icon
@@ -131,6 +131,17 @@ public sealed partial class WebFlyoutWindow
 
         _bookmarkBar.Visibility = Visibility.Visible;
     }
+
+    /// <summary>
+    /// Whether this bookmark shows as its icon alone.
+    /// </summary>
+    /// <remarks>
+    /// The launcher-wide setting wins: it is the blunter instrument, and a bookmark still showing
+    /// its label under "icons only" would be that setting quietly failing. The per-bookmark flag
+    /// only ever adds to what is collapsed, never subtracts.
+    /// </remarks>
+    private bool ShowsIconOnly(WebBookmark bookmark) =>
+        _launcher.WebBookmarkIconsOnly || bookmark.IconsOnly;
 
     /// <summary>Empties the strip, detaching what its buttons were listening to first.</summary>
     private void ClearBookmarkButtons()
@@ -170,7 +181,7 @@ public sealed partial class WebFlyoutWindow
             MaxWidth = 140,
             // Icons-only hides the label rather than omitting it, so the name is still there to
             // become a tooltip and the button rebuilds the same way either way.
-            Visibility = _launcher.WebBookmarkIconsOnly ? Visibility.Collapsed : Visibility.Visible,
+            Visibility = ShowsIconOnly(bookmark) ? Visibility.Collapsed : Visibility.Visible,
         };
 
         // Both icons share one fixed 16px slot rather than sitting side by side in the stack.
@@ -204,7 +215,7 @@ public sealed partial class WebFlyoutWindow
         // With the labels hidden the name is the only thing identifying the button, so it leads the
         // tooltip; with them shown the name is already on screen and the address is the useful part.
         ToolTipService.SetToolTip(button,
-            _launcher.WebBookmarkIconsOnly ? $"{caption}\n{bookmark.Url}" : bookmark.Url);
+            ShowsIconOnly(bookmark) ? $"{caption}\n{bookmark.Url}" : bookmark.Url);
         button.Click += (_, _) => OpenBookmark(bookmark, newTab: false);
 
         // Middle-click and Shift/Ctrl-click open a new tab, as they do on any link in any browser.
@@ -482,6 +493,23 @@ public sealed partial class WebFlyoutWindow
         menu.Items.Add(Item("Rename…", () => _ = RenameBookmarkAsync(bookmark)));
         menu.Items.Add(Item("Edit address…", () => _ = EditBookmarkAddressAsync(bookmark)));
         menu.Items.Add(Item("Copy address", () => CopyToClipboard(bookmark.Url)));
+
+        // Per bookmark, so one long name can be collapsed without flattening the whole bar. Checked
+        // rather than a one-way action, and disabled — still checked — while the launcher-wide
+        // setting is already collapsing everything, so it reads as "already the case, and not
+        // because of this" rather than as an option that does nothing.
+        var iconOnly = new ToggleMenuFlyoutItem
+        {
+            Text = "Icon only",
+            IsChecked = ShowsIconOnly(bookmark),
+            IsEnabled = !_launcher.WebBookmarkIconsOnly,
+        };
+        iconOnly.Click += (_, _) =>
+        {
+            bookmark.IconsOnly = iconOnly.IsChecked;
+            PersistBookmarks();
+        };
+        menu.Items.Add(iconOnly);
         menu.Items.Add(Item("Open in browser", () => OpenExternally(bookmark.Url)));
 
         menu.Items.Add(new MenuFlyoutSeparator());

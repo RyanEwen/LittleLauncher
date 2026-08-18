@@ -184,8 +184,9 @@ model default, which would have flipped it on for every existing launcher.
   [web-launchers.md](web-launchers.md)
 - `WebBookmarks` (`ObservableCollection<WebBookmark>`) — **the launcher's content**, not an extra:
   the first entry is the address it opens and the rest are the bar. `WebBookmark`
-  (`Models/WebBookmark.cs`) is `Name` + `Url` + `IconPath`, observable because the icon arrives
-  after the bookmark does
+  (`Models/WebBookmark.cs`) is `Name` + `Url` + `IconPath` + `IconsOnly`, observable because the
+  icon arrives after the bookmark does. `IconsOnly` collapses **that** bookmark to its icon; the
+  launcher-wide `WebBookmarkIconsOnly` does it to all of them and wins where the two disagree
 - `WebUrl` (`string`) — **legacy**. The single address a web launcher used to hold, before one
   address and a bar of them became the same thing. `MigrateWebModel` turns it into the first
   bookmark and clears it; nothing else should read it. Still synced, because a machine on an older
