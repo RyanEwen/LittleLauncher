@@ -1098,6 +1098,42 @@ than making it. The policy is what decides whether a hidden launcher costs anyth
 changing it silently would undo the promise the feature is built on. Declined once, it is not asked
 again that session (`_keepRunningOffered`).
 
+## Browser extensions
+
+WebView2's whole extension API is `AddBrowserExtensionAsync(folder)`, `GetBrowserExtensionsAsync()`
+and the `AreBrowserExtensionsEnabled` option. There is **no store integration, no `.crx` handler and
+no browser-action UI** — so `Services/BrowserExtensionService.cs` and
+`WebFlyoutWindow.Extensions.cs` supply the parts a browser would do for itself.
+
+- **The option goes on for every launcher, unconditionally.** The options must match across every
+  environment on a user-data folder — connecting to an already-running one with a different value
+  fails with `ERROR_INVALID_STATE` — and the shared profile puts several launchers on one folder. Set
+  it only where an extension exists and shared-profile launchers start failing to initialise while
+  private ones carry on fine.
+- **Extensions belong to a profile, so the list is app-wide.** `UserSettings.BrowserExtensionFolders`
+  is applied to whichever profile is starting (`ApplyAsync`, called as each browser is created), which
+  is what makes one install cover every launcher sharing a profile and gives a private launcher its
+  own copy. Matching is by declared `name`: the id comes back from the *install*, so there is nothing
+  to compare a folder against beforehand.
+- **The store's button is intercepted, not replaced.** The Chrome Web Store renders and offers to
+  install, because WebView2 presents as Chrome; it cannot finish, because the last step is a private
+  API WebView2 does not implement. Where that degrades into an ordinary package download,
+  `HandleDownloadStarting` takes it: a CRX3 is `Cr24`, a version, a header length, that many header
+  bytes, then a plain ZIP — so skipping to the ZIP and extracting produces exactly the folder the API
+  wants. Anything that is not an extension package is left alone, default download UI included.
+- **Archive extraction is path-checked.** A zip entry may name `..\..nything`, so each entry's
+  resolved path is required to be under the target. The file came from the internet even though the
+  user asked for it.
+- **The popup is the toolbar that does not exist.** `CoreWebView2BrowserExtension` carries an id, a
+  name and an enabled flag and nothing about browser actions, so `action.default_popup` and its icon
+  are read from the extension's own `manifest.json` — which the host has, because the host unpacked
+  it — and shown by `ExtensionPopupWindow`, a WebView2 on `chrome-extension://{id}/{page}`
+  **using the launcher's own user-data folder**. On any other profile the popup loads, looks right,
+  and behaves as though the extension had never run. Extensions with no popup get no button; an MV3
+  blocker does its whole job through `declarativeNetRequest` and content scripts with no UI at all.
+- **Manifest V3 only**, since WebView2 tracks Chromium's extension platform. uBlock Origin proper is
+  MV2 and cannot load; uBlock Origin Lite is the MV3 product and does.
+
 ## Profiles
 
 Each web launcher gets `%AppData%\LittleLauncher\WebProfiles\{launcherId}` as its WebView2 user-data

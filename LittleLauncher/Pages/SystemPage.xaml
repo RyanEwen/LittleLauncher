@@ -92,6 +92,30 @@
             </Grid>
         </Border>
 
+        <!-- Browser extensions -->
+        <TextBlock Text="Browser Extensions" FontSize="14" FontWeight="SemiBold" Margin="0,16,0,6"/>
+        <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1" CornerRadius="4" Padding="16" Margin="0,0,0,4">
+            <StackPanel>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <FontIcon Glyph="&#xE71D;" FontSize="20" Margin="0,0,16,0" VerticalAlignment="Center"/>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                        <TextBlock Text="Extensions" FontSize="14"/>
+                        <TextBlock FontSize="12" Opacity="0.5" TextWrapping="Wrap"
+                                   Text="Run in every web launcher. Install from the Chrome Web Store inside a launcher, or add an unpacked folder here"/>
+                    </StackPanel>
+                    <Button Grid.Column="2" Content="Add Folder..." Click="AddExtensionButton_Click"/>
+                </Grid>
+                <StackPanel x:Name="ExtensionList" Spacing="4" Margin="36,12,0,0"/>
+            </StackPanel>
+        </Border>
+
         <!-- Unused browser profiles -->
         <TextBlock Text="Storage" FontSize="14" FontWeight="SemiBold" Margin="0,16,0,6"/>
         <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"

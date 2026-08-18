@@ -84,6 +84,9 @@ public sealed partial class WebFlyoutWindow : Window
     private readonly Grid _addressBar;
     private readonly TextBox _addressBox;
     private readonly Grid _header;
+
+    /// <summary>The header's right-hand button strip, which extension buttons are inserted into.</summary>
+    private readonly StackPanel _headerButtons;
     private readonly Grid _root;
     private readonly StackPanel _bookmarkStrip;
     private readonly Grid _bookmarkBar;
@@ -322,7 +325,7 @@ public sealed partial class WebFlyoutWindow : Window
         // U+E712 is Segoe Fluent's More glyph, escaped for the reason on the back button.
         _moreButton = BuildHeaderButton("\uE712", "More", (_, _) => ShowMoreMenu());
 
-        var headerButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
+        var headerButtons = _headerButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
         headerButtons.Children.Add(_moreButton);
         headerButtons.Children.Add(BuildHeaderButton("", "Open in browser", (_, _) => OpenInBrowser()));
         // Pin sits beside maximize rather than at the head of the group: both decide how the
@@ -610,6 +613,9 @@ public sealed partial class WebFlyoutWindow : Window
 
         _wndProcDelegate = WndProc;
         SetWindowSubclass(_hwnd, _wndProcDelegate, 3, 0);
+
+        // Whatever is installed already gets a button now; an install later refreshes them.
+        RefreshExtensionButtons();
 
         Activated += WebFlyoutWindow_Activated;
     }
@@ -1838,10 +1844,15 @@ public sealed partial class WebFlyoutWindow : Window
             // every one of them is created with identical options (WebView2 rejects a second
             // environment on the same folder only when the options differ). Tabs of one launcher
             // share the folder for the same reason: they are tabs of one browser.
+            // AreBrowserExtensionsEnabled is set for *every* launcher, never only for ones with an
+            // extension. The options must match across every environment on a folder — connecting to
+            // an already-running one with a different value fails outright with ERROR_INVALID_STATE
+            // — and the shared profile puts several launchers on one folder, so a conditional flag
+            // would break exactly the launchers that share while private ones carried on fine.
             var environment = await CoreWebView2Environment.CreateWithOptionsAsync(
                 browserExecutableFolder: "",
                 userDataFolder: userDataFolder,
-                options: new CoreWebView2EnvironmentOptions());
+                options: new CoreWebView2EnvironmentOptions { AreBrowserExtensionsEnabled = true });
 
             await webView.EnsureCoreWebView2Async(environment);
         }
@@ -1893,6 +1904,12 @@ public sealed partial class WebFlyoutWindow : Window
         await InstallShortcutBridgeAsync(webView.CoreWebView2);
         if (!_tabs.Contains(tab)) return null;
 
+        // Whatever is on the extension list, onto this profile. Per browser rather than once at
+        // startup: an extension added while this launcher was closed has to arrive when it opens,
+        // and a launcher on a private profile needs its own copy loaded.
+        await Services.BrowserExtensionService.ApplyAsync(webView.CoreWebView2);
+        if (!_tabs.Contains(tab)) return null;
+
         ApplyZoom(webView.CoreWebView2);
         UpdateTabChip(tab);
 
@@ -1922,6 +1939,9 @@ public sealed partial class WebFlyoutWindow : Window
         // the URI and navigating by hand. Launchers set to WebLinksInBrowser hand it to the real
         // browser instead, which is what web launchers shipped with.
         core.NewWindowRequested += (_, e) => HandleNewWindowRequested(e);
+
+        // The store's install button gets as far as handing over a .crx. See HandleDownloadStarting.
+        core.DownloadStarting += (_, e) => HandleDownloadStarting(e);
 
         // Whether this page makes its own notification sound, which decides whether ours does.
         WatchPageAudio(core);

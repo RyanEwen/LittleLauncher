@@ -228,6 +228,16 @@ public partial class UserSettings : ObservableObject
     /// </remarks>
     public List<int>? EnabledSyncProviders { get; set; }
 
+    /// <summary>Unpacked browser-extension folders loaded into every web launcher's profile.</summary>
+    /// <remarks>
+    /// App-wide rather than per launcher, because extensions belong to a <em>profile</em> and most
+    /// launchers share one — an app-wide list installed onto whichever profile is starting is the
+    /// arrangement that matches how WebView2 actually scopes them. Nullable so an absent key stays
+    /// absent under <c>WhenWritingDefault</c>; <c>BrowserExtensionService.InstalledFolders</c>
+    /// creates it on first use.
+    /// </remarks>
+    public List<string>? BrowserExtensionFolders { get; set; }
+
     /// <summary>True when the given destination is switched on.</summary>
     public bool IsSyncProviderEnabled(int provider) =>
         EnabledSyncProviders?.Contains(SyncProviders.Normalize(provider)) == true;

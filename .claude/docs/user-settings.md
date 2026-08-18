@@ -119,6 +119,11 @@ model default, which would have flipped it on for every existing launcher.
   first. Off does not mean unreachable: the header carries a button that reveals the bar for the
   rest of that visit, and **that reveal is window state, never written back to this property** —
   see [web-launchers.md](web-launchers.md)
+- `BrowserExtensionFolders` (`List<string>?`) — **app-wide, not per launcher.** Unpacked extension
+  folders loaded into every web launcher's profile as its browser starts. App-wide because
+  extensions belong to a WebView2 *profile* and most launchers share one, so a per-launcher list
+  would be several names for one thing. Nullable, so an absent key stays absent under
+  `WhenWritingDefault`; `BrowserExtensionService.InstalledFolders` creates it on first use
 - `WebSharedProfile` (`bool`) — pool cookies and logins in `WebProfiles\Shared` with every other
   launcher that sets it, instead of a private per-launcher folder. **What a new launcher gets**, but
   set to `true` at *creation* rather than as a model default: `WhenWritingDefault` omits a property
