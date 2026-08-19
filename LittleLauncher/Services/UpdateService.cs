@@ -5,7 +5,6 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Json;
-using System.Runtime.InteropServices;
 using System.Text.Json.Serialization;
 using WinRT.Interop;
 using global::Windows.ApplicationModel;
@@ -14,9 +13,14 @@ using global::Windows.Services.Store;
 namespace LittleLauncher.Services;
 
 /// <summary>
-/// Checks for updates using either GitHub Releases (WiX/unpackaged) or
-/// Microsoft Store APIs (MSIX/packaged) and optionally installs them.
+/// Checks for updates using either GitHub Releases (portable/unpackaged) or Microsoft Store
+/// APIs (MSIX/packaged).
 /// </summary>
+/// <remarks>
+/// Only the Store path installs anything. A portable copy is a folder the user placed and owns,
+/// so the GitHub path reports the new version and hands over the release page; there is no
+/// installer to run and nothing here rewrites the running directory.
+/// </remarks>
 public static class UpdateService
 {
     private static readonly NLog.Logger Logger = NLog.LogManager.GetCurrentClassLogger();
@@ -53,7 +57,6 @@ public static class UpdateService
         public string CurrentVersion { get; init; } = "";
         public string LatestVersion { get; init; } = "";
         public string? ReleaseUrl { get; init; }
-        public string? MsiDownloadUrl { get; init; }
         public string? ReleaseNotes { get; init; }
 
         public bool IsStoreManaged => Source == UpdateSource.MicrosoftStore;
@@ -86,23 +89,6 @@ public static class UpdateService
         }
     }
 
-    /// <summary>
-    /// Downloads and installs the update represented by <paramref name="result"/>.
-    /// </summary>
-    public static Task<(bool Success, string Message)> DownloadAndInstallAsync(
-        UpdateCheckResult result,
-        nint ownerWindowHandle,
-        IProgress<double>? progress = null,
-        CancellationToken cancellationToken = default)
-    {
-        return result.Source switch
-        {
-            UpdateSource.MicrosoftStore => DownloadAndInstallStoreUpdateAsync(ownerWindowHandle, progress, cancellationToken),
-            _ when !string.IsNullOrEmpty(result.MsiDownloadUrl) => DownloadAndInstallMsiAsync(result.MsiDownloadUrl, progress, cancellationToken),
-            _ => Task.FromResult((false, "No installer is available for this update.")),
-        };
-    }
-
     private static async Task<UpdateCheckResult?> CheckForGitHubUpdateAsync()
     {
         var release = await Http.GetFromJsonAsync(LatestReleaseUri, GitHubJsonContext.Default.GitHubRelease);
@@ -116,22 +102,6 @@ public static class UpdateService
 
         bool updateAvailable = latest > current;
 
-        string? msiUrl = null;
-        string arch = RuntimeInformation.OSArchitecture == Architecture.Arm64 ? "ARM64" : "x64";
-        string expectedAsset = $"LittleLauncher-{arch}-Setup.msi";
-
-        if (release.Assets != null)
-        {
-            foreach (var asset in release.Assets)
-            {
-                if (string.Equals(asset.Name, expectedAsset, StringComparison.OrdinalIgnoreCase))
-                {
-                    msiUrl = asset.BrowserDownloadUrl;
-                    break;
-                }
-            }
-        }
-
         return new UpdateCheckResult
         {
             Source = UpdateSource.GitHubRelease,
@@ -139,7 +109,6 @@ public static class UpdateService
             CurrentVersion = $"v{current.Major}.{current.Minor}.{current.Build}",
             LatestVersion = release.TagName,
             ReleaseUrl = release.HtmlUrl,
-            MsiDownloadUrl = msiUrl,
             ReleaseNotes = release.Body,
         };
     }
@@ -264,85 +233,11 @@ public static class UpdateService
         }
     }
 
-    private static async Task<(bool Success, string Message)> DownloadAndInstallMsiAsync(
-        string msiUrl,
-        IProgress<double>? progress = null,
-        CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            string tempDir = Path.Combine(Path.GetTempPath(), "LittleLauncher-Update");
-            Directory.CreateDirectory(tempDir);
-            string msiPath = Path.Combine(tempDir, Path.GetFileName(new Uri(msiUrl).LocalPath));
-
-            using var response = await Http.GetAsync(msiUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-            response.EnsureSuccessStatusCode();
-
-            long totalBytes = response.Content.Headers.ContentLength ?? -1;
-            long bytesRead = 0;
-
-            using (var contentStream = await response.Content.ReadAsStreamAsync(cancellationToken))
-            using (var fileStream = new FileStream(msiPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true))
-            {
-                var buffer = new byte[81920];
-                int read;
-                while ((read = await contentStream.ReadAsync(buffer, cancellationToken)) > 0)
-                {
-                    await fileStream.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
-                    bytesRead += read;
-                    if (totalBytes > 0)
-                        progress?.Report((double)bytesRead / totalBytes);
-                }
-            }
-
-            progress?.Report(1.0);
-
-            try
-            {
-                string zoneFile = msiPath + ":Zone.Identifier";
-                File.Delete(zoneFile);
-            }
-            catch { }
-
-            int pid = Environment.ProcessId;
-            string scriptPath = Path.Combine(tempDir, "install-update.cmd");
-            string script = $"""
-                @echo off
-                echo Waiting for Little Launcher to exit...
-                :wait
-                tasklist /FI "PID eq {pid}" 2>NUL | find /I "{pid}" >NUL
-                if not errorlevel 1 (
-                    timeout /t 1 /nobreak >NUL
-                    goto wait
-                )
-                echo Installing update...
-                msiexec /i "{msiPath}" /passive
-                """;
-            await File.WriteAllTextAsync(scriptPath, script, cancellationToken);
-
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = "cmd.exe",
-                Arguments = $"/c \"{scriptPath}\"",
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WindowStyle = ProcessWindowStyle.Hidden,
-            });
-
-            return (true, "Installer will launch after the app closes.");
-        }
-        catch (OperationCanceledException)
-        {
-            return (false, "Download was cancelled.");
-        }
-        catch (Exception ex)
-        {
-            Logger.Error(ex, "Failed to download and install update from {Url}", msiUrl);
-            return (false, $"Download failed: {ex.Message}");
-        }
-    }
-
-    private static async Task<(bool Success, string Message)> DownloadAndInstallStoreUpdateAsync(
+    /// <summary>
+    /// Downloads and installs the update the Microsoft Store is holding for this package.
+    /// Only meaningful for a packaged install; unpackaged callers open the release page instead.
+    /// </summary>
+    public static async Task<(bool Success, string Message)> DownloadAndInstallStoreUpdateAsync(
         nint ownerWindowHandle,
         IProgress<double>? progress = null,
         CancellationToken cancellationToken = default)
@@ -573,18 +468,6 @@ public static class UpdateService
 
         [JsonPropertyName("body")]
         public string? Body { get; set; }
-
-        [JsonPropertyName("assets")]
-        public List<GitHubAsset>? Assets { get; set; }
-    }
-
-    internal sealed class GitHubAsset
-    {
-        [JsonPropertyName("name")]
-        public string Name { get; set; } = "";
-
-        [JsonPropertyName("browser_download_url")]
-        public string? BrowserDownloadUrl { get; set; }
     }
 }
 

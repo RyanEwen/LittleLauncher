@@ -24,7 +24,7 @@ Commit the current changes to git.
      - New/changed XAML patterns → `.claude/docs/xaml.md`
      - Icon system changes → `.claude/docs/icons.md`
      - Drag-and-drop changes → `.claude/docs/drag-drop.md`
-     - Installer changes → `.claude/docs/installer.md`
+     - Packaging or update-flow changes → `.claude/docs/installer.md`
      - New page or navigation → `CLAUDE.md` Architecture section
      - New dependency → `CLAUDE.md` Dependencies list
      - Any structural change → `ARCHITECTURE.md`, `README.md`

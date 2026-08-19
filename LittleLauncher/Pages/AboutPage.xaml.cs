@@ -39,9 +39,9 @@ public partial class AboutPage : Page
                     (true, false) => $"Version {result.LatestVersion} is available in the Microsoft Store (you have {result.CurrentVersion})",
                     _ => $"Version {result.LatestVersion} is available (you have {result.CurrentVersion})",
                 };
-                CheckUpdateButton.Content = !result.IsStoreManaged && string.IsNullOrEmpty(result.MsiDownloadUrl)
-                    ? "View Release"
-                    : "Download & Install";
+                // Only a Store install can update itself; a portable copy gets the release
+                // page and replaces its own folder.
+                CheckUpdateButton.Content = result.IsStoreManaged ? "Download & Install" : "View Release";
                 CheckUpdateButton.IsEnabled = true;
                 CheckUpdateButton.Click -= CheckForUpdates_Click;
                 CheckUpdateButton.Click += DownloadUpdate_Click;
@@ -82,38 +82,37 @@ public partial class AboutPage : Page
     {
         if (_updateResult == null) return;
 
-        if (_updateResult.IsStoreManaged || !string.IsNullOrEmpty(_updateResult.MsiDownloadUrl))
+        if (!_updateResult.IsStoreManaged)
         {
-            CheckUpdateButton.IsEnabled = false;
-            CheckUpdateButton.Content = "Downloading...";
-
-            var progress = new Progress<double>(p =>
-            {
-                int pct = (int)(p * 100);
-                CheckUpdateButton.Content = pct < 100 ? $"Downloading ({pct}%)..." : "Installing...";
-            });
-
-            var (success, message) = await UpdateService.DownloadAndInstallAsync(
-                _updateResult,
-                GetOwnerWindowHandle(),
-                progress);
-
-            if (success)
-            {
-                UpdateStatusText.Text = message;
-                await Task.Delay(1000);
-                Environment.Exit(0);
-            }
-            else
-            {
-                UpdateStatusText.Text = message;
-                CheckUpdateButton.Content = "Retry";
-                CheckUpdateButton.IsEnabled = true;
-            }
+            if (!string.IsNullOrEmpty(_updateResult.ReleaseUrl))
+                Process.Start(new ProcessStartInfo(_updateResult.ReleaseUrl) { UseShellExecute = true });
+            return;
         }
-        else if (!string.IsNullOrEmpty(_updateResult.ReleaseUrl))
+
+        CheckUpdateButton.IsEnabled = false;
+        CheckUpdateButton.Content = "Downloading...";
+
+        var progress = new Progress<double>(p =>
         {
-            Process.Start(new ProcessStartInfo(_updateResult.ReleaseUrl) { UseShellExecute = true });
+            int pct = (int)(p * 100);
+            CheckUpdateButton.Content = pct < 100 ? $"Downloading ({pct}%)..." : "Installing...";
+        });
+
+        var (success, message) = await UpdateService.DownloadAndInstallStoreUpdateAsync(
+            GetOwnerWindowHandle(),
+            progress);
+
+        UpdateStatusText.Text = message;
+
+        if (success)
+        {
+            await Task.Delay(1000);
+            Environment.Exit(0);
+        }
+        else
+        {
+            CheckUpdateButton.Content = "Retry";
+            CheckUpdateButton.IsEnabled = true;
         }
     }
 

@@ -18,7 +18,7 @@ Audit all project documentation and bring it up to date with the current codebas
    | New/changed settings property | `.claude/docs/user-settings.md` |
    | New/changed P/Invoke | `.claude/docs/pinvoke.md` |
    | Icon system changes | `.claude/docs/icons.md` |
-   | Installer changes | `.claude/docs/installer.md` |
+   | Packaging or update-flow changes | `.claude/docs/installer.md` |
    | New/changed XAML patterns | `.claude/docs/xaml.md` |
    | Drag-and-drop changes | `.claude/docs/drag-drop.md` |
    | New page or navigation change | `CLAUDE.md` Architecture section |

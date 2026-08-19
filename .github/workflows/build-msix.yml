@@ -102,44 +102,6 @@ jobs:
           name: Build-${{ matrix.platform }}
           path: LittleLauncher/bin/${{ matrix.platform }}/Release/net10.0-windows10.0.22000.0/
 
-      # ── MSI build (WiX) ─────────────────────────────────────────
-      - name: Build MSI installer
-        run: |
-          dotnet build LittleLauncherSetup\LittleLauncherSetup.wixproj `
-            -p:Platform=$env:PLATFORM `
-            -p:Configuration=Release `
-            "-p:BuildOutputPath=$env:GITHUB_WORKSPACE\LittleLauncher\bin\$env:PLATFORM\Release\net10.0-windows10.0.22000.0" `
-            "-p:Version=${{ steps.version.outputs.VERSION }}"
-
-      # ── Sign MSI ────────────────────────────────────────────────
-      - name: Sign MSI
-        shell: pwsh
-        env:
-          CODESIGN_PFX_BASE64: ${{ secrets.CODESIGN_PFX_BASE64 }}
-          CODESIGN_PFX_PASSWORD: ${{ secrets.CODESIGN_PFX_PASSWORD }}
-        run: |
-          if ([string]::IsNullOrEmpty($env:CODESIGN_PFX_BASE64)) {
-            Write-Host "CODESIGN_PFX_BASE64 secret not set — skipping MSI signing." -ForegroundColor Yellow
-            exit 0
-          }
-
-          $pfxPath = Join-Path $env:RUNNER_TEMP "codesign.pfx"
-          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:CODESIGN_PFX_BASE64))
-
-          $msi = "LittleLauncherSetup\bin\$env:PLATFORM\Release\LittleLauncherSetup.msi"
-          Write-Host "Signing $msi ..."
-          & signtool sign /fd SHA256 /f $pfxPath /p $env:CODESIGN_PFX_PASSWORD `
-            /tr http://timestamp.digicert.com /td SHA256 $msi
-          if ($LASTEXITCODE -ne 0) { Write-Error "signtool failed for MSI"; exit 1 }
-
-          Remove-Item $pfxPath -Force
-
-      - name: Upload MSI artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: MSI-${{ matrix.platform }}
-          path: LittleLauncherSetup/bin/${{ matrix.platform }}/Release/LittleLauncherSetup.msi
-
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
@@ -187,19 +149,9 @@ jobs:
           pattern: Build-*
           path: artifacts/build
 
-      - name: Download MSI artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: MSI-*
-          path: artifacts/msi
-
       - name: Collect release files
         run: |
           mkdir -p release
-          for dir in artifacts/msi/*/; do
-            arch=$(basename "$dir" | sed 's/MSI-//')
-            cp "$dir"/*.msi "release/LittleLauncher-${arch}-Setup.msi"
-          done
           for dir in artifacts/build/*/; do
             arch=$(basename "$dir" | sed 's/Build-//')
             (cd "$dir" && zip -r "../../../release/LittleLauncher-${arch}-portable.zip" .)

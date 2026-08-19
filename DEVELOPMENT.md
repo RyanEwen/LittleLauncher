@@ -94,22 +94,18 @@ LauncherShortcut/              # Companion console exe for pin-to-taskbar helper
 
 Version is defined once in `Directory.Build.props`. Pushing a `v*` tag triggers two GitHub Actions:
 
-- **`build-msix.yml`** — builds the signed MSI installers, portable zips, and the GitHub Release.
-- **`store-publish.yml`** — builds the unsigned MSIX packages (x64 + ARM64), bundles them into a single `.msixupload`, and submits a package update to the Microsoft Store via the [Microsoft Store Developer CLI](https://learn.microsoft.com/windows/apps/publish/msstore-dev-cli/overview) (`msstore`). The Store re-signs on ingestion.
+- **`build-msix.yml`** — builds and signs the app, then publishes the GitHub Release with the portable zips (x64 + ARM64) attached. Despite the name it does not build the MSIX.
+- **`store-publish.yml`** — builds the unsigned MSIX packages (x64 + ARM64) purely to prove the Store packaging path still works. It produces **no downloadable artifact** and submits nothing.
 
-You can also build the Store MSIX locally with `LittleLauncherMSIX/build-msix.ps1 -NoSign`.
+### The Store package is built and submitted by hand
 
-### Microsoft Store auto-publish setup
+```powershell
+.\LittleLauncherMSIXuild-msix.ps1 -Platform x64   -NoSign
+.\LittleLauncherMSIXuild-msix.ps1 -Platform ARM64 -NoSign
+```
 
-`store-publish.yml` only submits when the following repository secrets are set (otherwise it just builds and uploads the `.msixupload` as an artifact). Add them under **Settings → Secrets and variables → Actions**:
+Upload the two `.msix` files individually in Partner Center. Store submission **cannot** be automated for this product — it is paid and on Pricing Version 2, which rules out both of Microsoft's automation paths — and the Store build must never be published as a CI artifact from this public repo. Both points are settled and written up, with the reasoning and the re-enable steps, in [.claude/docs/installer.md](.claude/docs/installer.md).
 
-| Secret | Value |
-|---|---|
-| `AZURE_AD_TENANT_ID` | Microsoft Entra tenant ID |
-| `AZURE_AD_APPLICATION_CLIENT_ID` | App registration (client) ID |
-| `AZURE_AD_APPLICATION_SECRET` | Client secret for that app registration |
-| `SELLER_ID` | Partner Center seller / publisher ID |
+There is no MSI. Little Launcher ships as the portable zip and the Store package, and nothing else; see the packaging guide above.
 
-One-time Partner Center setup: register an app in Microsoft Entra ID, then add it under **Account settings → User management → Microsoft Entra applications** with the **Manager** role. The Store product ID (`9P3ZZBDQ6PJF`) is set as `STORE_PRODUCT_ID` in the workflow. See [Publish app updates with GitHub Actions](https://learn.microsoft.com/windows/apps/publish/msstore-dev-cli/github-actions). Note: Microsoft currently supports this GitHub Actions update path for **free products only**, and the submission goes through normal Store certification before going live.
-
-See the versioning and installer guides under [`.claude/docs/`](.claude/docs/) for more detail.
+See the versioning and packaging guides under [`.claude/docs/`](.claude/docs/) for more detail.

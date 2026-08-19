@@ -1,53 +1,60 @@
-> **Scope:** Use when modifying the MSI installer (WiX), MSIX packaging, changing install paths, shortcuts, or upgrade behavior. Covers per-user install, Start Menu shortcut lifecycle, MSIX Store builds, and common pitfalls.
-> **Governs:** `**/Package.wxs`, `**/LittleLauncherSetup.wixproj`, `**/UpdateService.cs`, `**/build-msix.ps1`, `**/Package.appxmanifest`.
+> **Scope:** Use when changing how Little Launcher is packaged, installed or updated. Covers the two channels it ships through — the portable zip and the Microsoft Store MSIX — the Start Menu shortcut lifecycle, and the update flow behind each.
+> **Governs:** `**/UpdateService.cs`, `**/build-msix.ps1`, `**/Package.appxmanifest`.
 
-# MSI Installer (WiX)
+# Packaging and updates
 
-Little Launcher ships as a **per-user MSI** built with WiX Toolset 5. No elevation is required.
+Little Launcher ships through **two channels, and neither of them is an installer of ours**:
+
+| Channel | Artifact | Put in place by | Updates |
+|---|---|---|---|
+| **Portable** | `LittleLauncher-{x64,ARM64}-portable.zip`, attached to the GitHub release | the user, unzipping it wherever they like | in-app check against GitHub Releases; the app opens the release page and the user replaces the folder |
+| **Microsoft Store** | MSIX, built locally and uploaded in Partner Center | the Store | in-app through the Store APIs, or silently by the Store itself |
+
+**There is no MSI.** A per-user WiX installer shipped up to v1.35.1 and was retired: it duplicated
+what the Store already does properly — managed install, silent update, clean uninstall — while
+carrying its own upgrade code, custom actions, uninstall script and signing step. Releases from
+before the cut keep their `.msi` assets, so old download links still resolve, and an installed MSI
+copy keeps working: its updater finds no `.msi` asset on a newer release and falls back to opening
+the release page, which is what the portable build now does too.
 
 ## Install layout
 
-| What | Where |
-|---|---|
-| App files | `%LocalAppData%\Little Launcher\` |
-| Start Menu shortcut | `%AppData%\Microsoft\Windows\Start Menu\Programs\Little Launcher.lnk` |
-| Settings/data | `%AppData%\LittleLauncher\` (created by the app, not the MSI) |
+| What | Portable | MSIX |
+|---|---|---|
+| App files | wherever the user unzipped it | `%ProgramFiles%\WindowsApps\{PFN}\`, managed by Windows |
+| Settings/data | `%AppData%\LittleLauncher\` | the same path, VFS-redirected into `%LocalAppData%\Packages\{PFN}\` |
+| Start Menu shortcut | `%AppData%\...\Start Menu\Programs\Little Launcher.lnk`, written by the app | the package's own manifest entry |
+
+Anything an *external* process opens by path — shell `.lnk` files, the companion exe — has to go
+through `MainWindow.GetPhysicalAppDataDir()` rather than raw `%AppData%`, which MSIX redirects.
 
 ## Start Menu shortcut lifecycle
 
-1. **MSI creates** `Programs\Little Launcher.lnk` at install time using the embedded `LittleLauncher.ico` (always Blue rocket). This gives users something to click before the app ever runs.
-2. **On first launch** `EnsureStartMenuShortcuts()` in `MainWindow.xaml.cs` overwrites the same shortcut with the user's chosen icon (`app-icon.ico` from AppData).
-3. **On icon change** `UpdateShortcutIcons()` re-stamps the shortcut with the new icon.
-4. **On uninstall** the MSI removes the shortcut via the component's registry key.
+1. **On first launch** `EnsureStartMenuShortcuts()` in `MainWindow.xaml.cs` writes
+   `Programs\Little Launcher.lnk` pointing at the running exe. Nothing creates it beforehand: a
+   portable build has no installer to do it, and a packaged one already has its own entry, so
+   `EnsureStartMenuShortcuts()` stops early when `IsPackaged`.
+2. **On icon change** `UpdateShortcutIcons()` re-stamps the shortcut with the new icon.
+3. **On uninstall** — MSIX takes its entry with the package; a portable copy leaves the `.lnk`
+   behind until `cleanup-uninstall.ps1` is run (see below).
 
-**Critical:** The MSI shortcut must be placed directly in `ProgramMenuFolder` (not a subfolder), so its path matches what the app writes at runtime. If the MSI uses a subfolder, you get duplicate shortcuts — one stale (MSI's) and one current (app's).
+**Critical:** the shortcut sits directly in `ProgramMenuFolder`, not a subfolder, so the path the
+app writes and the path it later updates are the same one. `RemoveLegacyMsiSubfolderShortcut()`
+still deletes the stale `Little Launcher\` subfolder shortcut the MSI used to create — keep it,
+that is the only thing tidying up after a machine that once had the MSI.
 
-## Version injection
+## Portable update flow
 
-The installer version comes from `Directory.Build.props` → `LittleLauncherSetup.wixproj` passes `ProductVersion=$(Version).0` via `DefineConstants`. CI also injects it. A fallback `<?define ProductVersion = "X.Y.Z.0" ?>` exists in `Package.wxs` for local builds — **keep it in sync** when bumping versions.
+`CheckForGitHubUpdateAsync()` reads the latest release tag and compares it against the running
+assembly version. **That is all it does — nothing is downloaded and nothing is installed.** Home
+and About show the new version behind a **View Release** button that opens the release page, and
+unpackaged builds additionally raise the startup toast (packaged ones do not — Store updates
+arrive on their own, so there is nothing to interrupt anyone about).
 
-## Upgrade behavior
-
-`MajorUpgrade` with `AllowSameVersionUpgrades="yes"` handles upgrades and reinstalls — the old version is uninstalled before the new one is installed, even when the version number is unchanged. `UpgradeCode` must never change.
-
-## Auto-launch after install
-
-A `CustomAction` in `Package.wxs` launches `LittleLauncher.exe` after `InstallFinalize` (condition `NOT REMOVE`). It uses `asyncNoWait` so the installer doesn't block. This ensures the app is running in the tray immediately after a fresh install or upgrade.
-
-## Per-user install notes
-
-- `Scope="perUser"` means no elevation, installs to `LocalAppDataFolder`
-- WiX ICE validations ICE38, ICE64, ICE91 are suppressed in `.wixproj` — these fire for per-user installs writing to profile directories, which is expected
-- The update service (`UpdateService.cs`) launches `msiexec /i` without elevation (`-Verb RunAs` is NOT used)
-
-## Auto-update flow
-
-`UpdateService` downloads the MSI to a temp folder, removes the Zone.Identifier ADS (Mark of the Web), then spawns a `.cmd` helper script:
-
-1. Script waits for the current app process to exit
-2. Runs `msiexec /i <path> /passive` — installs silently with progress bar (no user interaction; they already consented in-app)
-3. MSI's `CustomAction` auto-launches the app in the tray
-4. Script launches `LittleLauncher.exe --settings` — the single-instance mutex detects the running app and sends `LittleLauncher_ShowSettings`, re-opening the Settings window
+Deliberate: a portable copy is a directory the user chose, may have put somewhere unwritable, and
+is executing out of at that moment. Self-replacing it means surviving locked WebView2 and
+companion-exe handles and stripping Mark-of-the-Web from every extracted file, to save a drag and
+drop. If it is ever reconsidered, that is the work involved.
 
 ## MSIX / Store update flow
 
@@ -55,7 +62,7 @@ For packaged installs, `UpdateService` takes a separate path through `Windows.Se
 
 1. `CheckForUpdateAsync()` calls `GetAppAndOptionalStorePackageUpdatesAsync()` to detect Store updates. That list also contains framework/dependency packages, so `CheckForStoreUpdateAsync` filters to the main app package by `FamilyName` — and the presence of that entry **is** the update signal (see the trap below).
 2. The version number to display comes from the Store's public display-catalog endpoint (`TryGetPublishedVersionAsync`), not from the update list. It is best-effort: `null` means "cannot say", and the Store's list is then trusted on its own rather than vetoed by a failed lookup. When it *does* answer and the published version is not newer than what's installed, the update is suppressed — that is the guard against a stale list offering an update to the running version. `LatestVersion` is left **empty** when an update exists but its number is unknown, and Home/About word that case without a version rather than inventing one.
-3. Home/About pages reuse the same cached result shape as the MSI path and keep the same single-action UI
+3. Home/About pages reuse the same cached result shape as the GitHub path, but only the Store one gets an install button — see the portable flow above
 4. Clicking `Download & Install` calls `RequestDownloadAndInstallStorePackageUpdatesAsync()` on the UI thread
 5. The `StoreContext` is associated with the Settings window handle via `InitializeWithWindow.Initialize(...)` so Store consent dialogs are correctly owned in the desktop app
 6. After the Store API reports success, `UpdateService` writes a small `.cmd` helper that waits for the current process to exit and then launches `explorer.exe shell:AppsFolder\<PackageFamilyName>!App`
@@ -114,18 +121,20 @@ Two things make this testable in minutes instead of via a Store submission round
 
 ## Uninstall cleanup
 
-Before file removal, WiX `util:CloseApplication` targets `LittleLauncher.exe` on `REMOVE="ALL"`. It sends a normal close message, then an end-session message, waits 5 seconds, and force-terminates the process if it is still running. This keeps explicit uninstalls and major-upgrade removal from racing the running tray process.
-
-On `REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE`, a `CustomAction` runs `cleanup-uninstall.ps1` (shipped in the install folder) via `powershell.exe -File`. The `NOT UPGRADINGPRODUCTCODE` condition ensures settings and data survive upgrades. It cleans up:
+**Portable:** deleting the folder removes the app but not what it wrote outside it, and there is
+no uninstaller left to tidy that up. `cleanup-uninstall.ps1` ships in the build output for the
+user to run by hand, with the app closed — it used to be an MSI custom action and is now just a
+script:
 
 | What | Where |
 |---|---|
-| App data folder | `%AppData%\LittleLauncher\` (settings, companion exe, icons) |
-| Flyout Start Menu shortcut | `%AppData%\...\Start Menu\Programs\Little Launcher Flyout.lnk` |
+| App data folder | `%AppData%\LittleLauncher\` (settings, companion exe, icons, web profiles) |
+| Start Menu shortcuts | `Programs\Little Launcher.lnk`, the legacy `Little Launcher Flyout*.lnk`, and the `Programs\Little Launcher\` folder of per-web-launcher shortcuts |
 | Startup registry entry | `HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\Little Launcher` |
 | Pinned taskbar shortcuts | Any `.lnk` in `User Pinned\TaskBar\` targeting `LittleLauncherFlyout.exe` |
 
-The action uses `Return="check"` so the uninstall does not report completion until the cleanup script has finished.
+Run it *before* deleting the folder — it lives in that folder, and it does not remove the folder
+itself.
 
 **MSIX limitation:** MSIX has no custom uninstall actions. When an MSIX package is removed, Windows deletes the package files, its own Start Menu entry, **and all VFS-redirected data** (settings, cached icons, companion exe) because the entire `%LocalAppData%\Packages\{PFN}\` tree is removed. Pinned taskbar shortcuts survive as dead `.lnk` files — Windows 11 eventually detects and offers to remove stale pins. Settings **do** survive MSIX upgrades — Windows preserves package data during version updates, including updates initiated through the Store API path above.
 
@@ -208,13 +217,12 @@ read like a platform limitation and was not one.
 **The CLSID must stay stable.** Changing it orphans the activator for any toast already sitting
 in the Action Center.
 
-## CI state: MSI/GitHub Release automated, Store submission manual
+## CI state: portable/GitHub Release automated, Store submission manual
 
-The `external/promo` private-submodule checkout failure is **fixed** — `build-msix.yml`
-(MSI + GitHub Release) runs clean on every `v*` tag again. Confirmed: v1.24.0 and v1.24.1
-both completed successfully and published GitHub Releases with the four artifacts
-(`LittleLauncher-{x64,ARM64}-Setup.msi` + `-portable.zip`). So a tag push automatically ships
-the MSI auto-update path; **nothing manual is needed for MSI users.**
+`build-msix.yml` (badly named — it builds the app, the portable zips and the GitHub Release, not
+the MSIX) runs clean on every `v*` tag. It attaches two artifacts,
+`LittleLauncher-{x64,ARM64}-portable.zip`, and that is the whole GitHub side: nothing manual is
+needed for portable users, and nothing installs itself for them either.
 
 **The Store submission itself cannot be automated at all** — see the next section; it is a
 paid-product / Pricing Version 2 restriction, not a credential problem. **Store packages are
@@ -345,5 +353,5 @@ path. When that lands, re-enabling is small — the credentials and
 Verify with `-nc` first (step 6 above). Still do **not** add an `upload-artifact` step — the
 public-repo exposure problem is independent of the submission question.
 
-This is separate from `build-msix.yml`, which builds the MSI + GitHub Release and is fully
-automated today.
+This is separate from `build-msix.yml`, which builds the portable zips + GitHub Release and is
+fully automated today.

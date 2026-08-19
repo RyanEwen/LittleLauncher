@@ -61,7 +61,7 @@ public partial class HomePage : Page
 #if DEBUG
         return "(Debug)";
 #else
-        return MainWindow.IsPackaged ? "(MSIX)" : "(WiX)";
+        return MainWindow.IsPackaged ? "(MSIX)" : "(Portable)";
 #endif
     }
 
@@ -106,14 +106,10 @@ public partial class HomePage : Page
                 };
                 UpdateInfoBar.IsOpen = true;
 
-                if (!result.IsStoreManaged && string.IsNullOrEmpty(result.MsiDownloadUrl))
-                {
-                    UpdateActionButton.Content = "View Release";
-                }
-                else
-                {
-                    UpdateActionButton.Content = "Download & Install";
-                }
+                // Only a Store install can update itself. A portable copy is a folder the user
+                // placed and owns, so the action hands them the release page to download the new
+                // zip rather than pretending there is an installer to run.
+                UpdateActionButton.Content = result.IsStoreManaged ? "Download & Install" : "View Release";
             }
         }
         catch (Exception ex)
@@ -126,40 +122,39 @@ public partial class HomePage : Page
     {
         if (_updateResult == null) return;
 
-        if (_updateResult.IsStoreManaged || !string.IsNullOrEmpty(_updateResult.MsiDownloadUrl))
+        if (!_updateResult.IsStoreManaged)
         {
-            UpdateActionButton.IsEnabled = false;
-            UpdateActionButton.Content = "Downloading...";
-
-            var progress = new Progress<double>(p =>
-            {
-                int pct = (int)(p * 100);
-                UpdateActionButton.Content = pct < 100 ? $"Downloading ({pct}%)..." : "Installing...";
-            });
-
-            var (success, message) = await UpdateService.DownloadAndInstallAsync(
-                _updateResult,
-                GetOwnerWindowHandle(),
-                progress);
-
-            if (success)
-            {
-                UpdateInfoBar.Message = message;
-                UpdateInfoBar.Severity = InfoBarSeverity.Success;
-                await Task.Delay(1000);
-                Environment.Exit(0);
-            }
-            else
-            {
-                UpdateActionButton.Content = "Download & Install";
-                UpdateActionButton.IsEnabled = true;
-                UpdateInfoBar.Message = message;
-                UpdateInfoBar.Severity = InfoBarSeverity.Error;
-            }
+            if (!string.IsNullOrEmpty(_updateResult.ReleaseUrl))
+                Process.Start(new ProcessStartInfo(_updateResult.ReleaseUrl) { UseShellExecute = true });
+            return;
         }
-        else if (!string.IsNullOrEmpty(_updateResult.ReleaseUrl))
+
+        UpdateActionButton.IsEnabled = false;
+        UpdateActionButton.Content = "Downloading...";
+
+        var progress = new Progress<double>(p =>
         {
-            Process.Start(new ProcessStartInfo(_updateResult.ReleaseUrl) { UseShellExecute = true });
+            int pct = (int)(p * 100);
+            UpdateActionButton.Content = pct < 100 ? $"Downloading ({pct}%)..." : "Installing...";
+        });
+
+        var (success, message) = await UpdateService.DownloadAndInstallStoreUpdateAsync(
+            GetOwnerWindowHandle(),
+            progress);
+
+        if (success)
+        {
+            UpdateInfoBar.Message = message;
+            UpdateInfoBar.Severity = InfoBarSeverity.Success;
+            await Task.Delay(1000);
+            Environment.Exit(0);
+        }
+        else
+        {
+            UpdateActionButton.Content = "Download & Install";
+            UpdateActionButton.IsEnabled = true;
+            UpdateInfoBar.Message = message;
+            UpdateInfoBar.Severity = InfoBarSeverity.Error;
         }
     }
 

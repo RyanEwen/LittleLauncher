@@ -358,9 +358,9 @@ public sealed partial class MainWindow : Window
         // Apply theme
         ThemeManager.ApplySavedTheme(this);
 
-        // Clear stale paths left by a different install type (e.g. MSIX → WiX).
-        // MSIX VFS-redirects %AppData% into the package's RoamingState folder;
-        // those paths become dead after uninstalling the MSIX and switching to WiX.
+        // Clear stale paths left by a different install type (e.g. MSIX → portable).
+        // MSIX VFS-redirects %AppData% into the package's RoamingState folder; those
+        // paths become dead after uninstalling the MSIX and switching to the portable build.
         MigrateStaleIconPaths();
 
         // ── Tray icons (one per launcher) ──────────────────────────
@@ -1436,7 +1436,7 @@ public sealed partial class MainWindow : Window
     /// Runs unconditionally so entries created by old versions (before --silent
     /// <summary>
     /// Clears icon paths that point to non-existent files, typically caused by
-    /// switching install types (MSIX → WiX or vice versa). MSIX VFS-redirects
+    /// switching install types (MSIX → portable or vice versa). MSIX VFS-redirects
     /// %AppData% into the package's RoamingState folder; those paths become dead
     /// after uninstalling the MSIX. Clearing them lets FetchMissingIconsOnStartupAsync
     /// re-fetch into the current cache directory, and lets ResolveBaseIconBitmap
@@ -1862,10 +1862,10 @@ public sealed partial class MainWindow : Window
 
     /// <summary>
     /// Copies the companion flyout exe to %AppData%\LittleLauncher\ so it has
-    /// a consistent, non-packaged location for all build types (WiX, MSIX,
-    /// unpackaged). In packaged builds, also mirrors the helper into the legacy
+    /// a consistent, non-packaged location for both build types (portable and
+    /// MSIX). In packaged builds, also mirrors the helper into the legacy
     /// shared Roaming path so old unpackaged launcher pins stop cold-starting a
-    /// stale debug/WiX build. Also writes a main-exe-path.txt breadcrumb and
+    /// stale debug or portable build. Also writes a main-exe-path.txt breadcrumb and
     /// cleans up legacy Start Menu shortcuts from previous versions.
     /// </summary>
     private static void EnsureFlyoutShortcut()

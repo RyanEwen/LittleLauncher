@@ -1,6 +1,6 @@
 # LittleLauncher/Services
 
-`UpdateService.cs` drives the MSI auto-update and MSIX/Store update flows. When changing update, install, or packaging behavior, follow the installer conventions:
+`UpdateService.cs` drives both update flows: the portable build's GitHub version check (which links out and installs nothing) and the MSIX/Store update. When changing update, install, or packaging behavior, follow the packaging conventions:
 
 @../../.claude/docs/installer.md
 

@@ -95,13 +95,15 @@ Little Launcher lives in the Windows system tray and/or taskbar. Clicking its ic
 - **Export & import** — back up and restore items locally via JSON.
 - **Bookmark import** — import bookmarks directly from Chrome, Edge, Firefox, or any browser's exported HTML bookmarks file into a launcher.
 - **Pick a web address from your bookmarks** — a web launcher's address, and the bookmarks in its bar, can be chosen from a searchable list of what you have already bookmarked in Chrome, Edge or Firefox, rather than typed from memory.
-- **Update paths per install type** — unpackaged/WiX installs update via GitHub Releases + MSI, while Microsoft Store installs can check for and apply updates through the Store from inside the app.
+- **Update paths per install type** — Microsoft Store installs check for and apply updates through the Store from inside the app; the portable build checks GitHub Releases and takes you to the new release to download it.
 
 ## Install
 
 **Microsoft Store (recommended):** [Get Little Launcher from the Microsoft Store](https://apps.microsoft.com/detail/9p3zzbdq6pjf) — installs and updates automatically through the Store.
 
-**Direct download:** Grab the latest MSI installer or portable ZIP for your architecture (x64 or ARM64) from the [Releases page](https://github.com/RyanEwen/LittleLauncher/releases/latest). The MSI is a per-user install (no admin required) and keeps itself up to date via GitHub Releases.
+**Portable:** Grab the portable ZIP for your architecture (x64 or ARM64) from the [Releases page](https://github.com/RyanEwen/LittleLauncher/releases/latest) and unzip it wherever you like — nothing is installed and no admin rights are needed. It tells you when a new version is out and links you to it; you replace the folder yourself. To remove it, run `cleanup-uninstall.ps1` from the folder with the app closed (it clears settings, the startup entry and any shortcuts), then delete the folder.
+
+Little Launcher used to ship an MSI installer as well. It has been retired in favour of these two: the Store handles installing, updating and uninstalling properly, and the portable build is for anyone who would rather not use the Store. Older releases keep their `.msi` files, and an existing MSI install keeps working — it will simply point you here when a new version appears.
 
 **Requirements:** Windows 10 or 11 (build 22000 or later).
 

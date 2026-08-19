@@ -71,20 +71,6 @@
 			"problemMatcher": "$msCompile"
 		},
 		{
-			"label": "build-installer-x64",
-			"type": "shell",
-			"command": "dotnet build LittleLauncherSetup/LittleLauncherSetup.wixproj -p:Platform=x64 -c Release \"-p:BuildOutputPath=${workspaceFolder}/LittleLauncher/bin/x64/Release/net10.0-windows10.0.22000.0\"",
-			"dependsOn": "build-release-x64",
-			"problemMatcher": "$msCompile"
-		},
-		{
-			"label": "build-installer-arm64",
-			"type": "shell",
-			"command": "dotnet build LittleLauncherSetup/LittleLauncherSetup.wixproj -p:Platform=ARM64 -c Release \"-p:BuildOutputPath=${workspaceFolder}/LittleLauncher/bin/ARM64/Release/net10.0-windows10.0.22000.0\"",
-			"dependsOn": "build-release-arm64",
-			"problemMatcher": "$msCompile"
-		},
-		{
 			"label": "run-debug-x64",
 			"type": "shell",
 			"command": "Start-Process '${workspaceFolder}/LittleLauncher/bin/x64/Debug/net10.0-windows10.0.22000.0/LittleLauncher.exe'",
