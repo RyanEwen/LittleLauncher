@@ -763,7 +763,7 @@ walking to a settings window and back to act on one is the whole cost.
 | "Add to / Remove from the bookmarks bar" | The header's "…" menu | The same action, without needing the address bar on |
 | Right-click a bookmark | The bar | Open, Open in new tab, Rename, Edit address, Copy address, **Icon only**, Open in browser, **Set as default page**, Move left/right, Remove |
 | Right-click the bar's empty space | The bar | **Add bookmark…** (type an address) and **Add from browser…** (pick one out of an installed browser) |
-| The chevron at the end | The bar | Whatever did not fit, as a menu. A click opens it here, a middle-click or Shift/Ctrl-click in a new tab. No right-click: see below |
+| The chevron at the end | The bar | Whatever did not fit, as a menu, aligned to the chevron's right edge. A click opens the bookmark here, a middle-click or Shift/Ctrl-click in a new tab, and a right-click turns the list over into that bookmark's own menu |
 | Drag a bookmark | The bar | Reorders it, with an accent caret marking where it lands |
 
 Rules worth not rediscovering:
@@ -807,15 +807,36 @@ Rules worth not rediscovering:
   changes what fits, which changes what is collapsed. The drag code skips them by their width for
   the same reason, or the caret anchors on one and draws at the left edge with the pointer at the
   right.
-- **The overflow menu opens bookmarks and does nothing else.** Right-click was offered there and
-  could not work: WinUI cannot keep two menus up at once, so a bookmark's own menu light-dismissed
-  the overflow underneath it and the list being read vanished. The two ways to keep it up both cost
-  more than they are worth: a submenu on every row would charge the one action this list exists for
-  a second click. An overflowed bookmark is edited by widening the flyout until it is back on the
-  bar, or in launcher settings.
- Middle-click and Shift/Ctrl-click do work, wired with `AddHandler(..., handledEventsToo: true)`:
-  a `MenuFlyoutItem` marks the press handled for its own visual states, so an ordinary
-  `PointerPressed` subscription never runs.
+- **Right-clicking a row in the overflow menu replaces the list with that bookmark's own menu, in
+  the same place.** It is the same menu the bar itself opens, so a bookmark answers a right-click
+  the same way wherever it is sitting, and the chevron brings the list straight back. The new menu
+  is shown *without* hiding the list first: opening it light-dismisses the list by itself, so there
+  is never a moment with no menu under the pointer. There was one when the list was hidden first,
+  and the cursor fell through to the flyout's 6px bottom resize grip and stayed a resize arrow,
+  since nothing re-asks for a cursor until the pointer moves.
+- **Keeping the list up underneath cannot be done, and both ways of trying it are traps that spring
+  later.** WinUI keeps one `MenuFlyout` up at a time, so a second menu dismisses the first by
+  definition. *Editing the open menu* to hold the actions (swapping the row for a
+  `MenuFlyoutSubItem`, or inserting them under it) leaves a menu that never light-dismisses again,
+  so every right-click stranded one on screen; assigning over an entry (`Items[at] = ...`) removes
+  before it adds, which empties a single-row menu for an instant and closes it outright; and
+  emptying `Items` with `Clear` takes the presenter down mid-gesture, dropping the right-click onto
+  the page underneath, which answers with WebView2's own menu. *A submenu built in before the menu
+  is shown* survives all of that and then cannot be opened: `MenuFlyoutSubItemAutomationPeer`'s
+  `Expand` is the only public way in and it goes around the framework's cascading-menu bookkeeping,
+  putting the submenu in the corner of the window and breaking dismissal again. Left to open itself
+  it waits for the pointer to move, and a right-click that visibly does nothing is worse than one
+  that answers with a different menu shape.
+- **Every gesture in that menu is answered on the pointer press, with `AddHandler(...,
+  handledEventsToo: true)`**, the right-click included, which is why it is *not* wired to
+  `ContextRequested` the way the bar's own buttons are. A `MenuFlyoutItem` marks **every** pointer
+  press handled for its own visual states, whichever button it was, where a `Button` takes only the
+  left one and leaves a right press to become the right-tap that raises `ContextRequested`. Inside
+  the menu that event is never raised at all, so the actions were unreachable for anything that had
+  overflowed, and middle-click needs the same treatment for the same reason.
+- **The menu is aligned to the chevron's right edge (`TopEdgeAlignedRight`), not centred on it.**
+  The chevron is the last thing on the bar, so a centred menu straddles the window's edge and comes
+  up half outside the flyout, around the pointer rather than under the button it came from.
 - **The bar's own context menu is where a bookmark for a page you are not looking at comes from.**
   The star adds the page that is *on screen*, which is the common case and worth its one click, but
   it was the only way in: anything else meant loading the page first or walking to launcher

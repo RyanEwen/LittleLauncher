@@ -119,6 +119,30 @@ two things the default does not give:
 This is the same failure mode as the owned-window rule above: anything that takes focus away from a
 window that dismisses on focus loss has to say so first.
 
+Two more, for menus whose rows answer more than a plain click:
+
+- **A right-click on a `MenuFlyoutItem` has to be answered on the pointer press**, added with
+  `AddHandler(UIElement.PointerPressedEvent, ..., handledEventsToo: true)`. A `MenuFlyoutItem` marks
+  *every* pointer press handled for its own visual states, whichever button it was, and a handled
+  press never becomes the right-tap that raises `ContextRequested`, so that event is never raised
+  inside a menu at all. A `Button` takes only the left press, which is why the same wiring works on
+  ordinary controls and silently does nothing on a menu row. Middle-click needs the same treatment.
+  `ContextRequested` is still worth keeping for the context-menu key, guarded on `TryGetPosition`
+  returning no position so the two paths cannot answer one gesture twice.
+- **Never mutate an open `MenuFlyout`'s `Items`.** Every way of doing it breaks something, and none
+  of them break at the moment of the change: swapping a row (for a `MenuFlyoutSubItem`, say) leaves
+  a menu that never light-dismisses again, so it sits on screen through every click outside it;
+  assigning over an entry (`Items[at] = ...`) removes before it adds, which empties a single-row
+  menu for an instant and closes it outright; and `Clear` takes the presenter down mid-gesture.
+  Build the menu you want and show it instead, letting the new one light-dismiss the old, which is
+  also the only way to keep a menu under the pointer at all times: the moment there is none, the
+  cursor falls through to whatever is beneath and does not change back until the pointer moves.
+- **A `MenuFlyoutSubItem` cannot be opened from code.** `MenuFlyoutSubItemAutomationPeer`'s `Expand`
+  is the only public way in and it goes around the framework's cascading-menu bookkeeping: the
+  submenu comes up against bounds the row does not have yet, in the corner of the window, and
+  afterwards neither menu can be light-dismissed. A submenu only opens on hover or a click, so a
+  gesture that has to *show* something immediately cannot be built out of one.
+
 ## Expander rows for on/off + settings
 
 `SyncPage` renders each sync destination as an `Expander`: icon, name and a live status line in

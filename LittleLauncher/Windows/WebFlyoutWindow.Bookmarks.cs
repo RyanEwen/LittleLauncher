@@ -492,12 +492,12 @@ public sealed partial class WebFlyoutWindow
     /// <remarks>
     /// <para>Every gesture the bar answers, answered here too: a click loads the bookmark in the tab
     /// in front, a middle-click or a Shift/Ctrl-click puts it in a tab of its own, and a right-click
-    /// opens its actions.</para>
-    /// <para><b>Right-click expands in place rather than opening a second menu.</b> WinUI keeps only
-    /// one menu up at a time, so a bookmark's own <c>MenuFlyout</c> light-dismissed this one and the
-    /// list being read vanished at the moment the user asked to act on a row of it. The actions are
-    /// inserted into this menu instead, under the row they belong to. See
-    /// <see cref="FillBookmarkOverflowMenu"/>.</para>
+    /// opens that bookmark's actions.</para>
+    /// <para><b>Aligned to the chevron's right edge, not centred on it.</b> The chevron is the last
+    /// thing on the bar, so a menu centred over it straddles the window's edge and comes up half
+    /// outside the flyout it belongs to, around the pointer rather than under the button. Aligned,
+    /// it grows inwards from the button that opened it, which is where a browser puts its own
+    /// overflow menu.</para>
     /// <para>Built fresh on each open, because which bookmarks are in here is a property of the
     /// window's current width rather than of the launcher.</para>
     /// </remarks>
@@ -507,11 +507,14 @@ public sealed partial class WebFlyoutWindow
 
         var menu = new MenuFlyout
         {
-            Placement = FlyoutPlacementMode.Top,
+            // The bar sits at the foot of the window, so the menu goes up; its right edge on the
+            // chevron's keeps it inside the flyout.
+            Placement = OverflowPlacement,
             ShouldConstrainToRootBounds = false,
         };
 
-        if (!FillBookmarkOverflowMenu(menu, expanded: null)) return;
+        FillBookmarkOverflowMenu(menu);
+        if (menu.Items.Count == 0) return;
 
         menu.Opened += (_, _) => _isMenuOpen = true;
         menu.Closed += (_, _) => _isMenuOpen = false;
@@ -519,70 +522,31 @@ public sealed partial class WebFlyoutWindow
         menu.ShowAt(_bookmarkOverflow);
     }
 
+    /// <summary>Where the chevron's menus go: up, and with their right edge on its.</summary>
+    private const FlyoutPlacementMode OverflowPlacement = FlyoutPlacementMode.TopEdgeAlignedRight;
+
     /// <summary>
-    /// Puts the overflowed bookmarks into <paramref name="menu"/>, and wires the expansion.
+    /// Puts the overflowed bookmarks into <paramref name="menu"/>, and wires what each row answers.
     /// </summary>
-    /// <returns>False when nothing overflowed, so there is no menu worth showing.</returns>
     /// <remarks>
-    /// <para>Right-clicking a row inserts that bookmark's actions directly under it and
-    /// right-clicking it again takes them out, so the gesture is its own undo and the list is never
-    /// lost. A second <c>MenuFlyout</c> cannot be used for this: WinUI keeps only one menu up at a
-    /// time, so the bookmark's own menu light-dismissed the overflow and the list being read
-    /// vanished at the moment the user asked to act on a row of it.</para>
-    /// <para><b>Insert and Remove, never Clear.</b> Emptying an open flyout's <c>Items</c> takes the
-    /// presenter down with it: the menu closed and the right-click landed on the page underneath,
-    /// which answered with WebView2's own Back / Refresh / Inspect menu. Mutating around the rows
-    /// that stay leaves the popup alive and simply re-measures it.</para>
+    /// <para><b>A right-click replaces this list with that bookmark's own menu, in the same place.</b>
+    /// It reads as the list turning over to show one bookmark's actions, and it is the same menu the
+    /// bar itself opens, so a bookmark answers a right-click the same way wherever it happens to be
+    /// sitting. The chevron brings the list straight back.</para>
+    /// <para><b>Keeping the list up underneath was tried twice and cannot be done.</b> WinUI keeps
+    /// only one <c>MenuFlyout</c> up at a time, so a second one dismisses this one by definition, and
+    /// the two ways around that both fail: <em>editing the open menu</em> (swapping a row for a
+    /// <see cref="MenuFlyoutSubItem"/>, or inserting the actions under it) leaves a menu that never
+    /// light-dismisses again, so every right-click stranded one on screen, and assigning over an
+    /// entry empties a single-row menu for an instant, which closes it outright. <em>A submenu built
+    /// in from the start</em> survives that, but nothing can open it: the automation peer's
+    /// <c>Expand</c> is the only public way in and it goes around the framework's cascading-menu
+    /// bookkeeping, putting the submenu in the corner of the window and breaking dismissal again. Left
+    /// to open itself, it waits for the pointer to move, and a right-click that visibly does nothing
+    /// is worse than one that answers with the wrong menu shape.</para>
     /// </remarks>
-    private bool FillBookmarkOverflowMenu(MenuFlyout menu, WebBookmark? expanded)
+    private void FillBookmarkOverflowMenu(MenuFlyout menu)
     {
-        var inserted = new List<MenuFlyoutItemBase>();
-        WebBookmark? open = expanded;
-
-        void Collapse()
-        {
-            foreach (var item in inserted)
-                menu.Items.Remove(item);
-
-            inserted.Clear();
-            open = null;
-        }
-
-        void Expand(WebBookmark bookmark, MenuFlyoutItem row)
-        {
-            Collapse();
-
-            int at = menu.Items.IndexOf(row) + 1;
-            if (at <= 0) return;
-
-            // Bracketed and indented, so the block reads as belonging to the row above rather than
-            // as more bookmarks. Both are needed: without the rules it is a wall of rows, and
-            // without the indent the actions line up with the bookmark names exactly and the menu
-            // looks like it simply grew eleven more entries.
-            //
-            // The dividers inside keep the grouping the bar's own menu has, because it is the same
-            // menu and a user who knows where Remove sits should not have to look for it.
-            void Insert(MenuFlyoutItemBase row)
-            {
-                menu.Items.Insert(at++, row);
-                inserted.Add(row);
-            }
-
-            Insert(new MenuFlyoutSeparator());
-
-            foreach (var action in BuildBookmarkMenuItems(bookmark, separators: true))
-            {
-                if (action is not MenuFlyoutSeparator)
-                    action.Margin = new Thickness(NestedMenuIndentDips, 0, 0, 0);
-
-                Insert(action);
-            }
-
-            Insert(new MenuFlyoutSeparator());
-
-            open = bookmark;
-        }
-
         for (int i = _bookmarkStrip.VisibleCount; i < _bookmarkStrip.Children.Count; i++)
         {
             if (_bookmarkStrip.Children[i] is not Button { Tag: WebBookmark bookmark }) continue;
@@ -605,10 +569,9 @@ public sealed partial class WebFlyoutWindow
             item.Click += (_, _) => OpenBookmark(captured, newTab: false);
 
             // Middle-click and Shift/Ctrl-click open a new tab, as they do on the bar and on any
-            // link in any browser. AddHandler with handledEventsToo, not a plain PointerPressed
-            // subscription: a MenuFlyoutItem marks the press handled for its own visual states, so
-            // an ordinary handler never runs and the gesture did nothing at all. Closing the menu
-            // is part of the gesture: the tab is open, and the list has served its purpose.
+            // link in any browser. On the press, with AddHandler and handledEventsToo, for the same
+            // reason the right-click is: see WireRowRightClick. Closing the menu is part of the
+            // gesture, since the tab is open and the list has served its purpose.
             item.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((_, e) =>
             {
                 var properties = e.GetCurrentPoint(item).Properties;
@@ -623,18 +586,48 @@ public sealed partial class WebFlyoutWindow
                 OpenBookmark(captured, newTab: true);
             }), handledEventsToo: true);
 
-            item.ContextRequested += (_, e) =>
-            {
-                e.Handled = true;
-
-                if (ReferenceEquals(open, captured)) Collapse();
-                else Expand(captured, item);
-            };
+            // Anchored on the chevron rather than on the row, and shown without hiding this menu
+            // first: the new menu light-dismisses this one as it opens, so there is never a moment
+            // with no menu under the pointer. There was one when the list was hidden first, and the
+            // cursor fell through to the flyout's resize edge and stayed a resize arrow, because
+            // nothing re-asks for a cursor until the pointer moves.
+            WireRowRightClick(item, () => ShowBookmarkMenu(captured, _bookmarkOverflow!, OverflowPlacement));
 
             menu.Items.Add(item);
         }
+    }
 
-        return menu.Items.Count > 0;
+    /// <summary>
+    /// Wires what one row of a menu answers a right-click with.
+    /// </summary>
+    /// <remarks>
+    /// <b>On the pointer press, not <c>ContextRequested</c>.</b> A <see cref="MenuFlyoutItem"/>
+    /// marks <em>every</em> pointer press handled for its own visual states, whichever button it
+    /// was, and a handled press never becomes the right-tap that raises <c>ContextRequested</c>. A
+    /// <see cref="Button"/> takes only the left press, which is why the bar's own bookmarks can use
+    /// that event and nothing inside a menu can: wired there, an overflowed bookmark's actions were
+    /// simply unreachable. <c>handledEventsToo</c> is what lets this run after the row has marked
+    /// the press. The <c>ContextRequested</c> handler is kept for the context-menu key, which raises
+    /// it with no position where a pointer carries one, and the guard is what stops the two paths
+    /// answering the same gesture twice.
+    /// </remarks>
+    private static void WireRowRightClick(FrameworkElement row, Action invoke)
+    {
+        row.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((_, e) =>
+        {
+            if (!e.GetCurrentPoint(row).Properties.IsRightButtonPressed) return;
+
+            e.Handled = true;
+            invoke();
+        }), handledEventsToo: true);
+
+        row.ContextRequested += (_, e) =>
+        {
+            if (e.TryGetPosition(row, out var _)) return;
+
+            e.Handled = true;
+            invoke();
+        };
     }
 
     // ── Context menu ────────────────────────────────────────────────
@@ -649,16 +642,18 @@ public sealed partial class WebFlyoutWindow
     /// stop using was; and <c>_isMenuOpen</c>, because an unconstrained menu is hosted in a popup of
     /// its own, which deactivates the flyout that raised it.
     /// </remarks>
-    private void ShowBookmarkMenu(WebBookmark bookmark, FrameworkElement anchor)
+    private void ShowBookmarkMenu(WebBookmark bookmark, FrameworkElement anchor,
+        FlyoutPlacementMode placement = FlyoutPlacementMode.Top)
     {
-        var items = BuildBookmarkMenuItems(bookmark, separators: true);
+        var items = BuildBookmarkMenuItems(bookmark);
         if (items.Count == 0) return;
 
         var menu = new MenuFlyout
         {
             // The bar sits at the foot of the window, which usually sits at the foot of the
-            // screen, so a menu below it has nowhere to go.
-            Placement = FlyoutPlacementMode.Top,
+            // screen, so a menu below it has nowhere to go. The overflow asks for its own
+            // alignment, so its actions land where the list they came from was.
+            Placement = placement,
             ShouldConstrainToRootBounds = false,
         };
 
@@ -672,30 +667,14 @@ public sealed partial class WebFlyoutWindow
     }
 
     /// <summary>
-    /// How far the overflow menu indents a bookmark's actions under its row.
-    /// </summary>
-    /// <remarks>
-    /// <b>A margin, not padding.</b> A <c>MenuFlyoutPresenter</c> gives every row the same icon
-    /// column as soon as one row has an icon, and the text column starts after it whatever the
-    /// row's own padding says. So padding was swallowed and the actions came out on exactly the same
-    /// left edge as the bookmark names above them, which is the layout that had no visible nesting
-    /// at all. A margin moves the whole row, highlight included, and reads as a nested block.
-    /// </remarks>
-    private const double NestedMenuIndentDips = 20;
-
-    /// <summary>
     /// Everything one bookmark can be asked to do, as menu rows.
     /// </summary>
-    /// <param name="separators">
-    /// False for the overflow menu's inline expansion, where the actions are already set apart by
-    /// their indent and dividers would cut the list of bookmarks into pieces.
-    /// </param>
     /// <remarks>
-    /// One list, two menus: the bar's own right-click and the overflow menu's expanded row. They are
-    /// the same question asked about the same bookmark, and the moment they were built separately
-    /// one of them would start missing an action.
+    /// One list, two menus: the bar's own right-click and the overflow menu's submenu. They are the
+    /// same question asked about the same bookmark, and the moment they were built separately one of
+    /// them would start missing an action.
     /// </remarks>
-    private List<MenuFlyoutItemBase> BuildBookmarkMenuItems(WebBookmark bookmark, bool separators)
+    private List<MenuFlyoutItemBase> BuildBookmarkMenuItems(WebBookmark bookmark)
     {
         var items = new List<MenuFlyoutItemBase>();
 
@@ -709,10 +688,7 @@ public sealed partial class WebFlyoutWindow
             return item;
         }
 
-        void Divide()
-        {
-            if (separators) items.Add(new MenuFlyoutSeparator());
-        }
+        void Divide() => items.Add(new MenuFlyoutSeparator());
 
         // The two ways to open it lead, as they do on a link's own context menu: the menu is
         // reached by right-clicking the thing you wanted to open, so "open it" belongs at the top
