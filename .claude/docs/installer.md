@@ -173,6 +173,13 @@ profiles all survive, and the Store can still update the package later since the
   patterns; nothing of the sort is tracked). Regenerate with `New-SelfSignedCertificate -Subject
   "CN=C21E6CEF-D0D1-4497-93F9-3718D054DA0E"` and import the `.cer` into
   **`LocalMachine\TrustedPeople`** (needs elevation) — without that trust the install is refused.
+- **`0x80073CFB` "already installed … contents are different"** means the manifest version matches
+  the installed one exactly. `-ForceUpdateFromAnyVersion` does not cover this: it allows a *lower*
+  version, not an identical one with different bytes. Bump a fourth component in
+  `Directory.Build.props` for the test install (`1.34.0` → `1.34.0.1`); `build-msix.ps1` passes a
+  four-part version through untouched. Put it back afterwards. **Do not `Remove-AppxPackage`
+  instead:** that deletes the package's `LocalCache`, which is where the real `settings.json`, the
+  web profiles and every sign-in live.
 - **`Get-AppxPackage … | Select SignatureKind` tells you which you are on.** `Developer` means a
   sideloaded build is installed, `Store` means the shipped one.
 - **`0x80073D02` "resources … currently in use"** means the app is running — including a copy

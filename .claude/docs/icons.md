@@ -33,6 +33,7 @@ Little Launcher uses a flat upright rocket as its identity icon. The **app ident
   other surface uses. **PNG, not `.ico`:** the notification platform does not render
   multi-image icon files, so pointing `SetAppLogoOverride` at one shows nothing at all.
 - **`<AppDataDir>/app-icon.ico`** — Canonical icon for shortcuts (always mirrors first launcher's icon). Used by `.lnk` shortcuts and the Settings window.
+  **Not by the app's owned dialogs.** `WindowChrome.ResolveAppIconPath` used to prefer this file, which meant the item editor, the text prompt, launcher settings, the bookmark picker and the extension popup all wore whichever launcher sorted first. It reads the packaged `Resources/LittleLauncher.ico` instead; a window wanting a specific launcher's icon passes the path to `ApplyIcon`.
 - **`<AppDataDir>/settings-icon.ico`** — Runtime-generated icon: the current app icon composited with a gear glyph overlay (dark circle + white gear in bottom-right corner). Written by `SaveSettingsIconToAppData()`. Used by the Settings window.
 - **`<AppDataDir>/LittleLauncherFlyout.exe`** — Copy of the companion exe deployed by `EnsureFlyoutShortcut()` for all build types. Pinning uses this copy.
 - **`<AppDataDir>/main-exe-path.txt`** — Breadcrumb file containing the main exe path. Read by the companion exe as a fallback when `FindWindow` fails.

@@ -24,20 +24,20 @@ internal static class WindowChrome
     private const double TitleBarHeight = 40;
 
     /// <summary>
-    /// Resolves the icon to show: the user's chosen app icon if it has been generated,
-    /// otherwise the packaged fallback.
+    /// Resolves the icon these windows wear: the application's own.
     /// </summary>
+    /// <remarks>
+    /// <b>Deliberately not <c>app-icon.ico</c>.</b> That file reads like the app's icon and is not:
+    /// <c>SaveResolvedIconToAppData</c> keeps it mirroring the <em>first launcher's</em> icon,
+    /// because shortcuts and the companion exe's pin dialog want a launcher's face. A dialog of the
+    /// app does not. Reading it meant the item editor, the text prompt, launcher settings and the
+    /// extension popup all wore whichever launcher happened to sort first, which looks like a bug
+    /// because it is one. A window that wants a specific launcher's icon passes the path in.
+    /// </remarks>
     internal static string? ResolveAppIconPath()
     {
-        try
-        {
-            string appData = Path.Combine(MainWindow.GetPhysicalAppDataDir(), "app-icon.ico");
-            if (File.Exists(appData)) return appData;
-        }
-        catch { /* fall through to packaged icon */ }
-
-        string fallback = Path.Combine(AppContext.BaseDirectory, "Resources", "LittleLauncher.ico");
-        return File.Exists(fallback) ? fallback : null;
+        string appIcon = Path.Combine(AppContext.BaseDirectory, "Resources", "LittleLauncher.ico");
+        return File.Exists(appIcon) ? appIcon : null;
     }
 
     /// <summary>

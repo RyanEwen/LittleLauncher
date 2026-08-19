@@ -6,6 +6,7 @@ using LittleLauncher.Models;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using System;
 using System.Collections.Generic;
@@ -87,6 +88,9 @@ public sealed partial class WebFlyoutWindow
     private Border? _dropCaret;
     private Canvas? _barOverlay;
 
+    /// <summary>The chevron at the end of the bar, holding whatever did not fit on it.</summary>
+    private Button? _bookmarkOverflow;
+
     // ── Bookmark bar ────────────────────────────────────────────────
 
     /// <summary>True when this launcher's bar has something to show and is allowed to show it.</summary>
@@ -102,7 +106,8 @@ public sealed partial class WebFlyoutWindow
 
     /// <summary>
     /// Rebuilds the bar from the launcher's bookmarks, in the shape a browser uses: a small icon
-    /// with its label beside it, packed left, scrolling horizontally when there are too many.
+    /// with its label beside it, centred while they fit and packed left once they do not, with
+    /// whatever is left over reached through the chevron at the end.
     /// </summary>
     private void RebuildBookmarkBar(bool force = false)
     {
@@ -451,6 +456,187 @@ public sealed partial class WebFlyoutWindow
         PersistBookmarks();
     }
 
+    // ── Overflow ────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Builds the chevron that holds the bookmarks the bar could not fit.
+    /// </summary>
+    /// <remarks>
+    /// U+E76C is Segoe Fluent's ChevronRight, which is the glyph every browser uses for this and
+    /// reads as "there is more this way" rather than as a menu of its own.
+    /// </remarks>
+    private Button BuildBookmarkOverflowButton()
+    {
+        var button = BuildHeaderButton("", "More bookmarks", (_, _) => ShowBookmarkOverflowMenu());
+        button.Visibility = Visibility.Collapsed;
+        button.VerticalAlignment = VerticalAlignment.Center;
+        return button;
+    }
+
+    /// <summary>Shows or hides the chevron for what the strip currently fits.</summary>
+    /// <remarks>
+    /// Called from the panel's layout pass, so it does no more than set a visibility, which WinUI
+    /// folds into the next pass rather than running one from inside this one.
+    /// </remarks>
+    private void UpdateBookmarkOverflowButton()
+    {
+        if (_bookmarkOverflow == null) return;
+
+        bool any = _bookmarkStrip.VisibleCount < _bookmarkStrip.Children.Count;
+        _bookmarkOverflow.Visibility = any ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// Drops the bookmarks that did not fit into a menu.
+    /// </summary>
+    /// <remarks>
+    /// <para>Every gesture the bar answers, answered here too: a click loads the bookmark in the tab
+    /// in front, a middle-click or a Shift/Ctrl-click puts it in a tab of its own, and a right-click
+    /// opens its actions.</para>
+    /// <para><b>Right-click expands in place rather than opening a second menu.</b> WinUI keeps only
+    /// one menu up at a time, so a bookmark's own <c>MenuFlyout</c> light-dismissed this one and the
+    /// list being read vanished at the moment the user asked to act on a row of it. The actions are
+    /// inserted into this menu instead, under the row they belong to. See
+    /// <see cref="FillBookmarkOverflowMenu"/>.</para>
+    /// <para>Built fresh on each open, because which bookmarks are in here is a property of the
+    /// window's current width rather than of the launcher.</para>
+    /// </remarks>
+    private void ShowBookmarkOverflowMenu()
+    {
+        if (_bookmarkOverflow == null) return;
+
+        var menu = new MenuFlyout
+        {
+            Placement = FlyoutPlacementMode.Top,
+            ShouldConstrainToRootBounds = false,
+        };
+
+        if (!FillBookmarkOverflowMenu(menu, expanded: null)) return;
+
+        menu.Opened += (_, _) => _isMenuOpen = true;
+        menu.Closed += (_, _) => _isMenuOpen = false;
+
+        menu.ShowAt(_bookmarkOverflow);
+    }
+
+    /// <summary>
+    /// Puts the overflowed bookmarks into <paramref name="menu"/>, and wires the expansion.
+    /// </summary>
+    /// <returns>False when nothing overflowed, so there is no menu worth showing.</returns>
+    /// <remarks>
+    /// <para>Right-clicking a row inserts that bookmark's actions directly under it and
+    /// right-clicking it again takes them out, so the gesture is its own undo and the list is never
+    /// lost. A second <c>MenuFlyout</c> cannot be used for this: WinUI keeps only one menu up at a
+    /// time, so the bookmark's own menu light-dismissed the overflow and the list being read
+    /// vanished at the moment the user asked to act on a row of it.</para>
+    /// <para><b>Insert and Remove, never Clear.</b> Emptying an open flyout's <c>Items</c> takes the
+    /// presenter down with it: the menu closed and the right-click landed on the page underneath,
+    /// which answered with WebView2's own Back / Refresh / Inspect menu. Mutating around the rows
+    /// that stay leaves the popup alive and simply re-measures it.</para>
+    /// </remarks>
+    private bool FillBookmarkOverflowMenu(MenuFlyout menu, WebBookmark? expanded)
+    {
+        var inserted = new List<MenuFlyoutItemBase>();
+        WebBookmark? open = expanded;
+
+        void Collapse()
+        {
+            foreach (var item in inserted)
+                menu.Items.Remove(item);
+
+            inserted.Clear();
+            open = null;
+        }
+
+        void Expand(WebBookmark bookmark, MenuFlyoutItem row)
+        {
+            Collapse();
+
+            int at = menu.Items.IndexOf(row) + 1;
+            if (at <= 0) return;
+
+            // Bracketed and indented, so the block reads as belonging to the row above rather than
+            // as more bookmarks. Both are needed: without the rules it is a wall of rows, and
+            // without the indent the actions line up with the bookmark names exactly and the menu
+            // looks like it simply grew eleven more entries.
+            //
+            // The dividers inside keep the grouping the bar's own menu has, because it is the same
+            // menu and a user who knows where Remove sits should not have to look for it.
+            void Insert(MenuFlyoutItemBase row)
+            {
+                menu.Items.Insert(at++, row);
+                inserted.Add(row);
+            }
+
+            Insert(new MenuFlyoutSeparator());
+
+            foreach (var action in BuildBookmarkMenuItems(bookmark, separators: true))
+            {
+                if (action is not MenuFlyoutSeparator)
+                    action.Margin = new Thickness(NestedMenuIndentDips, 0, 0, 0);
+
+                Insert(action);
+            }
+
+            Insert(new MenuFlyoutSeparator());
+
+            open = bookmark;
+        }
+
+        for (int i = _bookmarkStrip.VisibleCount; i < _bookmarkStrip.Children.Count; i++)
+        {
+            if (_bookmarkStrip.Children[i] is not Button { Tag: WebBookmark bookmark }) continue;
+
+            var captured = bookmark;
+
+            var item = new MenuFlyoutItem
+            {
+                Text = string.IsNullOrWhiteSpace(captured.Name) ? captured.Url : captured.Name,
+            };
+
+            if (!string.IsNullOrEmpty(captured.IconPath) && File.Exists(captured.IconPath))
+            {
+                item.Icon = new ImageIcon
+                {
+                    Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(captured.IconPath)),
+                };
+            }
+
+            item.Click += (_, _) => OpenBookmark(captured, newTab: false);
+
+            // Middle-click and Shift/Ctrl-click open a new tab, as they do on the bar and on any
+            // link in any browser. AddHandler with handledEventsToo, not a plain PointerPressed
+            // subscription: a MenuFlyoutItem marks the press handled for its own visual states, so
+            // an ordinary handler never runs and the gesture did nothing at all. Closing the menu
+            // is part of the gesture: the tab is open, and the list has served its purpose.
+            item.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((_, e) =>
+            {
+                var properties = e.GetCurrentPoint(item).Properties;
+                bool modified = properties.IsLeftButtonPressed &&
+                    (e.KeyModifiers.HasFlag(global::Windows.System.VirtualKeyModifiers.Shift) ||
+                     e.KeyModifiers.HasFlag(global::Windows.System.VirtualKeyModifiers.Control));
+
+                if (!properties.IsMiddleButtonPressed && !modified) return;
+
+                e.Handled = true;
+                menu.Hide();
+                OpenBookmark(captured, newTab: true);
+            }), handledEventsToo: true);
+
+            item.ContextRequested += (_, e) =>
+            {
+                e.Handled = true;
+
+                if (ReferenceEquals(open, captured)) Collapse();
+                else Expand(captured, item);
+            };
+
+            menu.Items.Add(item);
+        }
+
+        return menu.Items.Count > 0;
+    }
+
     // ── Context menu ────────────────────────────────────────────────
 
     /// <summary>
@@ -465,8 +651,8 @@ public sealed partial class WebFlyoutWindow
     /// </remarks>
     private void ShowBookmarkMenu(WebBookmark bookmark, FrameworkElement anchor)
     {
-        int index = _launcher.WebBookmarks.IndexOf(bookmark);
-        if (index < 0) return;
+        var items = BuildBookmarkMenuItems(bookmark, separators: true);
+        if (items.Count == 0) return;
 
         var menu = new MenuFlyout
         {
@@ -476,6 +662,46 @@ public sealed partial class WebFlyoutWindow
             ShouldConstrainToRootBounds = false,
         };
 
+        foreach (var item in items)
+            menu.Items.Add(item);
+
+        menu.Opened += (_, _) => _isMenuOpen = true;
+        menu.Closed += (_, _) => _isMenuOpen = false;
+
+        menu.ShowAt(anchor);
+    }
+
+    /// <summary>
+    /// How far the overflow menu indents a bookmark's actions under its row.
+    /// </summary>
+    /// <remarks>
+    /// <b>A margin, not padding.</b> A <c>MenuFlyoutPresenter</c> gives every row the same icon
+    /// column as soon as one row has an icon, and the text column starts after it whatever the
+    /// row's own padding says. So padding was swallowed and the actions came out on exactly the same
+    /// left edge as the bookmark names above them, which is the layout that had no visible nesting
+    /// at all. A margin moves the whole row, highlight included, and reads as a nested block.
+    /// </remarks>
+    private const double NestedMenuIndentDips = 20;
+
+    /// <summary>
+    /// Everything one bookmark can be asked to do, as menu rows.
+    /// </summary>
+    /// <param name="separators">
+    /// False for the overflow menu's inline expansion, where the actions are already set apart by
+    /// their indent and dividers would cut the list of bookmarks into pieces.
+    /// </param>
+    /// <remarks>
+    /// One list, two menus: the bar's own right-click and the overflow menu's expanded row. They are
+    /// the same question asked about the same bookmark, and the moment they were built separately
+    /// one of them would start missing an action.
+    /// </remarks>
+    private List<MenuFlyoutItemBase> BuildBookmarkMenuItems(WebBookmark bookmark, bool separators)
+    {
+        var items = new List<MenuFlyoutItemBase>();
+
+        int index = _launcher.WebBookmarks.IndexOf(bookmark);
+        if (index < 0) return items;
+
         MenuFlyoutItem Item(string text, Action invoke, bool enabled = true)
         {
             var item = new MenuFlyoutItem { Text = text, IsEnabled = enabled };
@@ -483,20 +709,25 @@ public sealed partial class WebFlyoutWindow
             return item;
         }
 
-        // The two ways to open it lead, as they do on a link's own context menu — the menu is
+        void Divide()
+        {
+            if (separators) items.Add(new MenuFlyoutSeparator());
+        }
+
+        // The two ways to open it lead, as they do on a link's own context menu: the menu is
         // reached by right-clicking the thing you wanted to open, so "open it" belongs at the top
         // rather than below five ways to edit it.
-        menu.Items.Add(Item("Open", () => OpenBookmark(bookmark, newTab: false)));
-        menu.Items.Add(Item("Open in new tab", () => OpenBookmark(bookmark, newTab: true)));
+        items.Add(Item("Open", () => OpenBookmark(bookmark, newTab: false)));
+        items.Add(Item("Open in new tab", () => OpenBookmark(bookmark, newTab: true)));
 
-        menu.Items.Add(new MenuFlyoutSeparator());
+        Divide();
 
-        menu.Items.Add(Item("Rename…", () => _ = RenameBookmarkAsync(bookmark)));
-        menu.Items.Add(Item("Edit address…", () => _ = EditBookmarkAddressAsync(bookmark)));
-        menu.Items.Add(Item("Copy address", () => CopyToClipboard(bookmark.Url)));
+        items.Add(Item("Rename…", () => _ = RenameBookmarkAsync(bookmark)));
+        items.Add(Item("Edit address…", () => _ = EditBookmarkAddressAsync(bookmark)));
+        items.Add(Item("Copy address", () => CopyToClipboard(bookmark.Url)));
 
         // Per bookmark, so one long name can be collapsed without flattening the whole bar. Checked
-        // rather than a one-way action, and disabled — still checked — while the launcher-wide
+        // rather than a one-way action, and disabled while still checked when the launcher-wide
         // setting is already collapsing everything, so it reads as "already the case, and not
         // because of this" rather than as an option that does nothing.
         var iconOnly = new ToggleMenuFlyoutItem
@@ -510,26 +741,131 @@ public sealed partial class WebFlyoutWindow
             bookmark.IconsOnly = iconOnly.IsChecked;
             PersistBookmarks();
         };
-        menu.Items.Add(iconOnly);
-        menu.Items.Add(Item("Open in browser", () => OpenExternally(bookmark.Url)));
+        items.Add(iconOnly);
+        items.Add(Item("Open in browser", () => OpenExternally(bookmark.Url)));
 
-        menu.Items.Add(new MenuFlyoutSeparator());
+        Divide();
 
-        // Kept beside the drag rather than replaced by it: a bar with more bookmarks than fit
-        // scrolls, and dragging one past the edge of a scroller is the gesture these two avoid.
-        // First place is not decoration — it is the address the launcher opens at — so there is
-        // also a way to claim it that does not depend on dragging accurately.
-        menu.Items.Add(Item("Open the launcher here", () => MoveBookmark(bookmark, -index), index > 0));
-        menu.Items.Add(Item("Move left", () => MoveBookmark(bookmark, -1), index > 0));
-        menu.Items.Add(Item("Move right", () => MoveBookmark(bookmark, 1), index < _launcher.WebBookmarks.Count - 1));
+        // First place is not decoration: it is the address the launcher opens at, so it is named
+        // for what it does rather than for the move that implements it. "Open the launcher here"
+        // was the move's own description and read as a third way to open the page, next to the two
+        // that actually do.
+        items.Add(Item("Set as default page", () => MoveBookmark(bookmark, -index), index > 0));
 
-        menu.Items.Add(new MenuFlyoutSeparator());
-        menu.Items.Add(Item("Remove", () => RemoveBookmark(bookmark)));
+        // Kept beside the drag rather than replaced by it: a bookmark that does not fit on the bar
+        // is in the chevron's menu, and there is nothing there to drag.
+        items.Add(Item("Move left", () => MoveBookmark(bookmark, -1), index > 0));
+        items.Add(Item("Move right", () => MoveBookmark(bookmark, 1), index < _launcher.WebBookmarks.Count - 1));
+
+        Divide();
+        items.Add(Item("Remove", () => RemoveBookmark(bookmark)));
+
+        return items;
+    }
+
+    /// <summary>
+    /// Opens the bar's own menu, for a right-click that did not land on a bookmark.
+    /// </summary>
+    /// <remarks>
+    /// <para>The gap the star leaves. The star adds the page you are <em>on</em>, which is the
+    /// common case and the reason it is a one-click gesture, but it is the only way in, so a
+    /// bookmark for a page you are not looking at means going and loading it first, or walking to
+    /// launcher settings. Both are the wrong shape for "and one for the wiki, while I am here".</para>
+    /// <para>Right-clicking the empty part of a bar is where every browser puts this, so it needs no
+    /// affordance of its own, which matters in a strip that is 34px tall and already full.</para>
+    /// <para>Two ways in, because there are two ways a user knows an address: they can type it, or
+    /// they already bookmarked it in a real browser years ago. The second is the one worth having:
+    /// a dashboard URL is miserable to type from memory and is invariably already saved somewhere,
+    /// which is the same argument that put the picker in launcher settings.</para>
+    /// </remarks>
+    private void ShowBookmarkBarMenu(ContextRequestedEventArgs e)
+    {
+        var menu = new MenuFlyout
+        {
+            // The bar sits at the foot of the window, which usually sits at the foot of the
+            // screen, so a menu below it has nowhere to go.
+            Placement = FlyoutPlacementMode.Top,
+            ShouldConstrainToRootBounds = false,
+        };
+
+        MenuFlyoutItem Item(string text, Action invoke)
+        {
+            var item = new MenuFlyoutItem { Text = text };
+            item.Click += (_, _) => invoke();
+            return item;
+        }
+
+        menu.Items.Add(Item("Add bookmark…", () => _ = AddBookmarkByAddressAsync()));
+        menu.Items.Add(Item("Add from browser…", () => _ = AddBookmarkFromBrowserAsync()));
 
         menu.Opened += (_, _) => _isMenuOpen = true;
         menu.Closed += (_, _) => _isMenuOpen = false;
 
-        menu.ShowAt(anchor);
+        // Where the pointer actually is, not the middle of the bar: the menu is an answer to a
+        // right-click, so it belongs where the click was.
+        if (e.TryGetPosition(_bookmarkBar, out var point))
+            menu.ShowAt(_bookmarkBar, new FlyoutShowOptions { Position = point });
+        else
+            menu.ShowAt(_bookmarkBar);
+    }
+
+    /// <summary>
+    /// Adds a bookmark for a typed address.
+    /// </summary>
+    /// <remarks>
+    /// One field, not two. <see cref="AddBookmark"/> already names a bookmark for its host, and the
+    /// bar renames in place from the same menu the user is already in, so asking for a name up
+    /// front would be a second field that is usually left to default anyway. It is also exactly
+    /// what the star does, which keeps the two ways of adding one from behaving differently.
+    /// </remarks>
+    private async Task AddBookmarkByAddressAsync()
+    {
+        string? entered = await RunTextPromptAsync("Add bookmark", "https://…", "", "Add");
+        if (string.IsNullOrWhiteSpace(entered)) return;
+
+        string url = NormalizeUrl(entered);
+        if (string.IsNullOrEmpty(url)) return;
+
+        // Already in the bar: adding it twice is never what was meant, and silently doing nothing
+        // reads as the prompt having failed.
+        if (FindBookmark(url) != null)
+        {
+            ShowNotice("That page is already in the bookmarks bar.");
+            return;
+        }
+
+        AddBookmark(url);
+    }
+
+    /// <summary>Adds a bookmark chosen out of an installed browser's own bookmarks.</summary>
+    private async Task AddBookmarkFromBrowserAsync()
+    {
+        if (!Pages.BookmarkPicker.AnyBrowsersInstalled)
+        {
+            ShowNotice(Pages.BookmarkPicker.NoBrowsersMessage);
+            return;
+        }
+
+        var picked = await RunBookmarkPickerAsync();
+        if (picked == null) return;
+
+        string url = NormalizeUrl(picked.Url);
+        if (string.IsNullOrEmpty(url)) return;
+
+        if (FindBookmark(url) != null)
+        {
+            ShowNotice("That page is already in the bookmarks bar.");
+            return;
+        }
+
+        // The browser's own name for it wins over the host AddBookmark would fall back to: the user
+        // chose it from a list showing that name, so anything else reads as the wrong bookmark.
+        var bookmark = new WebBookmark(
+            string.IsNullOrWhiteSpace(picked.Name) ? HostOf(url) : picked.Name, url);
+        _launcher.WebBookmarks.Add(bookmark);
+        PersistBookmarks();
+
+        _ = FetchBookmarkIconAsync(_launcher, bookmark);
     }
 
     private async Task RenameBookmarkAsync(WebBookmark bookmark)
@@ -653,6 +989,16 @@ public sealed partial class WebFlyoutWindow
         _bookmarkStrip.DragOver += BookmarkStrip_DragOver;
         _bookmarkStrip.DragLeave += (_, _) => HideDropCaret();
         _bookmarkStrip.Drop += BookmarkStrip_Drop;
+
+        // On the bar rather than the strip, and it is the bar that is hit-testable: the strip has
+        // no background of its own, so a right-click beside the last bookmark lands here. A click
+        // that did land on a bookmark never reaches this: those mark the event handled, which is
+        // what stops a bookmark's own menu and this one both trying to open.
+        _bookmarkBar.ContextRequested += (_, e) =>
+        {
+            e.Handled = true;
+            ShowBookmarkBarMenu(e);
+        };
     }
 
     /// <summary>
@@ -710,6 +1056,11 @@ public sealed partial class WebFlyoutWindow
     }
 
     /// <summary>Where in the row, counting only the bookmarks not being dragged, x falls.</summary>
+    /// <remarks>
+    /// Overflowed bookmarks are still children, arranged to nothing (see
+    /// <c>Controls.OverflowStripPanel</c>), so they are skipped here by their width rather than
+    /// removed from the panel, and a drop past the last visible one lands after it.
+    /// </remarks>
     private int DropIndexFor(double x)
     {
         int index = 0;
@@ -717,6 +1068,7 @@ public sealed partial class WebFlyoutWindow
         {
             if (child is not Button { Tag: WebBookmark bookmark } button) continue;
             if (ReferenceEquals(bookmark, _draggingBookmark)) continue;
+            if (button.ActualWidth <= 0) break;
 
             var origin = button.TransformToVisual(_bookmarkStrip)
                 .TransformPoint(new global::Windows.Foundation.Point(0, 0));
@@ -734,9 +1086,13 @@ public sealed partial class WebFlyoutWindow
     {
         if (_barOverlay == null || _dropCaret == null) return;
 
+        // On the row only: an overflowed button is arranged to a zero rect, so anchoring the caret
+        // on one would draw it at the left edge of the bar with the pointer at the right.
         var others = _bookmarkStrip.Children
             .OfType<Button>()
-            .Where(b => b.Tag is WebBookmark bookmark && !ReferenceEquals(bookmark, _draggingBookmark))
+            .Where(b => b.ActualWidth > 0
+                     && b.Tag is WebBookmark bookmark
+                     && !ReferenceEquals(bookmark, _draggingBookmark))
             .ToList();
 
         if (others.Count == 0)
@@ -805,6 +1161,39 @@ public sealed partial class WebFlyoutWindow
             _openModal = null;
 
             // Switching this launcher's kind elsewhere can dispose the flyout while a prompt is
+            // up, so everything past here has to tolerate the window already being gone.
+            if (_hwnd != IntPtr.Zero && IsWindow(_hwnd))
+            {
+                SetTopmost(true);
+                RestoreActivation();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Runs the browser-bookmark chooser over the flyout, pinned open for the duration.
+    /// </summary>
+    /// <remarks>
+    /// Same contract as <see cref="RunTextPromptAsync"/>, and for the same two reasons: the flyout
+    /// dismisses on focus loss and opening a window takes focus away, and it has to drop
+    /// always-on-top or the chooser opens behind the window that raised it.
+    /// </remarks>
+    private async Task<Services.FlatBookmark?> RunBookmarkPickerAsync()
+    {
+        if (_isModalOpen) return null;
+
+        _isModalOpen = true;
+        SetTopmost(false);
+        try
+        {
+            return await BookmarkPickerWindow.ShowAsync(_hwnd, w => _openModal = w);
+        }
+        finally
+        {
+            _isModalOpen = false;
+            _openModal = null;
+
+            // Switching this launcher's kind elsewhere can dispose the flyout while the chooser is
             // up, so everything past here has to tolerate the window already being gone.
             if (_hwnd != IntPtr.Zero && IsWindow(_hwnd))
             {

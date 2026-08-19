@@ -92,7 +92,7 @@ the buttons *and* the focus-only clear button, not just the digits.
 
 ## Owned windows, not ContentDialog
 
-UI opened from the flyout (`ItemEditorWindow`, `TextPromptWindow`, `LauncherSettingsWindow`) uses standalone `Window`s. A `ContentDialog` renders inside its host window's content area and **cannot overflow the HWND** — hosted in a flyout that is often ~175px wide and ~130 dips tall, even a one-field dialog gets its input and buttons clipped.
+UI opened from the flyout (`ItemEditorWindow`, `TextPromptWindow`, `LauncherSettingsWindow`, `BookmarkPickerWindow`, `ExtensionPopupWindow`) uses standalone `Window`s. A `ContentDialog` renders inside its host window's content area and **cannot overflow the HWND** — hosted in a flyout that is often ~175px wide and ~130 dips tall, even a one-field dialog gets its input and buttons clipped.
 
 Conventions for these windows:
 
@@ -101,6 +101,7 @@ Conventions for these windows:
 - Set the owner via `SetWindowLongPtr(GWLP_HWNDPARENT)`, **and** have the flyout drop its `IsAlwaysOnTop` flag while the window is open — ownership alone does not beat a topmost owner.
 - Size to content. Surplus height shows as a large empty gap, because the form is top-aligned above a bottom-anchored button row.
 - Don't leak the window: the flyout tracks the open editor and closes it when edit mode ends, so an orphan can't commit into a launcher the user has navigated away from.
+- **A dialog that both a settings window and the flyout need is split from its host.** `BookmarkPicker` was a `ContentDialog`; it is now `BookmarkPickerView` (the chooser) plus two hosts: the dialog for full-size windows, `BookmarkPickerWindow` for the flyout. Copying the chooser into a second window would have been the third place browser bookmarks are read.
 
 ## Flyouts and menus inside the flyout window
 

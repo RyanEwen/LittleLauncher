@@ -75,15 +75,33 @@ public sealed partial class WebFlyoutWindow
     /// <summary>The tab on screen. Its <see cref="WebTab.View"/> is <c>_webView</c>.</summary>
     private WebTab? _activeTab;
 
-    private readonly StackPanel _tabStrip = new()
+    /// <summary>
+    /// The narrowest a tab may be squeezed before the strip scrolls instead.
+    /// </summary>
+    /// <remarks>
+    /// Enough for the favicon, the chip's own padding and a few characters of title. Below this a
+    /// tab is not a smaller tab, it is an unidentifiable one, so past this many tabs the strip goes
+    /// back to scrolling and the active one is scrolled to. The close button costs nothing here
+    /// because it is an overlay; it takes its room from the title, and only while hovered.
+    /// </remarks>
+    private const double MinTabWidthDips = 72;
+
+    private readonly Controls.TabStripPanel _tabStrip = new()
     {
-        Orientation = Orientation.Horizontal,
         Spacing = 2,
+        MinItemWidth = MinTabWidthDips,
         VerticalAlignment = VerticalAlignment.Center,
     };
 
     private readonly Grid _tabBar = new();
     private Button? _newTabButton;
+
+    /// <summary>
+    /// The strip's scroller. Kept because two things need it: the width the chips are squeezed
+    /// into, which the panel cannot see for itself, and scrolling the active tab back into view
+    /// once there are more tabs than even the squeeze can fit.
+    /// </summary>
+    private ScrollViewer? _tabScroller;
 
     /// <summary>The tab being dragged along the strip, or null.</summary>
     private WebTab? _draggingTab;
@@ -109,6 +127,16 @@ public sealed partial class WebFlyoutWindow
         /// tab's address, and a link tab must not be able to answer for it.
         /// </summary>
         public string NavigatedUrl { get; set; } = "";
+
+        /// <summary>
+        /// True once something has finished loading in this tab.
+        /// </summary>
+        /// <remarks>
+        /// The difference between "there is nothing to look at yet" and "there is a page here and
+        /// it is fetching another", which is what decides whether a navigation gets the whole
+        /// status overlay or the hairline. See <c>WebFlyoutWindow.ShowLoading</c>.
+        /// </remarks>
+        public bool HasLoaded { get; set; }
 
         public Button? Chip { get; set; }
         public TextBlock? Label { get; set; }
@@ -145,6 +173,17 @@ public sealed partial class WebFlyoutWindow
             VerticalScrollMode = ScrollMode.Disabled,
             VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
             VerticalAlignment = VerticalAlignment.Center,
+        };
+        _tabScroller = scroller;
+
+        // The panel is measured with an infinite width in here (that is what a horizontal
+        // scroller does), so the width that actually decides the squeeze has to be handed to it.
+        // The scroller sits in a star column whose width does not depend on its content, so this
+        // cannot feed back on itself.
+        scroller.SizeChanged += (_, e) =>
+        {
+            if (Math.Abs(_tabStrip.AvailableWidth - e.NewSize.Width) < 0.5) return;
+            _tabStrip.AvailableWidth = e.NewSize.Width;
         };
 
         _tabBar.Padding = new Thickness(8, 0, 6, 3);
@@ -250,6 +289,53 @@ public sealed partial class WebFlyoutWindow
         }
 
         ApplyTabBarVisibility();
+        BringActiveTabIntoView();
+    }
+
+    /// <summary>
+    /// Scrolls the strip so the tab in front is on screen.
+    /// </summary>
+    /// <remarks>
+    /// <para>Only ever has anything to do once there are more tabs than fit even squeezed down to
+    /// <see cref="MinTabWidthDips"/>, but that is exactly the moment a newly opened tab lands past
+    /// the right edge, where opening it looks like it did nothing at all.</para>
+    /// <para>Deferred to Low priority because the chip it is aiming at has usually just been added
+    /// to the strip and has no layout yet, so its offset would read as zero and every switch would
+    /// scroll back to the start.</para>
+    /// </remarks>
+    private void BringActiveTabIntoView()
+    {
+        var chip = _activeTab?.Chip;
+        if (chip == null || _tabScroller == null) return;
+
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            // The strip is rebuilt freely, so the chip aimed at may have been dropped in between.
+            if (_tabScroller == null || !_tabStrip.Children.Contains(chip)) return;
+
+            double viewport = _tabScroller.ViewportWidth;
+            if (viewport <= 0 || chip.ActualWidth <= 0) return;
+
+            try
+            {
+                double left = chip.TransformToVisual(_tabStrip)
+                    .TransformPoint(new global::Windows.Foundation.Point(0, 0)).X;
+                double right = left + chip.ActualWidth;
+                double offset = _tabScroller.HorizontalOffset;
+
+                // The least scroll that puts it fully in view, and nothing at all when it already
+                // is: a strip that re-centres itself on every switch is its own kind of noise.
+                if (left < offset) offset = left;
+                else if (right > offset + viewport) offset = right - viewport;
+                else return;
+
+                _tabScroller.ChangeView(Math.Max(0, offset), null, null, disableAnimation: false);
+            }
+            catch (Exception ex)
+            {
+                Logger.Debug(ex, "Scrolling the tab strip failed for launcher {Name}", _launcher.Name);
+            }
+        });
     }
 
     /// <summary>
@@ -281,6 +367,9 @@ public sealed partial class WebFlyoutWindow
         slot.Children.Add(icon);
         slot.Children.Add(fallback);
 
+        // MaxWidth caps how wide a long title may make the chip; it is not what trims it. The
+        // trimming comes from the star column below, which hands the label whatever room is left
+        // once the panel has decided how wide this chip gets.
         var label = new TextBlock
         {
             Text = TabCaption(tab),
@@ -298,16 +387,31 @@ public sealed partial class WebFlyoutWindow
             MinWidth = 0,
             MinHeight = 0,
             VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            CornerRadius = new CornerRadius(4),
             Background = (Brush)Application.Current.Resources["SubtleFillColorTransparentBrush"],
             BorderThickness = new Thickness(0),
+
+            // Revealed on hover, the same Opacity + IsHitTestVisible pair the item cards' menu
+            // button uses. IsHitTestVisible is the half that matters; without it a click on what
+            // looks like empty chip would silently close the tab.
+            Opacity = 0,
+            IsHitTestVisible = false,
         };
         ToolTipService.SetToolTip(close, "Close tab");
         close.Click += (_, _) => CloseTab(tab);
 
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        // Auto / Star rather than a horizontal StackPanel. A stack gives its children an infinite
+        // width in its own direction, so the label never learned how much room it had and
+        // TextTrimming did nothing: a long title simply ran off the chip. The star column is what
+        // makes a squeezed tab trim instead of overflow.
+        var row = new Grid { ColumnSpacing = 6 };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        Grid.SetColumn(slot, 0);
+        Grid.SetColumn(label, 1);
         row.Children.Add(slot);
         row.Children.Add(label);
-        row.Children.Add(close);
 
         // The selection mark: a hairline of accent under the chip, shown only while it is active.
         // Inside the button's content rather than behind it, so it cannot widen the chip or shift
@@ -327,22 +431,66 @@ public sealed partial class WebFlyoutWindow
         content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(2) });
         Grid.SetRow(row, 0);
+        Grid.SetRow(close, 0);
         Grid.SetRow(indicator, 1);
         content.Children.Add(row);
+
+        // Over the title's right-hand end, not in a column beside it. A reserved column is what a
+        // browser gives a comfortable tab, but this strip squeezes: at the floor a column would
+        // spend a quarter of the chip on a button that is invisible most of the time, and the
+        // titles came out trimmed to three characters to pay for it. Overlaid, the title has the
+        // whole chip while nothing is hovering it, and gives the button its room only when there is
+        // a button to make room for. See the hover handlers, which is also where the chip's width
+        // is pinned so that giving way costs the title and not the strip.
+        content.Children.Add(close);
         content.Children.Add(indicator);
 
         var chip = new Button
         {
             Content = content,
             Tag = tab,
-            Padding = new Thickness(8, 3, 4, 2),
+            // Tight, and even: the strip's own gap plus two chips' padding is all that separates one
+            // title from the next, so anything generous here reads as the tabs being spaced out.
+            Padding = new Thickness(6, 3, 4, 2),
             MinWidth = 0,
             MinHeight = 0,
             VerticalAlignment = VerticalAlignment.Center,
+            // Stretch, not the button template's default Center: a squeezed chip is arranged
+            // narrower than its content asked for, and centred content keeps its own width and is
+            // clipped rather than handing the loss to the label's star column.
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
             Background = (Brush)Application.Current.Resources["SubtleFillColorTransparentBrush"],
             BorderThickness = new Thickness(0),
         };
         chip.Click += (_, _) => SwitchToTab(tab);
+
+        // On the chip, not on the close button itself: it has to appear before it can be aimed at.
+        //
+        // The title gives it room rather than sitting under it, which is the only way a small glyph
+        // over a word is legible, but the room comes out of the *title*, never out of the chip.
+        // Pinning the chip's width first is what keeps that true: without it the strip re-measures,
+        // the squeeze re-runs, and every tab after this one slides as the pointer crosses the row.
+        chip.PointerEntered += (_, _) =>
+        {
+            if (chip.ActualWidth > 0) chip.Width = chip.ActualWidth;
+
+            // Measured rather than assumed. The button is laid out even while it is invisible - an
+            // overlay costs no width but is still arranged, so its real width is there to read,
+            // and a constant here would be wrong at any font scale but this one.
+            double slot = close.ActualWidth > 0 ? close.ActualWidth : 22;
+            label.Margin = new Thickness(0, 0, slot + 2, 0);
+
+            close.Opacity = 1;
+            close.IsHitTestVisible = true;
+        };
+        chip.PointerExited += (_, _) =>
+        {
+            close.Opacity = 0;
+            close.IsHitTestVisible = false;
+
+            label.Margin = new Thickness(0);
+            chip.ClearValue(FrameworkElement.WidthProperty);
+        };
 
         // Reorderable, as every browser's tabs are. A press that does not move still raises Click,
         // so switching tabs is untouched; the text payload means a tab can also be dragged out to
@@ -597,9 +745,22 @@ public sealed partial class WebFlyoutWindow
         ResumeWebView();
         ApplyZoom();
         UpdateNavigationButtons();
+
+        // Blankness is per tab, and an empty tab forces the address bar on whatever the launcher
+        // says, so switching between an empty tab and a loaded one has to re-ask.
+        ApplyAddressBarVisibility();
         RefreshTabBar();
 
-        if (tab.View.CoreWebView2 != null) HideStatus();
+        if (tab.View.CoreWebView2 != null)
+        {
+            HideStatus();
+
+            // Switching back to an empty tab has to put its own notice back: HideStatus alone
+            // leaves the window showing nothing at all, since an unnavigated browser paints
+            // nothing.
+            ShowEmptyTabStatus(tab);
+        }
+
         RestorePageFocus();
     }
 
@@ -663,6 +824,7 @@ public sealed partial class WebFlyoutWindow
     {
         // Marked handled either way: unhandled, WebView2 opens an unowned browser window floating
         // over the desktop, which is neither of the two things the user could have meant.
+        //
         e.Handled = true;
 
         if (_launcher.WebLinksInBrowser)

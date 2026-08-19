@@ -43,9 +43,19 @@ public sealed partial class WebFlyoutWindow
     private bool _restoringSession;
 
     /// <summary>Records the open tabs, so the next run can put them back.</summary>
+    /// <remarks>
+    /// <b>No tabs is never a session.</b> A launcher reaches zero tabs two ways, and only one of
+    /// them is the user saying so: closing the last tab, which calls <see cref="ClearSession"/>
+    /// itself. The other is teardown, and the default hidden policy performs one on a timer:
+    /// <c>UnloadWebView</c> closes every browser and then refreshes the strip, which lands here
+    /// with an empty list and wrote the session away. So a launcher left alone for
+    /// <c>WebIdleUnloadMinutes</c> silently forgot every tab it had, which is exactly what the
+    /// feature exists to prevent, and what "I lost all my tabs again" was.
+    /// </remarks>
     internal void SaveSession()
     {
         if (_restoringSession) return;
+        if (_tabs.Count == 0) return;
 
         var urls = new List<string>();
         foreach (var tab in _tabs)
@@ -70,7 +80,8 @@ public sealed partial class WebFlyoutWindow
         int active = _activeTab == null ? 0 : Math.Max(0, _tabs.IndexOf(_activeTab));
 
         // Nothing to say is said as nothing: an empty list under WhenWritingDefault leaves the key
-        // out entirely, so a launcher that has never been opened carries no session at all.
+        // out entirely, so a launcher that has never been opened carries no session at all. Only
+        // reachable now for tabs that exist but have no address yet, never for a teardown.
         var stored = urls.Count == 0 ? null : urls;
 
         if (SameAsStored(stored, active)) return;

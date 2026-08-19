@@ -357,6 +357,23 @@ than the window, so no geometry arithmetic depends on how tall it comes out.
   is also the only way to reach the "+" without following a link first.
 - **Its visibility is gated on the header's**, exactly like the address bar's, so collapsing to a
   bookmark bar and a page going fullscreen carry it with them without a line at each call site.
+- **Tabs squeeze to fit before the strip scrolls.** `Controls.TabStripPanel` gives every chip its
+  natural width while the row has room, then takes width back from all of them together down to a
+  floor, and only past that does the strip scroll, with `BringActiveTabIntoView` keeping the tab in
+  front reachable. A `StackPanel` could not do this at all: inside a horizontal scroller it is
+  measured with an infinite width, so a fourth tab simply grew past the edge with nothing on screen
+  saying it was there. The give-up is **max-min fair** rather than an equal share, so a short "Gmail"
+  keeps its own width and hands the difference to the long titles being trimmed. The panel is told
+  the width to work within (`AvailableWidth`), because the scroller's viewport is the number that
+  decides all of this and the measure pass cannot see it.
+- **The close button is drawn over the title, not beside it.** A reserved column is what a browser
+  gives a comfortable tab, and it is wrong for a strip that squeezes: at the floor it spent a quarter
+  of the chip on a button that is invisible most of the time, and titles came out trimmed to three
+  characters to pay for it. Overlaid, the title always gets the whole chip. It is revealed on hover
+  with the `Opacity` + `IsHitTestVisible` pair the item cards use (`IsHitTestVisible` being the half
+  that matters, or a click on what looks like empty chip silently closes the tab), and takes a fill
+  of its own while it is up so a long title does not read through it. Collapsing its column instead
+  was rejected: it would resize every chip after it as the pointer crossed the strip.
 - **Chips are built once per tab and kept on the tab**, never rebuilt per refresh — a rebuild would
   throw away a decoded favicon and a measured label on every switch, which is the mistake the
   bookmark bar's rebuild signature exists to avoid. `DestroyTab` drops them, so nothing survives its
@@ -553,8 +570,10 @@ address" is a launcher with one bookmark. There is no mode switch, and no `WebUs
 **First place is a rule the user can see and can drag.** A stored "which one opens" pointer
 (`WebDefaultBookmarkUrl`) was tried and is redundant once the two modes are one: it could disagree
 with the order on screen, so reordering the bar changed nothing while a hidden field decided the
-answer. The bar's context menu therefore carries **Open the launcher here**, which is a move to the
-front, rather than a checkbox.
+answer. The bar's context menu therefore carries **Set as default page**, which is a move to the
+front, rather than a checkbox. It is named for the consequence rather than for the move that
+implements it: as "Open the launcher here" it sat directly under Open and Open in new tab and read
+as a third way to open the page, next to the two that actually do.
 
 **The bar appears at the second bookmark, and there is no setting for it.** With one there is
 nothing to pick between, and the strip would hold the address the launcher already opened at.
@@ -637,7 +656,9 @@ walking to a settings window and back to act on one is the whole cost.
 |---|---|---|
 | Star at the end of the address bar | Address bar (off by default) | Adds or removes whatever the **address box shows** |
 | "Add to / Remove from the bookmarks bar" | The header's "…" menu | The same action, without needing the address bar on |
-| Right-click a bookmark | The bar | Open, Open in new tab, Rename, Edit address, Copy address, **Icon only**, Open in browser, Move left/right, Remove |
+| Right-click a bookmark | The bar | Open, Open in new tab, Rename, Edit address, Copy address, **Icon only**, Open in browser, **Set as default page**, Move left/right, Remove |
+| Right-click the bar's empty space | The bar | **Add bookmark…** (type an address) and **Add from browser…** (pick one out of an installed browser) |
+| The chevron at the end | The bar | Whatever did not fit, as a menu. A click opens it here, a middle-click or Shift/Ctrl-click in a new tab. No right-click: see below |
 | Drag a bookmark | The bar | Reorders it, with an accent caret marking where it lands |
 
 Rules worth not rediscovering:
@@ -666,13 +687,40 @@ Rules worth not rediscovering:
   lives in a `Canvas` overlay in the bar's own cell, so it adds nothing to the strip's layout,
   which is what its position is measured from; a caret that reflowed the row would oscillate
   between two slots. Move left / Move right stay in the context menu beside it, because a bar with
-  more bookmarks than fit scrolls and dragging past the edge of a scroller is the gesture they
-  avoid.
+  more bookmarks than fit ends in the chevron's menu, where there is nothing to drag.
 - **`_isBookmarkDragging` pins the flyout**, alongside `_isModalOpen`, `_isMenuOpen` and the resize
   and move flags. The drag carries the address as text so it can end in another application, and
   that deactivates this window — which would dismiss the flyout mid-gesture and take the bar being
   reordered with it. (Dropping a bookmark into a browser or an editor is the payoff for carrying
   the text at all.)
+- **The bar overflows into a chevron; it does not scroll.** `Controls.OverflowStripPanel` lays the
+  bookmarks out left to right, shows as many as fit and reports where it ran out, and the chevron
+  beside it drops the rest into a menu. A horizontal scroller was the previous answer and is the
+  wrong one for a 34px strip with no visible scrollbar: the bookmarks past the edge were not merely
+  off screen, nothing on the bar said they existed. The hidden buttons stay children and are
+  *arranged to a zero rect* rather than collapsed: collapsing changes their desired size, which
+  changes what fits, which changes what is collapsed. The drag code skips them by their width for
+  the same reason, or the caret anchors on one and draws at the left edge with the pointer at the
+  right.
+- **The overflow menu opens bookmarks and does nothing else.** Right-click was offered there and
+  could not work: WinUI cannot keep two menus up at once, so a bookmark's own menu light-dismissed
+  the overflow underneath it and the list being read vanished. The two ways to keep it up both cost
+  more than they are worth: a submenu on every row would charge the one action this list exists for
+  a second click. An overflowed bookmark is edited by widening the flyout until it is back on the
+  bar, or in launcher settings.
+ Middle-click and Shift/Ctrl-click do work, wired with `AddHandler(..., handledEventsToo: true)`:
+  a `MenuFlyoutItem` marks the press handled for its own visual states, so an ordinary
+  `PointerPressed` subscription never runs.
+- **The bar's own context menu is where a bookmark for a page you are not looking at comes from.**
+  The star adds the page that is *on screen*, which is the common case and worth its one click, but
+  it was the only way in: anything else meant loading the page first or walking to launcher
+  settings. Right-clicking the bar's empty space offers **Add bookmark…** and **Add from browser…**,
+  which is where every browser puts it. Typing an address asks one question, not two: the name
+  follows the host exactly as the star's does, and the bar renames in place from the same menu.
+- **"Add from browser…" needs a window, not a `ContentDialog`.** `BookmarkPicker` was written as a
+  dialog for launcher settings, which is full size; the flyout is not, and a dialog cannot overflow
+  its HWND. The chooser is now `BookmarkPickerView`, with two hosts: the existing `ContentDialog`
+  and `Windows/BookmarkPickerWindow`, an owned window on the same rules as `TextPromptWindow`.
 - **The strip accepts nothing else.** `BookmarkStrip_DragOver` returns before setting
   `AcceptedOperation` when the drag did not start on a bookmark, so a file or a link dragged over
   the bar never shows a drop cursor. A drop cursor is a promise — the same rule the item flyout's
@@ -1185,6 +1233,13 @@ no browser-action UI** — so `Services/BrowserExtensionService.cs` and
   on every navigation of every tab, and each write is the whole settings file.
 - **Closing the last tab clears the session.** It is an explicit "I am done with this", not a place
   to come back to.
+- **No tabs is never a session, and this one bit.** A launcher reaches zero tabs two ways and only
+  one of them is the user saying so. The other is teardown, and the *default* hidden policy performs
+  one on a timer: `UnloadWebView` closes every browser and then refreshes the strip, which reached
+  `SaveSession` with an empty list and wrote the session away. So a launcher left alone for
+  `WebIdleUnloadMinutes` silently forgot every tab it had, which is exactly what the feature exists
+  to prevent. `SaveSession` now returns on an empty list; `ClearSession` is the only thing that may
+  forget one.
 - **Not synced**, for the reason `WebFlyoutPosition` is not: a set of open tabs is what one machine
   was doing, not a preference about the launcher.
 - Addresses only. Scroll position, form state and history live in the browser that was torn down,
@@ -1201,6 +1256,16 @@ The new-tab page becomes a **blank tab with the address bar showing**, which is 
 for; the rest are answered or refused rather than navigated to. A new tab deliberately does not
 assume the launcher's address: an empty tab the user asked for is a place to type, not another copy
 of the page they already have.
+
+**An empty tab has to settle the status overlay itself.** `CreateTabAsync` raises "Loading…" on the
+way in, because a tab being built is nearly always about to load something, and `NavigationCompleted`
+is what takes it down again. A tab with no address never navigates, so nothing was ever going to:
+the "+" opened a spinner that span for the life of the tab. `ShowEmptyTabStatus` replaces it with the
+one line saying what an empty tab is for, and it is not "nothing", because an unnavigated browser
+paints nothing at all and the tab would be a bare rectangle of window background. It runs from three
+places, which is the whole set of ways a blank tab ends up in front: creation with no address,
+`ActivateTab` switching back to one, and `NavigationCompleted` for the `about:blank` a new-tab
+request is answered with.
 
 ## Saved logins are scoped to the profile
 

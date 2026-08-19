@@ -24,28 +24,113 @@ namespace LittleLauncher.Pages;
 /// already knows the answer and just needs to find it. So it flattens the tree
 /// (<see cref="BookmarkImport.Flatten"/>) and filters as you type, with the folder path kept
 /// only as context and as something else to match on.</para>
-/// <para>A <c>ContentDialog</c> is fine here: unlike the flyout, every caller is a full-size
-/// window with room for it.</para>
+/// <para><b>The chooser and its host are separate</b> (<see cref="BookmarkPickerView"/>), because
+/// the two callers cannot share one. From a settings window a <c>ContentDialog</c> is fine: it is
+/// a full-size window with room for it. From the web flyout it is not: a <c>ContentDialog</c>
+/// renders inside its host's content area and cannot overflow the HWND, and a flyout is often a
+/// few hundred pixels each way. That caller gets <see cref="Windows.BookmarkPickerWindow"/>
+/// instead, which is the same rule <c>ItemEditorWindow</c> and <c>TextPromptWindow</c> follow.</para>
 /// </remarks>
 internal static class BookmarkPicker
+{
+    /// <summary>True when there is at least one browser to read bookmarks out of.</summary>
+    /// <remarks>Asked by each host before building anything, so the "none installed" message is
+    /// theirs to word for the surface it appears on.</remarks>
+    public static bool AnyBrowsersInstalled => BrowserCatalog.GetInstalledBrowsers().Count > 0;
+
+    /// <summary>The sentence every host says when there is nothing to pick from.</summary>
+    public const string NoBrowsersMessage =
+        "No supported browsers were found. Bookmarks can be read from Microsoft Edge, " +
+        "Google Chrome, Brave, Vivaldi, Chromium, Firefox, Zen, Waterfox, and LibreWolf.";
+
+    /// <summary>
+    /// Shows the picker in a <c>ContentDialog</c>. Returns the chosen bookmark, or null if
+    /// cancelled or unavailable. For callers that are a full-size window.
+    /// </summary>
+    public static async Task<FlatBookmark?> PickAsync(XamlRoot xamlRoot)
+    {
+        if (!AnyBrowsersInstalled)
+        {
+            await ShowMessageAsync(xamlRoot, "No Browsers Found", NoBrowsersMessage);
+            return null;
+        }
+
+        var view = new BookmarkPickerView();
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = xamlRoot,
+            Title = "Choose a Bookmark",
+            PrimaryButtonText = "Use",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            IsPrimaryButtonEnabled = false,
+            Content = view.Root,
+        };
+
+        view.CanConfirmChanged += can => dialog.IsPrimaryButtonEnabled = can;
+
+        // Double-click is the natural "this one" gesture in a list of results. Hiding the dialog
+        // this way reports ContentDialogResult.None, indistinguishable from Cancel, hence the
+        // flag, so a double-click confirms rather than silently discarding the choice.
+        bool confirmedByDoubleTap = false;
+        view.Confirmed += () =>
+        {
+            confirmedByDoubleTap = true;
+            dialog.Hide();
+        };
+
+        var result = await dialog.ShowAsync();
+        bool confirmed = result == ContentDialogResult.Primary || confirmedByDoubleTap;
+        return confirmed ? view.Selected : null;
+    }
+
+    private static async Task ShowMessageAsync(XamlRoot xamlRoot, string title, string message)
+    {
+        var dialog = new ContentDialog
+        {
+            XamlRoot = xamlRoot,
+            Title = title,
+            Content = message,
+            CloseButtonText = "OK",
+        };
+        await dialog.ShowAsync();
+    }
+}
+
+/// <summary>
+/// The chooser itself: browser, profile, a search box and the matching bookmarks, with no opinion
+/// about what is holding it.
+/// </summary>
+/// <remarks>
+/// It reports rather than commands: <see cref="CanConfirmChanged"/> for whether a selection exists,
+/// <see cref="Confirmed"/> for the double-click that means "this one". A host turns those into
+/// whatever its own accept affordance is: a dialog's primary button, or a window's.
+/// </remarks>
+internal sealed class BookmarkPickerView
 {
     /// <summary>Remembered across calls so picking a second bookmark starts where the last ended.</summary>
     private static string? _lastBrowserName;
     private static string? _lastProfileDirectory;
 
-    /// <summary>
-    /// Shows the picker. Returns the chosen bookmark, or null if cancelled or unavailable.
-    /// </summary>
-    public static async Task<FlatBookmark?> PickAsync(XamlRoot xamlRoot)
+    private readonly ListView _list;
+    private readonly TextBox _searchBox;
+
+    /// <summary>Raised with whether a bookmark is selected. Drives the host's accept button.</summary>
+    public event Action<bool>? CanConfirmChanged;
+
+    /// <summary>Raised when the user double-clicks a result, which means "take this one and close".</summary>
+    public event Action? Confirmed;
+
+    /// <summary>The chooser's UI, for the host to place.</summary>
+    public FrameworkElement Root { get; }
+
+    /// <summary>The bookmark currently picked, or null.</summary>
+    public FlatBookmark? Selected => _list.SelectedItem as FlatBookmark;
+
+    public BookmarkPickerView()
     {
         var browsers = BrowserCatalog.GetInstalledBrowsers();
-        if (browsers.Count == 0)
-        {
-            await ShowMessageAsync(xamlRoot, "No Browsers Found",
-                "No supported browsers were found. Bookmarks can be read from Microsoft Edge, " +
-                "Google Chrome, Brave, Vivaldi, Chromium, Firefox, Zen, Waterfox, and LibreWolf.");
-            return null;
-        }
 
         // ── Source pickers ──────────────────────────────────────────
         var browserCombo = new ComboBox { PlaceholderText = "Browser", MinWidth = 180 };
@@ -59,14 +144,14 @@ internal static class BookmarkPicker
         sourceRow.Children.Add(profileCombo);
 
         // ── Search + results ────────────────────────────────────────
-        var searchBox = new TextBox
+        _searchBox = new TextBox
         {
             PlaceholderText = "Search bookmarks",
             HorizontalAlignment = HorizontalAlignment.Stretch,
         };
 
         var results = new ObservableCollection<FlatBookmark>();
-        var list = new ListView
+        _list = new ListView
         {
             ItemsSource = results,
             SelectionMode = ListViewSelectionMode.Single,
@@ -85,22 +170,12 @@ internal static class BookmarkPicker
 
         var statusText = new TextBlock { FontSize = 12, Opacity = 0.6 };
 
-        var dialog = new ContentDialog
-        {
-            XamlRoot = xamlRoot,
-            Title = "Choose a Bookmark",
-            PrimaryButtonText = "Use",
-            CloseButtonText = "Cancel",
-            DefaultButton = ContentDialogButton.Primary,
-            IsPrimaryButtonEnabled = false,
-        };
-
         List<FlatBookmark> all = [];
         List<BrowserProfile> profiles = [];
 
         void ApplyFilter()
         {
-            string[] terms = searchBox.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            string[] terms = _searchBox.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             var matches = terms.Length == 0 ? all : all.Where(b => b.Matches(terms)).ToList();
 
             results.Clear();
@@ -115,7 +190,7 @@ internal static class BookmarkPicker
                     ? $"{results.Count} of {matches.Count} matches — keep typing to narrow"
                     : $"{matches.Count} of {all.Count} bookmarks";
 
-            dialog.IsPrimaryButtonEnabled = list.SelectedItem is FlatBookmark;
+            CanConfirmChanged?.Invoke(Selected != null);
         }
 
         void LoadBookmarks()
@@ -169,48 +244,30 @@ internal static class BookmarkPicker
 
         browserCombo.SelectionChanged += (_, _) => PopulateProfiles();   // selecting a profile loads
         profileCombo.SelectionChanged += (_, _) => LoadBookmarks();
-        searchBox.TextChanged += (_, _) => ApplyFilter();
-        list.SelectionChanged += (_, _) => dialog.IsPrimaryButtonEnabled = list.SelectedItem is FlatBookmark;
+        _searchBox.TextChanged += (_, _) => ApplyFilter();
+        _list.SelectionChanged += (_, _) => CanConfirmChanged?.Invoke(Selected != null);
 
-        // Double-click is the natural "this one" gesture in a list of results. Hiding the dialog
-        // this way reports ContentDialogResult.None, indistinguishable from Cancel — hence the
-        // flag, so a double-click confirms rather than silently discarding the choice.
-        bool confirmedByDoubleTap = false;
-        list.DoubleTapped += (_, _) =>
+        _list.DoubleTapped += (_, _) =>
         {
-            if (list.SelectedItem is not FlatBookmark) return;
-            confirmedByDoubleTap = true;
-            dialog.Hide();
+            if (Selected == null) return;
+            Confirmed?.Invoke();
         };
 
         var content = new StackPanel { Spacing = 12, MinWidth = 460 };
         content.Children.Add(sourceRow);
-        content.Children.Add(searchBox);
-        content.Children.Add(list);
+        content.Children.Add(_searchBox);
+        content.Children.Add(_list);
         content.Children.Add(statusText);
-        dialog.Content = content;
+        Root = content;
 
         int rememberedBrowser = browsers.FindIndex(b => b.DisplayName == _lastBrowserName);
         browserCombo.SelectedIndex = rememberedBrowser >= 0 ? rememberedBrowser : 0;
 
         // Focus the search box, not the browser combo: the source is usually already right, and
         // the user came here to type a name.
-        searchBox.Loaded += (_, _) => searchBox.Focus(FocusState.Programmatic);
-
-        var result = await dialog.ShowAsync();
-        bool confirmed = result == ContentDialogResult.Primary || confirmedByDoubleTap;
-        return confirmed ? list.SelectedItem as FlatBookmark : null;
+        _searchBox.Loaded += (_, _) => _searchBox.Focus(FocusState.Programmatic);
     }
 
-    private static async Task ShowMessageAsync(XamlRoot xamlRoot, string title, string message)
-    {
-        var dialog = new ContentDialog
-        {
-            XamlRoot = xamlRoot,
-            Title = title,
-            Content = message,
-            CloseButtonText = "OK",
-        };
-        await dialog.ShowAsync();
-    }
+    /// <summary>Puts the caret in the search box. For a host that opens after the box has loaded.</summary>
+    public void FocusSearch() => _searchBox.Focus(FocusState.Programmatic);
 }

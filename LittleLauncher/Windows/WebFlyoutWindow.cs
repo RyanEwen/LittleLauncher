@@ -91,8 +91,27 @@ public sealed partial class WebFlyoutWindow : Window
     /// <summary>The header's right-hand button strip, which extension buttons are inserted into.</summary>
     private readonly StackPanel _headerButtons;
     private readonly Grid _root;
-    private readonly StackPanel _bookmarkStrip;
+    private readonly Controls.OverflowStripPanel _bookmarkStrip;
     private readonly Grid _bookmarkBar;
+    /// <summary>
+    /// The thread of progress under the chrome, for a page that is already on screen.
+    /// </summary>
+    /// <remarks>
+    /// A browser does not grey out the page you are reading to tell you the next one is coming, and
+    /// neither should this. The status overlay is right when there is nothing else to look at and
+    /// wrong the moment there is: it is a spinner and a word, centred over content the user can
+    /// still read and scroll. This is the other half of that answer.
+    /// </remarks>
+    private readonly ProgressBar _loadingBar = new()
+    {
+        Height = 2,
+        Minimum = 0,
+        Maximum = 100,
+        IsIndeterminate = false,
+        Visibility = Visibility.Collapsed,
+        Margin = new Thickness(0),
+    };
+
     private readonly StackPanel _statusPanel;
     private readonly TextBlock _statusText;
     private readonly ProgressRing _statusRing;
@@ -445,6 +464,10 @@ public sealed partial class WebFlyoutWindow : Window
         chrome.Children.Add(BuildTabBar());
         chrome.Children.Add(_addressBar);
 
+        // Last in the stack, so it sits directly on top of the page it describes, exactly where a
+        // browser puts it.
+        chrome.Children.Add(_loadingBar);
+
         // Everything that hides the header — collapsing to a bookmark bar, a page going
         // fullscreen — means to hide the chrome, so the address bar and the tab strip follow it
         // rather than needing a matching line added at each of those call sites.
@@ -513,26 +536,17 @@ public sealed partial class WebFlyoutWindow : Window
         BuildPromptBar();
 
         // ── Bookmark bar (bar-mode launchers only) ──────────────────
-        // Centred, not packed left. Once there are more bookmarks than fit, the scroller takes
-        // over and they read as left-aligned anyway.
-        _bookmarkStrip = new StackPanel
+        // Centred while everything fits. Once it does not, the panel packs what it can from the
+        // left and hands the rest to the chevron beside it, which is what a browser does and what
+        // the horizontal scroller here could not: a 34px strip has no visible scrollbar, so the
+        // bookmarks past the edge were not merely off screen, nothing said they existed.
+        _bookmarkStrip = new Controls.OverflowStripPanel
         {
-            Orientation = Orientation.Horizontal,
             Spacing = 2,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
         };
-
-        var stripScroller = new ScrollViewer
-        {
-            Content = _bookmarkStrip,
-            HorizontalScrollMode = ScrollMode.Auto,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden,
-            VerticalScrollMode = ScrollMode.Disabled,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            VerticalAlignment = VerticalAlignment.Center,
-            HorizontalContentAlignment = HorizontalAlignment.Center,
-        };
+        _bookmarkStrip.VisibleCountChanged += _ => UpdateBookmarkOverflowButton();
 
         _bookmarkBar = new Grid
         {
@@ -547,16 +561,22 @@ public sealed partial class WebFlyoutWindow : Window
             BorderBrush = (Brush)Application.Current.Resources["DividerStrokeColorDefaultBrush"],
             BorderThickness = new Thickness(0, 1, 0, 0),
         };
-        // One column, all of it the strip. There were two — the second held a settings and a close
-        // button, for a bar that was the whole window while it was collapsed to a strip. There is
-        // no collapsed state now, so the header is always there to carry both.
+        // The strip, and the chevron for whatever it could not fit. The chevron's own column is
+        // what keeps the two from fighting: it is Auto, so while it is collapsed the strip has the
+        // whole bar, and the moment it appears the strip re-measures against what is left. That
+        // settles in one step rather than oscillating, because losing width can only ever push
+        // more bookmarks into the menu, never pull them back out.
+        _bookmarkOverflow = BuildBookmarkOverflowButton();
         _bookmarkBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        Grid.SetColumn(stripScroller, 0);
+        _bookmarkBar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        Grid.SetColumn(_bookmarkStrip, 0);
+        Grid.SetColumn(_bookmarkOverflow, 1);
         _bookmarkBar.PointerPressed += BeginWindowMove;
         _bookmarkBar.PointerMoved += ContinueWindowMove;
         _bookmarkBar.PointerReleased += EndWindowMove;
         _bookmarkBar.PointerCaptureLost += EndWindowMove;
-        _bookmarkBar.Children.Add(stripScroller);
+        _bookmarkBar.Children.Add(_bookmarkStrip);
+        _bookmarkBar.Children.Add(_bookmarkOverflow);
 
         // The caret that marks where a dragged bookmark will land, in a layer of its own over the
         // strip's own cell. Drawn rather than mimed by shuffling the buttons, for the reason
@@ -2006,8 +2026,37 @@ public sealed partial class WebFlyoutWindow : Window
         // would otherwise load its address into the page the user is reading. That was safe only
         // while every new tab was activated on creation.
         if (!string.IsNullOrEmpty(navigateTo)) NavigateTab(tab, navigateTo);
+        else ShowEmptyTabStatus(tab);
 
         return tab;
+    }
+
+    /// <summary>
+    /// Settles the status overlay for a tab that was built with nowhere to go.
+    /// </summary>
+    /// <remarks>
+    /// <para>The overlay is raised on the way into <see cref="CreateTabAsync"/> because a tab being
+    /// built is nearly always about to load something, and it is taken down again by
+    /// <c>NavigationCompleted</c>. A tab with no address never navigates, so nothing was ever going
+    /// to take it down: the "+" opened a spinner that span for the life of the tab.</para>
+    /// <para>What belongs there instead is not nothing: an unnavigated browser paints nothing at
+    /// all, so the tab would be a bare rectangle of window background. It is the one line that says
+    /// what an empty tab is for, and it sits directly under the address bar that
+    /// <see cref="IsActiveTabBlank"/> forces on for exactly this case.</para>
+    /// <para>A tab whose caller navigates it (which is what handing the browser to
+    /// <c>NewWindowRequested.NewWindow</c> does) raises the overlay again from
+    /// <c>NavigationStarting</c> a moment later, so this is safe for that path too.</para>
+    /// </remarks>
+    private void ShowEmptyTabStatus(WebTab tab)
+    {
+        if (!ReferenceEquals(tab, _activeTab)) return;
+
+        // Told to go somewhere, even if it has not arrived: the load owns the overlay, and a tab
+        // mid-navigation still reports an empty Source until the first response commits.
+        if (!string.IsNullOrEmpty(tab.NavigatedUrl)) return;
+        if (!IsActiveTabBlank) return;
+
+        SetStatus("Type an address above to open a page.", busy: false, showRetry: false);
     }
 
     private void ConfigureCore(CoreWebView2 core, WebTab tab)
@@ -2049,7 +2098,7 @@ public sealed partial class WebFlyoutWindow : Window
         {
             if (TryHandleBrowserPageNavigation(core, e)) return;
 
-            if (IsActiveCore(core)) SetStatus("Loading…", busy: true, showRetry: false);
+            if (IsActiveCore(core)) ShowLoading(tab);
         };
 
         core.HistoryChanged += (_, _) =>
@@ -2083,6 +2132,7 @@ public sealed partial class WebFlyoutWindow : Window
             {
                 ApplyZoom(core);   // CSS zoom lives in the document, so each navigation drops it
                 UpdateTabChip(tab);
+                tab.HasLoaded = true;
 
                 // Per tab, not per active tab: this is the moment a tab's address is finally real,
                 // and it is the only one that catches a page the user browsed to rather than one
@@ -2094,6 +2144,14 @@ public sealed partial class WebFlyoutWindow : Window
                 if (!active) return;
 
                 HideStatus();
+
+                // about:blank is where a new-tab request is answered (see BrowserPages), and it
+                // completes like any other navigation, so without these the notice raised on
+                // creation, and the address bar an empty tab forces on, are both taken straight
+                // back down again.
+                ApplyAddressBarVisibility();
+                ShowEmptyTabStatus(tab);
+
                 UpdateNavigationButtons();
                 RevealWebViewIfPending();
                 CompletePreload();   // loaded off screen at startup: collapse it, keep it connected
@@ -2755,7 +2813,7 @@ public sealed partial class WebFlyoutWindow : Window
             return;
         }
 
-        SetStatus("Loading…", busy: true, showRetry: false);
+        ShowLoading();
         core.Reload();
     }
 
@@ -2894,6 +2952,42 @@ public sealed partial class WebFlyoutWindow : Window
 
     // ── Status overlay ──────────────────────────────────────────────
 
+    /// <summary>
+    /// Says a navigation has started, in whichever of the two ways fits what is on screen.
+    /// </summary>
+    /// <remarks>
+    /// The overlay when the tab has nothing to show yet, or when its page is deliberately hidden
+    /// waiting on a reload (see <see cref="_revealOnNavigationCompleted"/>), because then the
+    /// overlay <em>is</em> the content. The hairline once the tab has a page, because covering a
+    /// readable page with a spinner to announce the next one is the complaint this exists to answer.
+    /// </remarks>
+    private void ShowLoading(WebTab? tab = null)
+    {
+        tab ??= _activeTab;
+
+        // The test is whether there is a page on screen right now, not what kind of navigation this
+        // is. Anything else needs every call site to reason about visibility for itself, and the
+        // one that did not was Reload: it left the page up and put a spinner over the middle of it.
+        bool pageOnScreen = tab is { HasLoaded: true }
+            && tab.View.Visibility == Visibility.Visible
+            && !_revealOnNavigationCompleted;
+
+        if (pageOnScreen)
+        {
+            ShowLoadingBar(true);
+            return;
+        }
+
+        SetStatus("Loading…", busy: true, showRetry: false);
+    }
+
+    /// <summary>Shows or hides the hairline, stopping its animation when it is not being seen.</summary>
+    private void ShowLoadingBar(bool running)
+    {
+        _loadingBar.IsIndeterminate = running;
+        _loadingBar.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
+    }
+
     private void SetStatus(string message, bool busy, bool showRetry)
     {
         _statusText.Text = message;
@@ -2905,6 +2999,8 @@ public sealed partial class WebFlyoutWindow : Window
 
     private void HideStatus()
     {
+        ShowLoadingBar(false);
+
         _statusRing.IsActive = false;
         _statusPanel.Visibility = Visibility.Collapsed;
     }
