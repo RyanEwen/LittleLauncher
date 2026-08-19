@@ -834,6 +834,16 @@ Rules worth not rediscovering:
   left one and leaves a right press to become the right-tap that raises `ContextRequested`. Inside
   the menu that event is never raised at all, so the actions were unreachable for anything that had
   overflowed, and middle-click needs the same treatment for the same reason.
+- **The bar checks that its buttons still hold the launcher's *own* bookmark objects, not just
+  equal ones.** `RebuildBookmarkBar` skips the rebuild when its signature of names, addresses and
+  icons is unchanged, and a sync download defeats exactly that: `LauncherPayload.Merge` empties
+  `WebBookmarks` and refills it with new objects carrying identical values, so the signature matches
+  to the character while every button's `Tag` points at a bookmark the launcher no longer holds.
+  Everything the bar does starts by asking the launcher where a bookmark *is*, with `IndexOf`: the
+  actions, the moves, the removes. All of it returned -1 and did nothing at all, on the bar and
+  in the overflow menu, with nothing thrown and nothing logged, until the app was restarted. It read
+  as "right-click stopped working". `BarHoldsLiveBookmarks` is the reference check that closes it,
+  and `WebFlyoutWindow.InvalidateBookmarks` is what tells a flyout that is already open to run it.
 - **The menu is aligned to the chevron's right edge (`TopEdgeAlignedRight`), not centred on it.**
   The chevron is the last thing on the bar, so a centred menu straddles the window's edge and comes
   up half outside the flyout, around the pointer rather than under the button it came from.

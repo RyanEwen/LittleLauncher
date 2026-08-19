@@ -510,3 +510,24 @@ LITTLELAUNCHER_GOOGLE_CLIENT_SECRET
 6. Add the panel and the `ComboBoxItem` to `SyncPage` — the combo binds `SelectedIndex` directly
    to the provider int, so **item order is the constant order**.
 7. `AutoSyncService` should need no change. If it does, the abstraction is in the wrong place.
+
+## A download replaces objects, not just values
+
+`LauncherPayload.Merge` writes into the launcher that is already in settings, but its collections
+are emptied and refilled: `Items` and `WebBookmarks` come back as **new objects**, even when nothing
+about them changed. Anything holding one of those objects from before the sync is holding something
+the launcher no longer contains, and the usual way that shows up is a lookup by identity quietly
+failing rather than an exception.
+
+So a download has to tell the windows that are already built:
+
+| Call | Refreshes |
+|---|---|
+| `FlyoutWindow.InvalidateItems(force: false)` | the item flyouts |
+| `WebFlyoutWindow.InvalidateBookmarks()` | the web flyouts' bookmark bars |
+
+Both are called from all three download paths (startup, the periodic tick, and the Sync page's
+manual download), and both are cheap when nothing changed, which is what lets them run on a timer:
+each rebuilds only when its launcher's content actually differs. The bookmark bar's own guard is
+described in [web-launchers.md](web-launchers.md); it went missing once, and every context menu on
+every bookmark bar silently did nothing until the app was restarted.

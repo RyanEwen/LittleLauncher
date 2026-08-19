@@ -1341,6 +1341,26 @@ public sealed partial class WebFlyoutWindow : Window
     }
 
     /// <summary>
+    /// Rebinds every open web flyout's bookmark bar to the bookmarks its launcher holds now.
+    /// </summary>
+    /// <remarks>
+    /// <para>The web launcher's half of <c>FlyoutWindow.InvalidateItems</c>, and called from the
+    /// same places: a sync download rewrites launchers underneath windows that are already built,
+    /// and nothing told this side of the app about it.</para>
+    /// <para>It matters even when the download changed nothing a user could see.
+    /// <c>LauncherPayload.Merge</c> empties <c>WebBookmarks</c> and refills it with new objects, so
+    /// a bar built before the sync is left holding bookmarks the launcher no longer contains and
+    /// every action on it silently does nothing (see <c>BarHoldsLiveBookmarks</c>). The rebuild is
+    /// still conditional, though, since this runs on a timer: <c>RebuildBookmarkBar</c> skips the
+    /// work when the bar already holds the launcher's current bookmarks.</para>
+    /// </remarks>
+    internal static void InvalidateBookmarks()
+    {
+        foreach (var panel in Instances.Values)
+            panel.RebuildBookmarkBar();
+    }
+
+    /// <summary>
     /// Forgets every login this app's browsers have saved, across every profile.
     /// </summary>
     /// <remarks>

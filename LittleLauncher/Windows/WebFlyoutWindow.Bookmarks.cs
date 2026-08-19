@@ -122,7 +122,7 @@ public sealed partial class WebFlyoutWindow
         // Icons-only is part of the signature: it changes what every button contains, so
         // toggling it has to rebuild rather than hand back the buttons built for the other mode.
         string signature = BookmarkBarSignature();
-        if (!force && signature == _barSignature && _bookmarkStrip.Children.Count > 0)
+        if (!force && signature == _barSignature && _bookmarkStrip.Children.Count > 0 && BarHoldsLiveBookmarks())
         {
             // Same bookmarks as last time — the buttons are already built, laid out and decoded.
             _bookmarkBar.Visibility = Visibility.Visible;
@@ -136,6 +136,35 @@ public sealed partial class WebFlyoutWindow
             _bookmarkStrip.Children.Add(BuildBookmarkButton(bookmark));
 
         _bookmarkBar.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>
+    /// True when the buttons on the bar carry the very bookmarks the launcher holds now.
+    /// </summary>
+    /// <remarks>
+    /// <para>A different question from the signature above, which compares what a bookmark
+    /// <em>says</em>. A sync download empties <see cref="Launcher.WebBookmarks"/> and refills it
+    /// with new objects carrying identical names, addresses and icons (see
+    /// <c>LauncherPayload.Merge</c>), so the signature matches to the character while every button's
+    /// <c>Tag</c> points at a bookmark the launcher no longer contains.</para>
+    /// <para><b>Everything the bar does is then silently dead</b>, because it all starts by asking
+    /// the launcher where this bookmark is: <c>IndexOf</c> returns -1, the actions list comes back
+    /// empty, and the context menu, the moves and the removes do nothing at all, on the bar and in
+    /// the overflow menu alike. Nothing throws and nothing logs, and it lasts until the app is
+    /// restarted, which is why it read as "right-click stopped working".</para>
+    /// </remarks>
+    private bool BarHoldsLiveBookmarks()
+    {
+        if (_bookmarkStrip.Children.Count != _launcher.WebBookmarks.Count) return false;
+
+        for (int i = 0; i < _launcher.WebBookmarks.Count; i++)
+        {
+            if (_bookmarkStrip.Children[i] is not Button { Tag: WebBookmark bookmark } ||
+                !ReferenceEquals(bookmark, _launcher.WebBookmarks[i]))
+                return false;
+        }
+
+        return true;
     }
 
     /// <summary>

@@ -189,6 +189,7 @@ public static class AutoSyncService
                 ClearPendingLocalItemChanges();
                 Logger.Info("Auto-sync startup: downloaded launchers");
                 Windows.FlyoutWindow.InvalidateItems();
+                Windows.WebFlyoutWindow.InvalidateBookmarks();
                 MainWindow.Current?.RefreshTrayIcons();
             }
             else
@@ -271,6 +272,7 @@ public static class AutoSyncService
                     // force:false — a periodic download that changed nothing must not rebuild
                     // every flyout's visual tree on a timer (that churn fed the container leak).
                     Windows.FlyoutWindow.InvalidateItems(force: false);
+                    Windows.WebFlyoutWindow.InvalidateBookmarks();
                     MainWindow.Current?.RefreshTrayIcons();
                 });
             }
@@ -295,6 +297,7 @@ public static class AutoSyncService
                 // force:false — this runs on every periodic tick; only rebuild when a shared
                 // launcher's items actually changed, not unconditionally (see InvalidateItems).
                 Windows.FlyoutWindow.InvalidateItems(force: false);
+                Windows.WebFlyoutWindow.InvalidateBookmarks();
             });
             Logger.Info($"Shared launcher sync ({trigger}): complete");
         }

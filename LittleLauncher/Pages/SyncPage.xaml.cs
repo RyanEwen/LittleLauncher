@@ -464,6 +464,7 @@ public partial class SyncPage : Page
         {
             AutoSyncService.ClearPendingLocalItemChanges();
             FlyoutWindow.InvalidateItems();
+            WebFlyoutWindow.InvalidateBookmarks();
             MainWindow.Current?.RefreshTrayIcons();
         }
     }
