@@ -251,23 +251,23 @@ public sealed partial class WebFlyoutWindow
         // tooltip; with them shown the name is already on screen and the address is the useful part.
         ToolTipService.SetToolTip(button,
             ShowsIconOnly(bookmark) ? $"{caption}\n{bookmark.Url}" : bookmark.Url);
-        button.Click += (_, _) => OpenBookmark(bookmark, newTab: false);
+        // Shift/Ctrl-click opens a tab of its own, as it does on any link in any browser, and it is
+        // answered in Click rather than on the press: a Button marks the left press handled for its
+        // own press/click handling before any instance handler runs, so the plain PointerPressed
+        // subscription this used to be never saw a modified click at all and the gesture did
+        // nothing.
+        button.Click += (_, _) => OpenBookmark(bookmark, newTab: WantsNewTab());
 
-        // Middle-click and Shift/Ctrl-click open a new tab, as they do on any link in any browser.
-        // Handled on the press rather than in Click: marking it there is what stops the button
-        // taking the plain-click path as well, and a middle button never raises Click at all.
-        button.PointerPressed += (_, e) =>
+        // Middle-click, which raises no Click at all and so has to be taken from the press. The
+        // handler needs AddHandler with handledEventsToo for the same reason as above: a plain
+        // subscription is skipped once the Button has claimed the press.
+        button.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((_, e) =>
         {
-            var properties = e.GetCurrentPoint(button).Properties;
-            bool modified = properties.IsLeftButtonPressed &&
-                (e.KeyModifiers.HasFlag(global::Windows.System.VirtualKeyModifiers.Shift) ||
-                 e.KeyModifiers.HasFlag(global::Windows.System.VirtualKeyModifiers.Control));
-
-            if (!properties.IsMiddleButtonPressed && !modified) return;
+            if (!e.GetCurrentPoint(button).Properties.IsMiddleButtonPressed) return;
 
             e.Handled = true;
             OpenBookmark(bookmark, newTab: true);
-        };
+        }), handledEventsToo: true);
 
         // Right-click carries everything that is not "open this", which is the same idiom the item
         // cards use — and the reason none of it needs a control of its own in a 34px strip.
@@ -308,6 +308,29 @@ public sealed partial class WebFlyoutWindow
         _bookmarkHandlers.Add((bookmark, OnBookmarkPropertyChanged));
 
         return button;
+    }
+
+    /// <summary>
+    /// True while Shift or Ctrl is held: every browser's "open this in a tab of its own".
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Read from the keyboard, not from a pointer event's <c>KeyModifiers</c>.</b> The
+    /// gesture is answered in <c>Click</c>, because a <c>Button</c> and a <c>MenuFlyoutItem</c> both
+    /// mark the left press handled for their own visual states before any instance handler runs, so
+    /// the press that carries those modifiers is not reliably ours to read. Asking the keyboard for
+    /// its state at the moment of the click is the same answer from a source that does not depend on
+    /// which control claimed the press, and it is equally true of a trackpad tap, where the click
+    /// and the modifier come from two different devices.</para>
+    /// </remarks>
+    private static bool WantsNewTab()
+    {
+        static bool Down(global::Windows.System.VirtualKey key) =>
+            Microsoft.UI.Input.InputKeyboardSource
+                .GetKeyStateForCurrentThread(key)
+                .HasFlag(global::Windows.UI.Core.CoreVirtualKeyStates.Down);
+
+        return Down(global::Windows.System.VirtualKey.Shift) ||
+               Down(global::Windows.System.VirtualKey.Control);
     }
 
     /// <summary>
@@ -595,20 +618,14 @@ public sealed partial class WebFlyoutWindow
                 };
             }
 
-            item.Click += (_, _) => OpenBookmark(captured, newTab: false);
+            // The same three gestures the bar answers, answered the same way: the modified click in
+            // Click, and middle-click on the press, since it raises no Click. The menu closes on a
+            // click of its own accord, and Hide covers the middle-click that does not reach it.
+            item.Click += (_, _) => OpenBookmark(captured, newTab: WantsNewTab());
 
-            // Middle-click and Shift/Ctrl-click open a new tab, as they do on the bar and on any
-            // link in any browser. On the press, with AddHandler and handledEventsToo, for the same
-            // reason the right-click is: see WireRowRightClick. Closing the menu is part of the
-            // gesture, since the tab is open and the list has served its purpose.
             item.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((_, e) =>
             {
-                var properties = e.GetCurrentPoint(item).Properties;
-                bool modified = properties.IsLeftButtonPressed &&
-                    (e.KeyModifiers.HasFlag(global::Windows.System.VirtualKeyModifiers.Shift) ||
-                     e.KeyModifiers.HasFlag(global::Windows.System.VirtualKeyModifiers.Control));
-
-                if (!properties.IsMiddleButtonPressed && !modified) return;
+                if (!e.GetCurrentPoint(item).Properties.IsMiddleButtonPressed) return;
 
                 e.Handled = true;
                 menu.Hide();

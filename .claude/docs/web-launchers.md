@@ -827,13 +827,21 @@ Rules worth not rediscovering:
   putting the submenu in the corner of the window and breaking dismissal again. Left to open itself
   it waits for the pointer to move, and a right-click that visibly does nothing is worse than one
   that answers with a different menu shape.
-- **Every gesture in that menu is answered on the pointer press, with `AddHandler(...,
-  handledEventsToo: true)`**, the right-click included, which is why it is *not* wired to
-  `ContextRequested` the way the bar's own buttons are. A `MenuFlyoutItem` marks **every** pointer
-  press handled for its own visual states, whichever button it was, where a `Button` takes only the
-  left one and leaves a right press to become the right-tap that raises `ContextRequested`. Inside
-  the menu that event is never raised at all, so the actions were unreachable for anything that had
-  overflowed, and middle-click needs the same treatment for the same reason.
+- **A right-click in that menu is answered on the pointer press, with `AddHandler(...,
+  handledEventsToo: true)`**, which is why it is *not* wired to `ContextRequested` the way the bar's
+  own buttons are. A `MenuFlyoutItem` marks **every** pointer press handled for its own visual
+  states, whichever button it was, where a `Button` takes only the left one and leaves a right press
+  to become the right-tap that raises `ContextRequested`. Inside a menu that event is never raised
+  at all, so the actions were unreachable for anything that had overflowed.
+- **Middle-click is taken from the press; Shift/Ctrl-click is taken from `Click`, reading the
+  keyboard.** On the bar and in the menu alike, and for the same reason in both: the control claims
+  the left press before any instance handler runs, so a press handler wired the plain way
+  (`button.PointerPressed +=`) never saw a modified click and the gesture silently did nothing for
+  as long as the bar has existed. `Click` always arrives, and `WantsNewTab()` asks
+  `InputKeyboardSource.GetKeyStateForCurrentThread` whether Shift or Ctrl is down rather than
+  reading a `KeyModifiers` off an event that may never reach us. Middle-click cannot use `Click`,
+  which it never raises, so it keeps the press handler, and that one does need
+  `handledEventsToo: true`.
 - **The bar checks that its buttons still hold the launcher's *own* bookmark objects, not just
   equal ones.** `RebuildBookmarkBar` skips the rebuild when its signature of names, addresses and
   icons is unchanged, and a sync download defeats exactly that: `LauncherPayload.Merge` empties
