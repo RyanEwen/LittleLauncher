@@ -825,7 +825,25 @@ public sealed partial class WebFlyoutWindow
         // Marked handled either way: unhandled, WebView2 opens an unowned browser window floating
         // over the desktop, which is neither of the two things the user could have meant.
         //
+        // Leaving an extension's request unhandled was tried, on the theory that WebView2 only
+        // builds the window object `chrome.windows.create` resolves with when it makes the window
+        // itself. It does not: the window came up as a plain Edge popup, address bar and all, and
+        // Bitwarden still aborted on a missing id. Handing the request back gains nothing and
+        // costs the window's appearance, so it stays ours.
         e.Handled = true;
+
+        // An extension asking for a window gets one, not a tab. Its pages are chrome of the
+        // browser rather than places the user browsed to, and they are drawn for a popup: Bitwarden
+        // opens its passkey and two-factor prompts this way, and as a tab the prompt was a dark
+        // rectangle with no UI in it at all. It also skips WebLinksInBrowser below, which is about
+        // links to websites: the real browser has no access to this profile's extensions and would
+        // answer a chrome-extension:// address with an error page.
+        if (IsExtensionPage(e.Uri))
+        {
+            var extensionDeferral = e.GetDeferral();
+            _ = AdoptExtensionWindowAsync(e, extensionDeferral);
+            return;
+        }
 
         if (_launcher.WebLinksInBrowser)
         {
@@ -835,6 +853,116 @@ public sealed partial class WebFlyoutWindow
 
         var deferral = e.GetDeferral();
         _ = AdoptNewWindowAsync(e, WantsBackgroundWindow(e), deferral);
+    }
+
+    /// <summary>True for one of this profile's extensions' own pages.</summary>
+    private static bool IsExtensionPage(string uri) =>
+        uri.StartsWith("chrome-extension://", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Answers an extension's new-window request with an <see cref="ExtensionPopupWindow"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Both halves matter, and each fixes a different failure.</b></para>
+    /// <para><em>The browser is adopted</em>, exactly as <see cref="AdoptNewWindowAsync"/> adopts one
+    /// for a link: <c>e.NewWindow</c> is how WebView2 is told the window was made. Answering the
+    /// request <c>Handled</c> with no window instead reports failure to the extension, and an
+    /// extension that asked for a window in order to run a passkey prompt gives up on the spot: the
+    /// site reports the sign-in as failed before the window has even been looked at.</para>
+    /// <para><em>And the window is navigated if WebView2 does not navigate it.</em> Adoption alone
+    /// produced a window that opened and stayed empty. Which of the two happens is not ours to
+    /// decide, so the address is only used when nothing else has: see
+    /// <see cref="EnsureExtensionWindowNavigatedAsync"/>, which checks before it acts.</para>
+    /// <para>The window is on this launcher's own user-data folder, because an extension's pages
+    /// only work in the profile the extension was installed into. Every path completes the deferral,
+    /// including the failures: a request left open leaves the page waiting forever.</para>
+    /// </remarks>
+    private async Task AdoptExtensionWindowAsync(CoreWebView2NewWindowRequestedEventArgs e,
+                                                 global::Windows.Foundation.Deferral deferral)
+    {
+        string uri = e.Uri;
+        try
+        {
+            Logger.Info("An extension asked for a window on {Uri} in launcher {Name}", uri, _launcher.Name);
+
+            string title = await ExtensionPopupTitleAsync(uri);
+            var popup = await ExtensionPopupWindow.AdoptAsync(
+                title, GetUserDataFolder(_launcher), _hwnd, w => _openModal = w);
+
+            if (popup?.Core is not { } core)
+            {
+                Logger.Warn("No window could be built for the extension page {Uri} in launcher {Name}", uri, _launcher.Name);
+                return;
+            }
+
+            e.NewWindow = core;
+            _ = EnsureExtensionWindowNavigatedAsync(popup, uri);
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn(ex, "Opening the extension window {Uri} failed for launcher {Name}", uri, _launcher.Name);
+        }
+        finally
+        {
+            _openModal = null;
+            deferral.Complete();
+        }
+    }
+
+    /// <summary>How long the browser is given to navigate an adopted window before we do.</summary>
+    private const int AdoptedWindowNavigationGraceMs = 800;
+
+    /// <summary>
+    /// Loads the page into an adopted extension window if nothing has finished loading in it.
+    /// </summary>
+    /// <remarks>
+    /// Handing WebView2 a browser through <c>NewWindow</c> is supposed to be followed by WebView2
+    /// navigating it to the address that was asked for, and for a link that is what happens. For an
+    /// extension's own window it did not: a navigation started, never finished, and the window sat
+    /// empty. Testing <c>Source</c> was therefore useless, because <c>Source</c> was set the whole
+    /// time; the window is asked instead whether anything has actually <em>completed</em>. See
+    /// <c>ExtensionPopupWindow.LoadIfIdle</c>.
+    /// </remarks>
+    private static async Task EnsureExtensionWindowNavigatedAsync(ExtensionPopupWindow popup, string uri)
+    {
+        await Task.Delay(AdoptedWindowNavigationGraceMs);
+        popup.LoadIfIdle(uri);
+    }
+
+    /// <summary>
+    /// What to call an extension's window before its page has said anything.
+    /// </summary>
+    /// <remarks>
+    /// The address carries the extension's id and nothing else, so the name has to be looked up.
+    /// The live browser is asked first because it is the only authoritative answer: the id comes
+    /// back from the install, and an extension added from a folder never had one written to
+    /// settings. The stored list is the fallback for a browser that cannot answer, and "Extension"
+    /// the fallback for a window that would otherwise be titled with a GUID.
+    /// </remarks>
+    private async Task<string> ExtensionPopupTitleAsync(string uri)
+    {
+        string id;
+        try { id = new Uri(uri).Host; }
+        catch (UriFormatException) { return "Extension"; }
+
+        try
+        {
+            if (_webView?.CoreWebView2 is { } core)
+            {
+                var installed = await core.Profile.GetBrowserExtensionsAsync();
+                var live = installed.FirstOrDefault(x => string.Equals(x.Id, id, StringComparison.OrdinalIgnoreCase));
+                if (live != null && !string.IsNullOrWhiteSpace(live.Name)) return live.Name;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Debug(ex, "Asking the browser to name the extension {Id} failed", id);
+        }
+
+        var stored = Services.BrowserExtensionService.Installed
+            .FirstOrDefault(x => string.Equals(x.Id, id, StringComparison.OrdinalIgnoreCase));
+
+        return stored != null && !string.IsNullOrWhiteSpace(stored.Name) ? stored.Name : "Extension";
     }
 
     /// <summary>

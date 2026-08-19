@@ -1408,6 +1408,7 @@ public sealed partial class WebFlyoutWindow : Window
         string folder = GetUserDataFolder(launcher);
         if (Directory.Exists(folder))
             Directory.Delete(folder, recursive: true);
+            Services.WebViewEnvironments.Forget(folder);
     }
 
     /// <summary>Where a web launcher's cookies, storage and cache live, so logins survive restarts.</summary>
@@ -1943,20 +1944,11 @@ public sealed partial class WebFlyoutWindow : Window
 
             // A per-launcher profile keeps each panel signed in independently and, more to the
             // point, keeps it signed in at all — the alternative is re-authenticating to a home
-            // dashboard on every app restart. Launchers opted into the shared profile point at
-            // one folder instead; safe to do from several environments in this process because
-            // every one of them is created with identical options (WebView2 rejects a second
-            // environment on the same folder only when the options differ). Tabs of one launcher
-            // share the folder for the same reason: they are tabs of one browser.
-            // AreBrowserExtensionsEnabled is set for *every* launcher, never only for ones with an
-            // extension. The options must match across every environment on a folder — connecting to
-            // an already-running one with a different value fails outright with ERROR_INVALID_STATE
-            // — and the shared profile puts several launchers on one folder, so a conditional flag
-            // would break exactly the launchers that share while private ones carried on fine.
-            var environment = await CoreWebView2Environment.CreateWithOptionsAsync(
-                browserExecutableFolder: "",
-                userDataFolder: userDataFolder,
-                options: new CoreWebView2EnvironmentOptions { AreBrowserExtensionsEnabled = true });
+            // dashboard on every app restart. Launchers opted into the shared profile point at one
+            // folder instead, and every browser on a folder now shares one environment rather than
+            // making its own. See Services/WebViewEnvironments, and the extension service-worker
+            // churn that motivated it.
+            var environment = await Services.WebViewEnvironments.GetAsync(userDataFolder);
 
             await webView.EnsureCoreWebView2Async(environment);
         }

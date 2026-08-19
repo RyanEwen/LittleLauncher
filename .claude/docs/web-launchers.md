@@ -341,6 +341,111 @@ had nowhere to put a second page. It now becomes a tab, unless `Launcher.WebLink
   answer *is* the browser. Every path completes it, including both failure paths, which fall back to
   the external browser — a deferral never completed leaves the page waiting forever, the same rule
   the permission prompts follow.
+- **An extension asking for a window gets a window, not a tab.** `chrome-extension://` new-window
+  requests go to `ExtensionPopupWindow.AdoptAsync`. Bitwarden opens its passkey and two-factor
+  prompts this way, and as a tab the prompt was a dark rectangle with no UI and no way to finish
+  signing in. The window is on the launcher's own user-data folder, since an extension's pages only
+  work in the profile it was installed into, and this path deliberately runs *before*
+  `WebLinksInBrowser`: the real browser has no access to this profile's extensions and would answer
+  the address with an error page.
+
+  **Two things are needed and each fixes a different failure.** The browser must be *adopted*:
+  `e.NewWindow` is how WebView2 is told the window was made, and answering `Handled` with no window
+  reports failure to the extension, which gives up on the spot, so the site reported the sign-in as
+  failed before the window had been looked at. And the window must be *navigated if WebView2 does
+  not navigate it*, because adoption alone opened a window that stayed empty.
+  `EnsureExtensionWindowNavigatedAsync` waits out a short grace period, asks what the browser
+  actually did, and loads the address only when the answer is nothing, so a window WebView2 did
+  drive is left alone rather than sent somewhere twice.
+- **An extension's passkey prompt cannot complete here, and the reason is one missing return
+  value.** Measured against Bitwarden and GitHub, with the extension's own console:
+
+  ```
+  [Fido2Client] Aborted by user: TypeError: Cannot read properties of undefined (reading 'id')
+  ```
+
+  That is the extension reading `.id` off the window object `chrome.windows.create` should have
+  resolved with. WebView2 raises `NewWindowRequested`, the host builds a real window and adopts the
+  browser into it, and the page loads, but the extension is handed nothing with an `id` on it, so
+  it aborts the ceremony before the popout can claim its session. The window is then a correctly
+  loaded page with no session to render, and the site reports the sign-in as failed before the user
+  has touched anything.
+
+  **The APIs are not the gap, which is worth knowing because it is the obvious wrong guess.** A
+  probe inside a live extension page returned `chrome.runtime`, `chrome.windows`, `chrome.tabs` and
+  `chrome.extension.getViews` all present, with `chrome.runtime.id` set. Bitwarden's *ordinary*
+  popup renders perfectly in `ExtensionPopupWindow` on the same profile, so the window, the profile
+  and the extension loading are all fine.
+
+  **Leaving the request unhandled does not help, and this was measured rather than reasoned.** The
+  obvious suspicion is that the host is the problem: `HandleNewWindowRequested` sets
+  `e.Handled = true` and supplies its own window, so perhaps WebView2 only builds the object
+  `chrome.windows.create` resolves with when it creates the window itself. It was tried. The window
+  came up as a plain unowned Edge popup, address bar and all, and Bitwarden aborted on the same
+  missing id. Handing the request back gains nothing and costs the window's appearance, so the
+  launcher keeps it. **Do not re-run this experiment.**
+
+  So the missing value is produced by WebView2's extension implementation and handed straight to the
+  extension, with no seam in between.
+
+  **The answer is the extension's own switch, and it works.** In Bitwarden that is
+  **Settings, Notifications, "Save to vault options", "Ask to save and use passkeys"** (`enablePasskeys`;
+  not under Autofill, which is where it sounds like it should be). It is not merely an offer to
+  decline: the background registers and unregisters the interception with it.
+
+  ```js
+  (yield this.isPasskeySettingEnabled())
+      ? SN.registerContentScriptsMv3([{ id: 'fido2-page-script-registration',
+                                        js: ['content/fido2-page-script.js'], world: "MAIN" }, ...])
+      : SN.unregisterContentScriptsMv3({ ids: ['fido2-page-script-registration',
+                                               'fido2-content-script-registration'] })
+  ```
+
+  Off, the MAIN-world script is never registered, `navigator.credentials.get` is never patched, and
+  the request reaches Windows Hello, which works in the flyout. **Verified end to end against a real
+  GitHub sign-in.** Each launcher has its own WebView2 profile, so this is set per launcher and the
+  user's real browser is untouched, which costs nothing: Bitwarden passkeys cannot work in a
+  launcher either way.
+
+  **Two ways of forcing it from the host were considered and rejected.** Patching the extension's
+  background script as it is fetched (the trick the notification bridge uses) means forging window
+  identities inside a password manager, and would break on every Bitwarden release. Declining to
+  serve `content/fido2-page-script.js` into launcher profiles is narrower but is still the app
+  reaching into an extension's files to disable one of its features. Neither is worth it when the
+  extension ships the switch.
+
+  **What must not be done is wrapping `navigator.credentials.get`.** It was tried: capture the
+  native implementation at document start, re-install as the outermost wrapper, and on rejection
+  offer Windows Hello through a prompt. It was reverted the same day, because the first observable
+  effect was **GitHub no longer offering its passkey option at all**: a site decides what to offer
+  partly from that API, and standing in the middle of it on every page of every web launcher, to
+  work around one extension, broke a path that had been working.
+
+  **Sharing one environment per profile was tried too, and changed nothing.** The console also shows
+  `Uncaught (in promise) Error: Duplicate script ID 'fido2-page-script-registration'` during
+  background startup, and the suspicion was that this app caused it: it built a new
+  `CoreWebView2Environment` for every tab and every popup window on one profile, restarting the
+  extension's service worker around them, while its content-script registrations persisted. If that
+  rejection aborted the rest of the FIDO2 setup, the undefined would have been a consequence rather
+  than the cause. `Services/WebViewEnvironments` now shares one environment per folder, and the
+  duplicate registration still appears and the sign-in still fails, so the worker churn was not ours.
+  The sharing is kept anyway: it is what the WebView2 documentation recommends, and it is less work
+  per browser.
+
+  **What the undefined most likely is.** `Could not establish connection. Receiving end does not
+  exist.` fires immediately before the abort, every time, which is a `sendMessage` to a receiver that
+  is not there, and the address carries `senderTabId=1549898803`, far too large to be a real Chrome
+  tab id, so WebView2 is synthesising them. So the `.id` being read off undefined is more likely a
+  **tab** lookup than the window object. It makes no difference to the outcome: `chrome.tabs` is the
+  platform's implementation, with nothing between it and the extension.
+
+  **Every host-side variable has now been tested**, which is the reason to stop: the launcher builds
+  the window, and WebView2 builds the window; one environment per browser, and one shared per
+  profile. The failure is identical in all four.
+
+  Unrelated noise in the same log, so it is not mistaken for a cause: `Specified native messaging
+  host not found` is Bitwarden failing to reach its desktop app, whose manifests are registered per
+  browser. That affects biometric unlock, not passkeys.
 - **`window.close()` closes the tab, not the flyout** — for a link tab. Only a page the launcher
   itself opened speaks for the whole window. OAuth popups close themselves, so without this
   splitting the handler, signing in dismissed the launcher at the moment it succeeded.

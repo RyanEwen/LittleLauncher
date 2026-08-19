@@ -33,6 +33,12 @@ namespace LittleLauncher.Windows;
 /// must match across every environment on a folder.</para>
 /// <para>Sized generously and fixed: a popup declares its own size in CSS and there is no API to ask
 /// it, so the window is a comfortable box rather than a guess that clips somebody's panel.</para>
+/// <para><b>It answers two callers.</b> The header's extension button knows the page it wants and
+/// calls <see cref="ShowAsync"/>. An extension asking for a window of its own arrives as a
+/// new-window request, and that caller needs the browser itself to hand back to WebView2, so
+/// <see cref="AdoptAsync"/> builds the window and returns it with its <c>CoreWebView2</c> ready and
+/// unnavigated. See <c>WebFlyoutWindow.AdoptExtensionWindowAsync</c> for why both halves of that
+/// are load-bearing.</para>
 /// </remarks>
 public sealed class ExtensionPopupWindow : Window
 {
@@ -40,8 +46,15 @@ public sealed class ExtensionPopupWindow : Window
     private const int WindowHeightDips = 560;
 
     private readonly TaskCompletionSource<bool> _completion = new();
+
+    /// <summary>The browser, once it exists. Null when it could not be started.</summary>
+    private readonly TaskCompletionSource<CoreWebView2?> _ready = new();
+
     private readonly IntPtr _hwnd;
     private readonly WebView2 _webView = new();
+
+    /// <summary>True once something has finished loading here. See <see cref="LoadIfIdle"/>.</summary>
+    private bool _navigated;
 
     /// <summary>Opens the popup and completes when it closes.</summary>
     public static Task ShowAsync(
@@ -55,6 +68,61 @@ public sealed class ExtensionPopupWindow : Window
         onCreated?.Invoke(window);
         window.Activate();
         return window._completion.Task;
+    }
+
+    /// <summary>
+    /// Opens an empty popup window and hands it back once its browser exists, unnavigated.
+    /// </summary>
+    /// <remarks>
+    /// For a caller that has to give the browser to
+    /// <c>CoreWebView2NewWindowRequestedEventArgs.NewWindow</c> rather than navigate it. The window
+    /// rather than the browser is returned, so that caller can also ask, a moment later, whether
+    /// anything actually loaded: see <see cref="LoadIfIdle"/>. Returns null when the browser could
+    /// not be started, in which case the window has closed itself.
+    /// </remarks>
+    public static async Task<ExtensionPopupWindow?> AdoptAsync(
+        string name,
+        string userDataFolder,
+        IntPtr ownerHwnd = default,
+        Action<Window>? onCreated = null)
+    {
+        var window = new ExtensionPopupWindow(name, url: "", userDataFolder, ownerHwnd);
+        onCreated?.Invoke(window);
+        window.Activate();
+
+        return await window._ready.Task == null ? null : window;
+    }
+
+    /// <summary>The browser, once it exists.</summary>
+    public CoreWebView2? Core => _webView.CoreWebView2;
+
+    /// <summary>
+    /// Loads <paramref name="url"/> if nothing has finished loading in this window yet.
+    /// </summary>
+    /// <remarks>
+    /// <b>Asks whether a navigation <em>completed</em>, not whether one started.</b> An adopted
+    /// window comes back with a <c>Source</c> set almost immediately, so testing that reported the
+    /// window as busy and left it empty for good. What was actually happening is that the
+    /// navigation WebView2 began never finished, which is a state only <c>NavigationCompleted</c>
+    /// can distinguish from a page that simply has not painted yet.
+    /// </remarks>
+    public void LoadIfIdle(string url)
+    {
+        if (_navigated || string.IsNullOrEmpty(url)) return;
+        if (_webView.CoreWebView2 is not { } core) return;
+
+        try
+        {
+            NLog.LogManager.GetCurrentClassLogger()
+                .Info("Nothing finished loading in the extension window; loading {Url} into it", url);
+
+            core.Navigate(url);
+        }
+        catch (Exception ex)
+        {
+            // Closed while we were waiting, most likely.
+            NLog.LogManager.GetCurrentClassLogger().Debug(ex, "Loading {Url} into the extension window failed", url);
+        }
     }
 
     private ExtensionPopupWindow(string name, string url, string userDataFolder, IntPtr ownerHwnd)
@@ -100,6 +168,9 @@ public sealed class ExtensionPopupWindow : Window
             try { _webView.Close(); }
             catch (Exception) { /* already gone with the window */ }
 
+            // Closed before the browser was ready: an adopting caller is still awaiting it, and a
+            // task nobody completes leaves that page's new-window deferral open forever.
+            _ready.TrySetResult(null);
             _completion.TrySetResult(true);
         };
     }
@@ -108,27 +179,48 @@ public sealed class ExtensionPopupWindow : Window
     {
         try
         {
-            var environment = await CoreWebView2Environment.CreateWithOptionsAsync(
-                browserExecutableFolder: "",
-                userDataFolder: userDataFolder,
-                // Identical to the flyout's, and not optional: a second environment on the same
-                // folder with different options fails with ERROR_INVALID_STATE.
-                options: new CoreWebView2EnvironmentOptions { AreBrowserExtensionsEnabled = true });
+            // The flyout's own, not a second one on the same folder: see
+            // Services/WebViewEnvironments. This window is on the launcher's profile precisely so
+            // that the extension is there, and every extra environment restarts that extension's
+            // service worker underneath it.
+            var environment = await Services.WebViewEnvironments.GetAsync(userDataFolder);
 
             await _webView.EnsureCoreWebView2Async(environment);
-            if (_webView.CoreWebView2 is not { } core) return;
+            if (_webView.CoreWebView2 is not { } core)
+            {
+                _ready.TrySetResult(null);
+                return;
+            }
+
+            // The same pass every tab gets. Extensions belong to the profile and this window is on
+            // the launcher's own folder, so they are usually already there and this does nothing.
+            // "Usually" is not good enough for the page this window exists to show: an extension
+            // page in a browser where that extension is not loaded resolves to nothing at all.
+            await Services.BrowserExtensionService.ApplyAsync(core);
 
             // The popup decides its own size in CSS and there is no API to ask an extension how big
             // its panel is, so the window has to be told by the page once the page exists. Until
             // then it is a guess — which is what left uBlock Origin Lite's 280px panel sitting in
             // the corner of a 420x560 window.
-            core.NavigationCompleted += async (_, _) => await SizeToPopupAsync(core);
+            core.NavigationCompleted += async (_, _) =>
+            {
+                _navigated = true;
+                await SizeToPopupAsync(core);
+            };
 
-            core.Navigate(url);
+            // window.close() from an extension's own popup closes this window, which is what an
+            // extension expects once its prompt is answered.
+            core.WindowCloseRequested += (_, _) => Close();
+
+            // An adopted popup is navigated by whoever asked for it, so it arrives with no address.
+            if (!string.IsNullOrEmpty(url)) core.Navigate(url);
+
+            _ready.TrySetResult(core);
         }
         catch (Exception ex)
         {
             NLog.LogManager.GetCurrentClassLogger().Warn(ex, "Opening the extension popup {Url} failed", url);
+            _ready.TrySetResult(null);
             Close();
         }
     }
