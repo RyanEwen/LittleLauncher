@@ -1319,6 +1319,11 @@ public sealed partial class WebFlyoutWindow : Window
     {
         if (!Instances.Remove(launcherId, out var panel)) return;
 
+        // Its toasts outlive it otherwise, and there is nothing left for a click on one to open.
+        // They also keep occupying the app-wide Action Center queue, so a deleted launcher would
+        // go on crowding out the ones that remain.
+        panel.ClearNotificationBacklog();
+
         // An owned settings window outlives its parent otherwise, and would commit into a
         // launcher the user has navigated away from.
         try { panel._openModal?.Close(); } catch (Exception ex) { Logger.Debug(ex, "Closing owned window failed"); }
@@ -3025,6 +3030,17 @@ public sealed partial class WebFlyoutWindow : Window
         {
             // Activation came back — whatever was being watched for is resolved.
             StopForegroundWatch();
+
+            // The launcher is in front, so whatever its toasts were announcing has been attended
+            // to. Left behind they crowd the Action Center queue, which Windows keeps per *app*
+            // rather than per launcher — twenty entries, evicted oldest-first, split between every
+            // launcher — so one chatty launcher's stale entries push every other launcher's out.
+            //
+            // Gated on _isOpen, because a window parked off the virtual screen is not something
+            // the user has looked at: warm-up and preload both leave one activated in the Win32
+            // sense, and sweeping there would silently discard everything that arrived before the
+            // app was restarted.
+            if (_isOpen) ClearNotificationBacklog();
 
             // WinUI replaces WM_SETICON as it initialises and activates the window, so the icon
             // has to be re-asserted here rather than only when it was first applied. Cheap: two

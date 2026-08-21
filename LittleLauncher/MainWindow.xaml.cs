@@ -255,6 +255,17 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
+    /// The Action Center group the app's own notices are filed under.
+    /// </summary>
+    /// <remarks>
+    /// Separate from the per-launcher groups a web launcher's page notifications use, so a
+    /// launcher clearing its backlog when it is opened leaves an unread update notice alone.
+    /// Each notice also carries a fixed tag, so a repeat of the same notice replaces the earlier
+    /// one instead of adding to a backlog nobody will clear by hand.
+    /// </remarks>
+    private const string AppNoticeGroup = "littlelaunchernotices";
+
+    /// <summary>
     /// Registers for Windows notifications and routes a click back into the app.
     /// </summary>
     /// <remarks>
@@ -342,6 +353,8 @@ public sealed partial class MainWindow : Window
             var builder = new Microsoft.Windows.AppNotifications.Builder.AppNotificationBuilder()
                 .AddText("New: web launchers")
                 .AddText("A launcher can now open a web page — a dashboard, webmail, or any site — straight from its tray icon.");
+            builder.SetTag("upgrade");
+            builder.SetGroup(AppNoticeGroup);
             Microsoft.Windows.AppNotifications.AppNotificationManager.Default.Show(builder.BuildNotification());
         }
         catch (Exception ex)
@@ -1387,9 +1400,15 @@ public sealed partial class MainWindow : Window
             if (result is not { UpdateAvailable: true }) return;
             if (IsPackaged) return;
 
+            // Tagged, because this one fires on every launch until the update is actually taken.
+            // Untagged, a user who ignores it collects one more undismissed toast per start, all
+            // saying the same thing — and Windows 11 watches how often an app's notifications go
+            // un-interacted-with before offering to switch that app's notifications off outright.
             var builder = new Microsoft.Windows.AppNotifications.Builder.AppNotificationBuilder()
                 .AddText("Update Available")
                 .AddText($"Little Launcher {result.LatestVersion} is available. You are running {result.CurrentVersion}.");
+            builder.SetTag("update");
+            builder.SetGroup(AppNoticeGroup);
             Microsoft.Windows.AppNotifications.AppNotificationManager.Default.Show(builder.BuildNotification());
         }
         catch (Exception ex)

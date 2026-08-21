@@ -180,6 +180,22 @@ host, so it is shown nowhere and dropped in silence. Since that persistent API i
 messaging site actually uses, a document-created script rewrites it in the page to the flavour the
 host can see — tag replacement and `getNotifications()` included.
 
+**Every toast has to be taken back off again**, and nothing here used to. Clicking one withdraws it,
+which Windows does itself, and that was the only route — so opening a launcher any other way left
+its toasts sitting there, including toasts for messages already read on a phone. A full Action
+Center queue does *not* block new notifications (it is per app, FIFO, and a toast expires after
+three days), but the queue being per *app* means every launcher splits one budget of twenty evicted
+oldest-first, and Windows scores the whole app on how often its notifications get acted on before
+offering to switch them off — all of them, since the launchers share one identity. So a toast is taken back off when the page closes its
+notification (relayed out of the service worker as well as the page), when the launcher is next
+brought to the front, when the launcher is deleted, and by Windows itself on the next reboot. Each
+launcher's toasts are filed under a group of their own, so clearing one leaves the others and the
+app's own notices alone, and each carries a header with its launcher's name so Notification Center
+files them under the launcher rather than under the app. Windows does not clear a header's
+notifications when it is clicked — its documentation says so outright — so the app does that itself.
+A launcher is also held to five toasts at a time, since twenty is the whole app's budget and every
+launcher spends from it.
+
 A notification object is owned by the browser that raised it, and calling into one after that
 browser has closed is a fail-fast that kills the app rather than throwing. The handler therefore
 finishes with the notification before it builds the toast — `AppNotificationManager.Show()` pumps

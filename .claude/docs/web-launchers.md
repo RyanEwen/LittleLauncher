@@ -1141,8 +1141,183 @@ driven from it — `ReportShown` when Windows accepts the toast, `ReportClicked`
   otherwise.
 - **The launcher's adopted page icon is used, not `notification.IconUri`** — the latter is a page URL
   Windows would have to fetch itself, and for a dashboard behind a login it would fetch a redirect.
-- `_liveNotifications` is **capped**, not trusted to drain: a toast the user simply ignores reports
-  nothing back, so entries would otherwise accumulate for the life of the app.
+- `_notificationSources` and `_pendingActions` are **capped**, not trusted to drain: a toast the
+  user simply ignores reports nothing back, so entries would otherwise accumulate for the life of
+  the app.
+
+#### Every toast has to be taken back off again
+
+**Nothing here ever took a toast back off, under any circumstance.** Clicking one withdraws it —
+Windows does that itself — and that was the only route, which is the route a user takes least:
+opening the launcher from its tray icon, its pinned shortcut or its taskbar button left every toast
+exactly where it was, including toasts for messages already read on a phone.
+
+Be careful about *why* that matters, because the obvious explanation is wrong. **A full queue does
+not block new notifications.** Microsoft's docs are explicit that the Action Center queue is
+per app and FIFO — "older notifications eventually get pushed out by new ones" — and a local toast
+[expires after three days](https://learn.microsoft.com/en-us/windows/apps/develop/notifications/choosing-a-notification-delivery-method)
+regardless. Nothing documented says a backlog stops delivery. The real costs are these:
+
+- **The queue is per *app*, and every launcher is the same app.** Twenty entries, evicted
+  oldest-first, and only **three shown before the "See more" fold** (both figures are first-party
+  and current). A native chat client gets its own twenty; ten launchers here split one. So a chatty
+  launcher that withdraws nothing does not merely bury a quiet launcher's notification twenty deep
+  — it pushes it under a three-item fold, and then off the end.
+- **Windows scores the whole app on whether its notifications get acted on.** Under the app's AUMID
+  in `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings` it keeps
+  `PeriodicNotificationCount` and `PeriodicInteractionCount`, and Windows 11 uses that ratio to
+  offer to switch the app's notifications off. The offer is all-or-nothing, so one launcher nobody
+  interacts with can cost every launcher its notifications.
+- **A toast for a message already read is simply wrong**, which is reason enough on its own. It is
+  what a browser does with the page's `close()`, and this had no path for that call at all.
+
+Four things withdraw them, and all four are needed:
+
+| When | What goes | Where |
+|---|---|---|
+| The page closes a notification | that one toast | `notifyClose` → `CloseNotificationToast` |
+| The launcher is activated | the launcher's whole group | `WebFlyoutWindow_Activated` → `ClearNotificationBacklog` |
+| The launcher is deleted, or stops being a web launcher | the launcher's whole group | `DisposeLauncher` |
+| The launcher raises its sixth | its own oldest | `MakeRoomForToast` |
+| Its header is clicked | the launcher's whole group | `HandleNotificationActivation` |
+| The machine reboots | everything, by Windows | `AppNotification.ExpiresOnReboot` |
+
+- **Toasts are grouped per launcher** (`ToastGroup`, the launcher id through `ToastIdentifier`), which
+  is what lets one launcher's backlog be cleared without touching another's. The app's own notices
+  sit in `MainWindow.AppNoticeGroup` for the same reason, each under a fixed tag so a repeat of the
+  same notice replaces the earlier one rather than adding to the pile — the update notice fires on
+  every launch until the update is taken.
+- **The bridge has always posted `notifyClose`; nothing answered it.** A chat app closes a
+  notification when its thread is read, here or on a phone signed in to the same account, and until
+  that was handled the toast outlived the message it was announcing.
+- **A worker-scope close had no path at all.** `Notification.prototype.close` is patched in
+  `ServiceWorkerShimScript` alongside `showNotification`, relayed to the page, and applied through
+  `LLNotification.__close(tag)` so the shim's own map is pruned and the page's `onclose` still runs.
+  A page reloaded since the notification was raised no longer has that tag, and says so, so the
+  bridge tells the host directly instead.
+- **A same-tag replace must not withdraw anything.** The page shim marks the outgoing notification
+  `__replaced` and suppresses its `notifyClose`: a `Show` under a tag already in the Action Center
+  replaces what is there, and a withdrawal racing that `Show` would take the *new* toast off — a
+  message silently vanishing, which is worse than the backlog being fixed.
+- **Both triggers copy Google Messages for web**, which is the closest thing to a launcher there is:
+  a web app whose notifications a browser turns into Windows toasts. Read out of its shipping
+  bundle, it does *both*, and the whole-app clear is unconditional:
+
+  ```js
+  // focus-state stream emits 1 (focused) -> dispatch with an empty payload
+  var Aic = function (a) { a.Zj.UL.subscribe(b => { b === 1 && a.Ja.dispatch(new _.LY({})) }) }
+
+  // empty payload -> Nr(), which closes every notification the app has out;
+  // a payload naming a conversation -> hy(), which closes just that conversation's tag
+  this.Nr = this.register(_.LY, a => {
+      if (a = a.payload.Ka) { var b = this.ha; b.ha.delete(a.id); b.Uj.hy(a) }
+      else a = this.ha, a.ha.clear(), a.Uj.Nr() });
+
+  async Nr() { (await this.ha({})).forEach(a => { a.close() }) }   // getNotifications({}) + close
+  async hy(a) { return this.vq("cid:" + a.id) }                    // tag is "cid:<conversationId>"
+  ```
+
+  Its per-conversation half fires on a conversation update whose unread flag is false — which is how
+  reading a message *on the paired phone* withdraws the desktop notification. That is the same shape
+  as the two mechanisms here: the page's own `close()` relayed through the bridge, plus a sweep when
+  the window comes forward.
+
+  **Messenger's live service worker does the same two things**, which is worth knowing because it
+  arrives at them independently. Its page posts a `browser_push_window_visible` command, and the
+  worker answers it with an unfiltered sweep — `self.registration.getNotifications()` then
+  `e.map(function (e) { e.close() })`, no filter, nothing exempt. Its per-notification half is
+  server-driven rather than local: each push reports `mids_visible` and the server replies with
+  `mids_to_remove`, which the worker closes by id.
+
+  **Teams is the counter-example, and it is the one users complain about.** It withdraws nothing
+  ever; only the entry the user personally clicks goes, and Windows does that. Ten messages in one
+  chat, all read in-app, leaves nine notifications standing.
+- **Each launcher's toasts carry a header with its own name** (`AddLauncherHeader`), so Notification
+  Center files them under the launcher rather than under "Little Launcher", which is otherwise all
+  ten of them say. Notifications sharing a header `id` group under its title, and the `id` used here
+  is the launcher's `ToastGroup` — so the header and the group name the same set of toasts and one
+  removal clears both.
+
+  **Written into the payload by hand, because `AppNotificationBuilder` has no `SetHeader`.** The
+  builder still produces everything else; `AddLauncherHeader` parses its XML, inserts the element,
+  and rebuilds. Two things that are easy to get wrong:
+
+  - **`Tag` and `Group` have to be re-applied.** They live on the `AppNotification`, not in the
+    payload — `BuildNotification` constructs the object from XML and *then* sets them — so a
+    payload round trip silently drops both, which would break every withdrawal above.
+  - **It parses rather than splices.** The obvious version finds the end of the opening `<toast>`
+    tag and inserts a string, and it breaks on the first page whose notification tag contains a
+    `>`: that character sits in the `launch` attribute, so the insert lands inside the tag and the
+    payload stops being XML. `XDocument` plus `XAttribute` escapes a launcher name and a
+    page-supplied tag correctly without anyone having to think about it.
+
+- **Windows does not clear a header's notifications when it is clicked.** Its own documentation is
+  explicit: *"Clicking on a header doesn't clear the notifications belonging to that header. Your
+  app should use the notification APIs to clear the relevant notifications."* So the header carries
+  `header=1` in its arguments and `HandleNotificationActivation` sweeps the group itself. It is
+  **not** left to the activation sweep: that fires on the window becoming active, and a launcher
+  already open and in front never raises another activation, so its notifications would outlive the
+  very click that acknowledged them.
+- **A launcher is capped at `MaxToastsPerLauncher` (5) toasts of its own.** The twenty-entry budget
+  is the *app's*, and Windows evicts oldest-first across the whole of it, so without a per-launcher
+  limit one chatty launcher spends the lot and a quiet launcher's single notification falls off the
+  end before anyone reads it. `MakeRoomForToast` withdraws this launcher's oldest immediately before
+  the sixth is shown. A tag that is already outstanding is a *replacement* rather than another
+  entry, so it moves to the back of the queue instead of counting twice — otherwise a chat app
+  updating one conversation would evict four of its own for nothing. The list only ever over-counts
+  (a hand-dismissed or expired toast reports nothing back), which is the harmless direction:
+  withdrawing something already gone is a no-op.
+
+  Messenger runs the extreme version of this — every message notification it raises carries the one
+  tag `"m"` with `renotify`, so it holds exactly one at a time.
+- **Why a cap at all, rather than giving each launcher its own notification identity?** Because the
+  Store build cannot have one, and the answer is worth writing down so nobody re-derives it. Windows
+  has no equivalent of Android's notification channels; the per-app row in Settings, the twenty-item
+  queue and the notification/interaction score are all keyed on **AUMID**. Splitting launchers
+  across AUMIDs would give each its own of all three, and Chromium ships exactly that for installed
+  PWAs (`kAppSpecificNotifications`, on by default). It is closed to a packaged app on two
+  independent counts:
+
+  > "The app identified by *applicationId* must belong to the same package as the caller."
+  > — [`ToastNotificationManager.CreateToastNotifier(String)`](https://learn.microsoft.com/en-us/uwp/api/windows.ui.notifications.toastnotificationmanager.createtoastnotifier)
+
+  > "If your process calls `SetCurrentProcessExplicitAppUserModelID` to set its own AUMID, then it
+  > may only use the AUMID generated for it by the application model environment/Windows app
+  > package. You can't define custom AUMIDs."
+  > — [Prepare to package a desktop application](https://learn.microsoft.com/en-us/windows/msix/desktop/desktop-to-uwp-prepare)
+
+  `AppNotificationManager` has no AUMID parameter at any version, and the Windows App SDK spec says
+  the old overloads were dropped deliberately. The only packaged route is declaring an
+  `<Application>` per identity in the manifest — fixed at build time, so useless for user-created
+  launchers, and a second COM activator in one process fails `Register()` outright
+  ([WindowsAppSDK #6402](https://github.com/microsoft/WindowsAppSDK/issues/6402), open, unanswered).
+
+  **Do not reach for it in the portable build either, where it *is* possible.** Three reasons, and
+  the first is the one that settles it:
+
+  1. **A notification identity is permanent and the user cannot delete it.** The first toast an AUMID
+     raises creates its row under
+     `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings`, and nothing ever
+     removes it — not uninstalling, not deleting the launcher. Settings can toggle a row, never
+     delete one. Per-launcher AUMIDs would litter the user's notification settings with a permanent
+     row per launcher they ever created, and `Launcher.PinAumid`'s `{TickCount64}` suffix would
+     leave a fresh orphan on every re-pin.
+  2. **The mute-suggestion risk cuts both ways.** Splitting stops one ignored launcher dragging the
+     others down, but it also gives Windows a separate interaction score per launcher — and a quiet
+     launcher on its own score looks *more* ignorable, not less.
+  3. **The budget multiplication is inferred, not documented.** "Each app has its own action center
+     queue" plus AUMID-as-identity implies twenty each, but Microsoft has never written that down.
+
+  So the launchers share one identity, the twenty-item budget is shared with them, and the cap is
+  how a launcher is kept to its share.
+- **The sweep is gated on `_isOpen`, not on activation alone.** Warm-up and preload both leave a
+  window activated in the Win32 sense while parked off the virtual screen; sweeping there would
+  discard everything that arrived before the app was last restarted.
+- **Toast avatars are deleted with the toasts.** `SaveNotificationIcon` writes one PNG per toast, and
+  a notification the page gave no tag of its own gets an invented one — unique per notification, so
+  for a busy launcher that is a file per message. `DeleteNotificationIcons` sweeps them behind the
+  group removal, skipping anything written since the sweep started so a toast raised in the same
+  instant keeps the icon it is being drawn with.
 
 #### Never handle `NotificationReceived` — the objects cannot be released safely
 

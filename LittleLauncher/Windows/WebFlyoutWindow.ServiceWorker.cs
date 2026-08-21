@@ -94,10 +94,10 @@ public sealed partial class WebFlyoutWindow
             if (!proto || !proto.showNotification) return;
             var nativeShow = proto.showNotification;
 
-            function relay(title, options) {
+            function relay(message) {
                 return self.clients.matchAll({ type: 'window', includeUncontrolled: true })
                     .then(function (cs) {
-                        if (cs.length) cs[0].postMessage({ __ll: 'notify', title: title, options: options });
+                        if (cs.length) cs[0].postMessage(message);
                     })
                     .catch(function () { });
             }
@@ -116,9 +116,23 @@ public sealed partial class WebFlyoutWindow
                 // surface persistent notifications — but getNotifications() returns it, and a
                 // notificationclick has to carry a real one for event.notification.data to work.
                 var p = nativeShow.call(this, title, o);
-                p.then(function () { return relay(title, o); }).catch(function () { });
+                p.then(function () { return relay({ __ll: 'notify', title: title, options: o }); }).catch(function () { });
                 return p;
             };
+
+            // Closing is the other half of the same gap. A chat app closes its notification once
+            // the thread has been read — here, or on a phone signed in to the same account — and it
+            // closes a notification Chromium made, which the host has never been told about. Left
+            // unrelayed the toast outlives the message it was announcing, and those are precisely
+            // the toasts that pile up in the Action Center.
+            var notification = self.Notification && self.Notification.prototype;
+            if (notification && notification.close) {
+                var nativeClose = notification.close;
+                notification.close = function () {
+                    if (this.tag) relay({ __ll: 'notifyClose', tag: this.tag });
+                    return nativeClose.apply(this, arguments);
+                };
+            }
 
             self.addEventListener('message', function (ev) {
                 var d = ev.data;
@@ -262,7 +276,23 @@ public sealed partial class WebFlyoutWindow
             // The worker cannot construct a Notification, so it asks the page to.
             navigator.serviceWorker.addEventListener('message', function (ev) {
                 var d = ev.data;
-                if (!d || d.__ll !== 'notify') return;
+                if (!d || !d.__ll) return;
+
+                // The worker closed one of its own notifications. The shim that raised the toast
+                // for it lives here, so closing it there is what reaches the host — and prunes the
+                // shim's map on the way. A page reloaded since the notification was raised has no
+                // entry left for it, and the toast is still up, so that case tells the host direct.
+                if (d.__ll === 'notifyClose') {
+                    var closed = false;
+                    try {
+                        if (window.Notification && window.Notification.__close)
+                            closed = window.Notification.__close(d.tag);
+                    } catch (e) { }
+                    if (!closed) post({ __ll: 'notifyClose', tag: d.tag });
+                    return;
+                }
+
+                if (d.__ll !== 'notify') return;
                 var o = d.options || {};
 
                 if (o.actions && o.actions.length)
@@ -362,6 +392,11 @@ public sealed partial class WebFlyoutWindow
         else if (kind == "notify")
         {
             ShowNotificationToast(sender, message!);
+        }
+        else if (kind == "notifyClose")
+        {
+            string? tag = message?["tag"]?.GetValue<string>();
+            if (!string.IsNullOrEmpty(tag)) CloseNotificationToast(tag);
         }
         else if (kind == "actions")
         {

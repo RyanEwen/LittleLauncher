@@ -98,6 +98,18 @@ public sealed partial class WebFlyoutWindow
     /// <summary>When this launcher last raised a toast, so a sound just after it can be attributed.</summary>
     private long _lastToastAt;
 
+    /// <summary>True while this launcher may still have toasts sitting in the Action Center.</summary>
+    /// <remarks>
+    /// Starts true, and stays true until a sweep proves otherwise, so the first activation of the
+    /// session also clears whatever the previous one left behind: a toast outlives the process that
+    /// raised it, and nothing else would ever take those back off. Deliberately not derived from
+    /// <see cref="_liveToastTags"/>, which knows only about toasts raised since the app started.
+    /// </remarks>
+    private bool _hasOutstandingToasts = true;
+
+    /// <summary>Toast identifiers this launcher has raised and not withdrawn, oldest first.</summary>
+    private readonly List<string> _liveToastTags = [];
+
     /// <summary>Notifications currently on screen, so a toast click can be reported back to the page.</summary>
     /// <remarks>
     /// Entries leave on a click or when the page withdraws the notification, but a toast the user
@@ -661,8 +673,13 @@ public sealed partial class WebFlyoutWindow
                 this.onclick = null; this.onshow = null; this.onclose = null; this.onerror = null;
 
                 // Same tag replaces, as the platform would.
+                //
+                // Marked as replaced rather than simply closed, because the host must not be told
+                // to withdraw this tag: a Show under a tag already in the Action Center replaces
+                // what is there, and a withdrawal racing that Show would take the *new* toast off.
+                // The page still gets its onclose, which is the part it can observe.
                 var previous = live.get(this.tag);
-                if (previous) { try { previous.close(); } catch (e) { } }
+                if (previous) { try { previous.__replaced = true; previous.close(); } catch (e) { } }
                 live.set(this.tag, this);
 
                 iconDataUrl(this.icon).then(function (icon) {
@@ -676,7 +693,7 @@ public sealed partial class WebFlyoutWindow
             LLNotification.prototype.close = function () {
                 if (!live.has(this.tag)) return;
                 live.delete(this.tag);
-                post({ __ll: 'notifyClose', tag: this.tag });
+                if (!this.__replaced) post({ __ll: 'notifyClose', tag: this.tag });
                 if (typeof this.onclose === 'function') this.onclose.call(this, new Event('close'));
             };
             LLNotification.prototype.addEventListener = function (type, fn) {
@@ -690,6 +707,16 @@ public sealed partial class WebFlyoutWindow
             LLNotification.requestPermission = function () { return Native.requestPermission.apply(Native, arguments); };
             Object.defineProperty(LLNotification, 'permission', { get: function () { return Native.permission; } });
             Object.defineProperty(LLNotification, 'maxActions', { get: function () { return Native.maxActions || 2; } });
+            // How the worker half of the bridge withdraws a notification it closed. The worker
+            // holds a real Notification and this shim holds the one the toast was built from, and
+            // only the tag joins the two. Routed through close() rather than posting directly, so
+            // the page's map is pruned and its own onclose still runs.
+            LLNotification.__close = function (tag) {
+                var n = live.get(tag);
+                if (!n) return false;
+                n.close();
+                return true;
+            };
             LLNotification.__littleLauncher = true;
             LLNotification.__native = Native;
 
@@ -850,8 +877,9 @@ public sealed partial class WebFlyoutWindow
             if (!string.IsNullOrWhiteSpace(body))
                 builder.AddText(body);
 
-            builder.SetTag(ToastIdentifier(tag));
-            builder.SetGroup(ToastIdentifier(_launcher.Id));
+            string identifier = ToastIdentifier(tag);
+            builder.SetTag(identifier);
+            builder.SetGroup(ToastGroup);
 
             // The notification's own icon first — an avatar, usually — circle-cropped the way every
             // other messaging app shows one. The launcher icon is what is left when there is none.
@@ -893,7 +921,21 @@ public sealed partial class WebFlyoutWindow
             // still attributed to it rather than being missed by a few milliseconds.
             _lastToastAt = Environment.TickCount64;
 
-            Microsoft.Windows.AppNotifications.AppNotificationManager.Default.Show(builder.BuildNotification());
+            // Held to a share of the app's Action Center budget rather than being allowed to
+            // spend the lot. Immediately before the Show, so the eviction and the arrival are as
+            // close together as they can be.
+            MakeRoomForToast(identifier);
+
+            var notification = AddLauncherHeader(builder.BuildNotification());
+
+            // A backstop, not the mechanism. Toasts are taken back off as the page closes them and
+            // as the launcher is opened, but both of those need the app to be running; a reboot is
+            // the one moment nothing here can clean up after, and a chat notification from before
+            // one is stale by definition.
+            notification.ExpiresOnReboot = true;
+
+            Microsoft.Windows.AppNotifications.AppNotificationManager.Default.Show(notification);
+            _hasOutstandingToasts = true;
             PostNotificationEvent("notifyShown", tag);
         }
         catch (Exception ex)
@@ -915,8 +957,7 @@ public sealed partial class WebFlyoutWindow
             byte[] bytes = Convert.FromBase64String(dataUrl[(comma + 1)..]);
             if (bytes.Length == 0) return null;
 
-            string path = System.IO.Path.Combine(
-                MainWindow.GetPhysicalAppDataDir(), $"notif-icon-{_launcher.Id}-{ToastIdentifier(tag)}.png");
+            string path = NotificationIconPath(ToastIdentifier(tag));
             System.IO.File.WriteAllBytes(path, bytes);
             return path;
         }
@@ -944,8 +985,249 @@ public sealed partial class WebFlyoutWindow
         }
     }
 
+    // ── Taking toasts back off ──────────────────────────────────────
 
+    /// <summary>The Action Center group every toast from this launcher is filed under.</summary>
+    /// <remarks>
+    /// Per launcher rather than per app, so clearing one launcher's backlog leaves the others —
+    /// and the app's own notices — exactly where they were.
+    /// </remarks>
+    private string ToastGroup => ToastIdentifier(_launcher.Id);
 
+    /// <summary>
+    /// Withdraws the toast for one notification, because the page says that notification is over.
+    /// </summary>
+    /// <remarks>
+    /// <para>A chat app closes a notification when its thread is read — here, or on the phone the
+    /// same account is signed in on. The bridge has always posted <c>notifyClose</c> for that;
+    /// nothing answered it, so the toast stayed in the Action Center after the thing it was about
+    /// had gone.</para>
+    /// <para><b>Nothing is posted back to the page.</b> The page is the one that closed it and has
+    /// already dropped it from its own map, so an echo would land on whatever notification has
+    /// since taken that tag.</para>
+    /// <para><b>A same-tag replace never reaches here</b> — the shim marks that one <c>__replaced</c>
+    /// and stays quiet, because withdrawing a tag that a <c>Show</c> is about to reuse can take the
+    /// new toast off instead of the old one.</para>
+    /// </remarks>
+    private void CloseNotificationToast(string tag)
+    {
+        if (string.IsNullOrEmpty(tag)) return;
+
+        // A withdrawn notification cannot be clicked, so nothing needs routing back to its page.
+        _notificationSources.Remove(tag);
+
+        string identifier = ToastIdentifier(tag);
+        _liveToastTags.Remove(identifier);
+        _ = RemoveToastAsync(identifier);
+    }
+
+    /// <summary>
+    /// Clears everything this launcher still has sitting in the Action Center.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>The Action Center queue is per app, and every launcher shares one app.</b> Windows
+    /// holds twenty undismissed toasts per app and evicts oldest-first, so a chatty launcher that
+    /// never withdraws anything pushes every other launcher's notifications out of a budget they
+    /// were entitled to a share of.</para>
+    /// <para>Windows also counts, per app, how many notifications it raised against how many the
+    /// user acted on — <c>PeriodicNotificationCount</c> and <c>PeriodicInteractionCount</c>, under
+    /// the app's AUMID in <c>HKCU</c> — and Windows 11 uses that ratio to offer to switch an app's
+    /// notifications off. One launcher nobody ever interacts with drags the ratio down for all of
+    /// them, and the offer is all-or-nothing.</para>
+    /// <para>Opening a launcher — from its tray icon, its pinned shortcut, its taskbar button or
+    /// Alt-Tab — is the user attending to whatever its toasts were about, and every route except
+    /// clicking the toast itself used to leave them sitting there.</para>
+    /// <para>The whole group goes, not the tab in front: the launcher was opened, which is the same
+    /// acknowledgement a chat app takes from being focused.</para>
+    /// <para><b>The page is deliberately not told.</b> What is being withdrawn is the Windows entry,
+    /// not the page's own notification — synthesising a close would tell a chat app the user
+    /// dismissed a thread they may only have scrolled past.</para>
+    /// </remarks>
+    private void ClearNotificationBacklog()
+    {
+        if (!_hasOutstandingToasts) return;
+        _hasOutstandingToasts = false;
+        _liveToastTags.Clear();
+
+        _ = RemoveToastGroupAsync(DateTime.UtcNow);
+    }
+
+    /// <summary>
+    /// How many toasts one launcher may hold in the Action Center at once.
+    /// </summary>
+    /// <remarks>
+    /// Windows keeps twenty per <em>app</em> and evicts oldest-first, and every launcher here is
+    /// the same app, so without a limit of its own one chatty launcher spends the whole budget and
+    /// every other launcher's notifications fall off the end. A fifth each leaves room for four
+    /// busy launchers at once, which is past anything a tray of them realistically does.
+    /// </remarks>
+    private const int MaxToastsPerLauncher = 5;
+
+    /// <summary>
+    /// Withdraws this launcher's oldest toast when it is already holding its share.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>A tag already outstanding is a replacement, not another entry.</b> Windows swaps it
+    /// in place, so it moves to the back of the queue rather than counting twice — a chat app
+    /// updating one conversation would otherwise evict four of its own for nothing.</para>
+    /// <para>The list can over-count, because a toast the user dismisses by hand reports nothing
+    /// back and a toast that expires reports nothing either. That costs nothing: withdrawing a
+    /// toast that has already gone is a no-op, and over-counting only makes this slightly eager.
+    /// It cannot under-count, which is the direction that would matter.</para>
+    /// <para>Messenger takes this much further — every message notification it raises carries the
+    /// single tag <c>"m"</c> with <c>renotify</c>, so it holds exactly one at a time. Five is the
+    /// gentler version of the same idea: enough that a burst of messages is still legible.</para>
+    /// </remarks>
+    private void MakeRoomForToast(string identifier)
+    {
+        _liveToastTags.Remove(identifier);
+
+        while (_liveToastTags.Count >= MaxToastsPerLauncher)
+        {
+            string oldest = _liveToastTags[0];
+            _liveToastTags.RemoveAt(0);
+            _ = RemoveToastAsync(oldest);
+        }
+
+        _liveToastTags.Add(identifier);
+    }
+
+    /// <summary>
+    /// Files this launcher's toasts under a header carrying its own name.
+    /// </summary>
+    /// <remarks>
+    /// <para>Without one, every launcher's notifications arrive as "Little Launcher" and nothing
+    /// says which raised them — which defeats the point of a tray of separate things. Notifications
+    /// sharing a header <c>id</c> are grouped under its title in Notification Center.</para>
+    /// <para><b>Written into the payload by hand, because <c>AppNotificationBuilder</c> has no
+    /// <c>SetHeader</c>.</b> The builder still produces everything else; this reopens its XML and
+    /// inserts the one element. <c>Tag</c> and <c>Group</c> are re-applied because they live on the
+    /// <c>AppNotification</c> rather than in the payload — <c>BuildNotification</c> sets them after
+    /// constructing it — so they do not survive the round trip.</para>
+    /// <para>The <c>id</c> is the launcher's <see cref="ToastGroup"/>, so the header and the group
+    /// name the same set of toasts and one removal clears both.</para>
+    /// <para>Anything unexpected returns the notification untouched: losing a header costs a
+    /// grouping, while losing the notification costs the thing the user was meant to see.</para>
+    /// </remarks>
+    private Microsoft.Windows.AppNotifications.AppNotification AddLauncherHeader(
+        Microsoft.Windows.AppNotifications.AppNotification built)
+    {
+        try
+        {
+            var payload = System.Xml.Linq.XDocument.Parse(built.Payload);
+            if (payload.Root == null) return built;
+
+            // AddFirst, because a header is a child of <toast> and belongs ahead of <visual>.
+            // Built as an XElement rather than spliced in as text: a launcher's name is arbitrary
+            // and so is the page-supplied tag already sitting in the launch arguments, and either
+            // can carry the characters that would otherwise end an attribute early.
+            payload.Root.AddFirst(new System.Xml.Linq.XElement("header",
+                new System.Xml.Linq.XAttribute("id", ToastGroup),
+                new System.Xml.Linq.XAttribute("title", _launcher.Name),
+                new System.Xml.Linq.XAttribute("arguments", $"launcher={_launcher.Id};header=1;")));
+
+            return new Microsoft.Windows.AppNotifications.AppNotification(
+                payload.ToString(System.Xml.Linq.SaveOptions.DisableFormatting))
+            {
+                Tag = built.Tag,
+                Group = built.Group,
+            };
+        }
+        catch (Exception ex)
+        {
+            Logger.Debug(ex, "Adding a notification header for launcher {Name} failed", _launcher.Name);
+            return built;
+        }
+    }
+
+    /// <summary>Takes one toast off the Action Center, and its avatar off disk behind it.</summary>
+    private async Task RemoveToastAsync(string identifier)
+    {
+        try
+        {
+            await Microsoft.Windows.AppNotifications.AppNotificationManager.Default
+                .RemoveByTagAndGroupAsync(identifier, ToastGroup);
+        }
+        catch (Exception ex)
+        {
+            Logger.Debug(ex, "Withdrawing a toast for launcher {Name} failed", _launcher.Name);
+            return;
+        }
+
+        // After the removal, not before: until it lands the toast is still on screen and Windows
+        // is still free to re-read the icon it is being drawn with.
+        DeleteNotificationIcon(identifier);
+    }
+
+    /// <summary>Takes every one of this launcher's toasts off the Action Center.</summary>
+    /// <param name="startedAt">
+    /// When the sweep was asked for. Only avatars already on disk by then are deleted: the removal
+    /// is asynchronous, so a toast raised while it runs survives it, and that toast is still being
+    /// drawn with its icon.
+    /// </param>
+    private async Task RemoveToastGroupAsync(DateTime startedAt)
+    {
+        try
+        {
+            await Microsoft.Windows.AppNotifications.AppNotificationManager.Default
+                .RemoveByGroupAsync(ToastGroup);
+        }
+        catch (Exception ex)
+        {
+            Logger.Debug(ex, "Clearing the toast backlog for launcher {Name} failed", _launcher.Name);
+
+            // Unproven, so the next activation tries again rather than assuming it is clear.
+            _hasOutstandingToasts = true;
+            return;
+        }
+
+        DeleteNotificationIcons(startedAt);
+    }
+
+    /// <summary>The avatar written for one toast, which lives exactly as long as the toast does.</summary>
+    private string NotificationIconPath(string identifier) => System.IO.Path.Combine(
+        MainWindow.GetPhysicalAppDataDir(), $"notif-icon-{_launcher.Id}-{identifier}.png");
+
+    private void DeleteNotificationIcon(string identifier)
+    {
+        try
+        {
+            System.IO.File.Delete(NotificationIconPath(identifier));
+        }
+        catch (Exception ex)
+        {
+            Logger.Debug(ex, "Deleting a notification icon for launcher {Name} failed", _launcher.Name);
+        }
+    }
+
+    /// <summary>
+    /// Deletes the avatars written for this launcher's toasts, now that none of them are showing.
+    /// </summary>
+    /// <remarks>
+    /// One file per toast, and a notification the page gave no tag of its own gets an invented one
+    /// — unique per notification, so for a busy launcher this is a file per message. They were only
+    /// ever needed for as long as Windows was drawing the toast.
+    /// </remarks>
+    private void DeleteNotificationIcons(DateTime writtenBefore)
+    {
+        try
+        {
+            foreach (string file in System.IO.Directory.EnumerateFiles(
+                MainWindow.GetPhysicalAppDataDir(), $"notif-icon-{_launcher.Id}-*.png"))
+            {
+                try
+                {
+                    if (System.IO.File.GetLastWriteTimeUtc(file) < writtenBefore)
+                        System.IO.File.Delete(file);
+                }
+                catch { }
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Debug(ex, "Clearing notification icons for launcher {Name} failed", _launcher.Name);
+        }
+    }
 
     /// <summary>
     /// Makes a page-supplied string safe to use as a Windows toast tag or group.
@@ -973,6 +1255,17 @@ public sealed partial class WebFlyoutWindow
     {
         if (!arguments.TryGetValue("launcher", out string? launcherId) || string.IsNullOrEmpty(launcherId))
             return false;
+
+        // A header click acknowledges the whole launcher, and Windows does not clear a header's
+        // notifications itself — its own documentation says "Clicking on a header doesn't clear the
+        // notifications belonging to that header. Your app should use the notification APIs to
+        // clear the relevant notifications." So this is where that happens.
+        //
+        // Not left to the activation sweep below: that runs off the window becoming active, and a
+        // launcher already open and in front never raises another activation, so its notifications
+        // would survive the very click that acknowledged them.
+        if (arguments.ContainsKey("header") && Instances.TryGetValue(launcherId, out var acknowledged))
+            acknowledged.ClearNotificationBacklog();
 
         // An action button is answered in the page, not by opening the flyout. Replying to a
         // message from the toast and then having the window fly open would undo the point of
