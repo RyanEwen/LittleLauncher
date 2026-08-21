@@ -108,7 +108,30 @@ public sealed partial class WebFlyoutWindow
     private bool _hasOutstandingToasts = true;
 
     /// <summary>Toast identifiers this launcher has raised and not withdrawn, oldest first.</summary>
-    private readonly List<string> _liveToastTags = [];
+    /// <remarks>Carries when each was shown, because how soon a page closes one changes what the
+    /// close means — see <see cref="PageCloseGraceMs"/>.</remarks>
+    private readonly List<(string Tag, long ShownAt)> _liveToastTags = [];
+
+    /// <summary>
+    /// How soon after showing a toast a page's own <c>close()</c> is disregarded.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>A page that closes its notification seconds after raising it is not telling us the
+    /// user dealt with it.</b> It is emulating a banner timeout, because in a browser a notification
+    /// otherwise sits in the Action Center indefinitely. Google Messages does exactly this, on a
+    /// seven second timer:</para>
+    /// <code>a.persist||setTimeout(()=>{e.close()},7E3)</code>
+    /// <para>Discord's desktop client runs the same trick on a five second timer. Honouring those
+    /// calls is worse than ignoring them: the toast is withdrawn while the user is still reading
+    /// the banner, and a launcher appears to raise no notifications at all. That is what happened
+    /// when the close relay first shipped — every launcher but WhatsApp went quiet, because
+    /// WhatsApp Web is the one that does not do this.</para>
+    /// <para>Comfortably past both timers, and far short of how long reading a message on a phone
+    /// takes. A genuine close inside the window costs a toast that lingers until the launcher is
+    /// next opened, which is the old behaviour and merely untidy; getting it wrong the other way
+    /// costs the notification itself.</para>
+    /// </remarks>
+    private const long PageCloseGraceMs = 30_000;
 
     /// <summary>Notifications currently on screen, so a toast click can be reported back to the page.</summary>
     /// <remarks>
@@ -936,6 +959,8 @@ public sealed partial class WebFlyoutWindow
 
             Microsoft.Windows.AppNotifications.AppNotificationManager.Default.Show(notification);
             _hasOutstandingToasts = true;
+            Logger.Info("Notification: shown for {Name} (tag {Tag}, {Live} live)",
+                _launcher.Name, identifier, _liveToastTags.Count);
             PostNotificationEvent("notifyShown", tag);
         }
         catch (Exception ex)
@@ -1013,11 +1038,30 @@ public sealed partial class WebFlyoutWindow
     {
         if (string.IsNullOrEmpty(tag)) return;
 
+        string identifier = ToastIdentifier(tag);
+        int index = _liveToastTags.FindIndex(t => t.Tag == identifier);
+
+        // Too soon to mean anything. The page is running down a timer of its own, not reporting
+        // that the message was read; withdrawing here takes the toast off while it is still on
+        // screen. See PageCloseGraceMs. The entry stays, so the launcher's own sweep still clears
+        // it when the user actually looks.
+        if (index >= 0)
+        {
+            long age = Environment.TickCount64 - _liveToastTags[index].ShownAt;
+            if (age < PageCloseGraceMs)
+            {
+                Logger.Info("Notification: {Name} closed its own toast after {Age}ms, disregarding it",
+                    _launcher.Name, age);
+                return;
+            }
+
+            _liveToastTags.RemoveAt(index);
+        }
+
         // A withdrawn notification cannot be clicked, so nothing needs routing back to its page.
         _notificationSources.Remove(tag);
 
-        string identifier = ToastIdentifier(tag);
-        _liveToastTags.Remove(identifier);
+        Logger.Info("Notification: withdrawing {Name}'s toast, its page closed the notification", _launcher.Name);
         _ = RemoveToastAsync(identifier);
     }
 
@@ -1047,6 +1091,10 @@ public sealed partial class WebFlyoutWindow
     {
         if (!_hasOutstandingToasts) return;
         _hasOutstandingToasts = false;
+
+        Logger.Info("Notification: clearing {Count} tracked toast(s) for {Name}",
+            _liveToastTags.Count, _launcher.Name);
+
         _liveToastTags.Clear();
 
         _ = RemoveToastGroupAsync(DateTime.UtcNow);
@@ -1080,16 +1128,20 @@ public sealed partial class WebFlyoutWindow
     /// </remarks>
     private void MakeRoomForToast(string identifier)
     {
-        _liveToastTags.Remove(identifier);
+        _liveToastTags.RemoveAll(t => t.Tag == identifier);
 
         while (_liveToastTags.Count >= MaxToastsPerLauncher)
         {
-            string oldest = _liveToastTags[0];
+            string oldest = _liveToastTags[0].Tag;
             _liveToastTags.RemoveAt(0);
+
+            Logger.Info("Notification: {Name} is at its cap of {Cap}, withdrawing its oldest toast {Tag}",
+                _launcher.Name, MaxToastsPerLauncher, oldest);
+
             _ = RemoveToastAsync(oldest);
         }
 
-        _liveToastTags.Add(identifier);
+        _liveToastTags.Add((identifier, Environment.TickCount64));
     }
 
     /// <summary>

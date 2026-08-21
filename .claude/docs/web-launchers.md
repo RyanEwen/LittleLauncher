@@ -1200,7 +1200,7 @@ Four things withdraw them, and all four are needed:
 
 | When | What goes | Where |
 |---|---|---|
-| The page closes a notification | that one toast | `notifyClose` → `CloseNotificationToast` |
+| The page closes a notification, 30s+ after it appeared | that one toast | `notifyClose` → `CloseNotificationToast` |
 | The launcher is activated | the launcher's whole group | `WebFlyoutWindow_Activated` → `ClearNotificationBacklog` |
 | The launcher is deleted, or stops being a web launcher | the launcher's whole group | `DisposeLauncher` |
 | The launcher raises its sixth | its own oldest | `MakeRoomForToast` |
@@ -1215,6 +1215,20 @@ Four things withdraw them, and all four are needed:
 - **The bridge has always posted `notifyClose`; nothing answered it.** A chat app closes a
   notification when its thread is read, here or on a phone signed in to the same account, and until
   that was handled the toast outlived the message it was announcing.
+- **But a close that arrives seconds after the toast is disregarded** (`PageCloseGraceMs`, 30s), and
+  getting this wrong broke notifications outright the first time. **A page closing its own
+  notification within seconds is emulating a banner timeout, not reporting a read** — in a browser
+  a notification otherwise sits in the Action Center indefinitely, so pages run their own timers.
+  Google Messages, from its shipping bundle:
+
+  ```js
+  a.persist||setTimeout(()=>{e.close()},7E3)
+  ```
+
+  Discord's desktop client does the same on five seconds. Honouring those calls withdrew the toast
+  while the user was still reading the banner, and every launcher except WhatsApp appeared to raise
+  no notifications at all — WhatsApp Web being the one that runs no such timer. The entry is kept
+  rather than dropped, so the launcher's own sweep still clears it when the user actually looks.
 - **A worker-scope close had no path at all.** `Notification.prototype.close` is patched in
   `ServiceWorkerShimScript` alongside `showNotification`, relayed to the page, and applied through
   `LLNotification.__close(tag)` so the shim's own map is pruned and the page's `onclose` still runs.
