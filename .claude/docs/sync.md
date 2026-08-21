@@ -514,20 +514,41 @@ LITTLELAUNCHER_GOOGLE_CLIENT_SECRET
 ## A download replaces objects, not just values
 
 `LauncherPayload.Merge` writes into the launcher that is already in settings, but its collections
-are emptied and refilled: `Items` and `WebBookmarks` come back as **new objects**, even when nothing
-about them changed. Anything holding one of those objects from before the sync is holding something
-the launcher no longer contains, and the usual way that shows up is a lookup by identity quietly
-failing rather than an exception.
+are emptied and refilled: `Items` and `WebBookmarks` come back as **new objects**. Anything holding
+one of those objects from before the sync is holding something the launcher no longer contains, and
+the usual way that shows up is a lookup by identity quietly failing rather than an exception. A
+flyout's rows hold the item objects themselves, so this is not a corner case: it is every flyout,
+on every download.
+
+Items are therefore replaced **only when the download actually carries something different**
+(`LauncherPayload.ItemsMatch`, which compares the serialized form, so it cannot fall behind a
+property added to `LauncherItem` later), and whatever replaces them rebuilds that launcher's
+flyout. Both halves are needed, and each one covers a way this has already broken:
+
+- Without the guard, a sync that changed nothing still rebound every flyout to orphaned items, and
+  remove, move to, move up/down and edit all did nothing at all until the app was restarted. The
+  shared-launcher pull did it every five minutes, since it applies whatever it downloaded without
+  comparing it first.
+- Without the rebuild, a change the flyout does not draw (an item's `Arguments`, say) replaces the
+  objects while leaving the content hash unmoved, so nothing re-binds and the same failure returns
+  for the one launcher that did change.
 
 So a download has to tell the windows that are already built:
 
 | Call | Refreshes |
 |---|---|
-| `FlyoutWindow.InvalidateItems(force: false)` | the item flyouts |
+| `FlyoutWindow.InvalidateItems(force: false)` | every item flyout whose content hash moved |
+| `FlyoutWindow.InvalidateItems(id, force: true)` | one launcher, whose item objects were replaced |
 | `WebFlyoutWindow.InvalidateBookmarks()` | the web flyouts' bookmark bars |
 
-Both are called from all three download paths (startup, the periodic tick, and the Sync page's
-manual download), and both are cheap when nothing changed, which is what lets them run on a timer:
-each rebuilds only when its launcher's content actually differs. The bookmark bar's own guard is
-described in [web-launchers.md](web-launchers.md); it went missing once, and every context menu on
-every bookmark bar silently did nothing until the app was restarted.
+The first and third are called from all three download paths (startup, the periodic tick, and the
+Sync page's manual download) and are cheap when nothing changed, which is what lets them run on a
+timer. The second is raised by the merge itself, in both `LauncherPayload` and
+`SharedLauncherPayload`, because only the code that replaced the objects knows it did:
+`force: false` is keyed on a hash of what the flyout draws and cannot see an identity change on its
+own. The bookmark bar's own guard is described in [web-launchers.md](web-launchers.md); it went
+missing once, and every context menu on every bookmark bar silently did nothing until the app was
+restarted.
+
+If a lookup by identity does fail, the flyout says so: `FindParentCollection` logs a warning naming
+the item and launcher, because the only other symptom is a menu entry that does nothing.

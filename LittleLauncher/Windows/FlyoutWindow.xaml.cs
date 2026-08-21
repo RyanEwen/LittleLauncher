@@ -2493,6 +2493,15 @@ public partial class FlyoutWindow : Window
                 return group.Children;
         }
 
+        // A synthetic group is a display wrapper and is deliberately not in the launcher. Anything
+        // else means this row is bound to an item the launcher no longer contains, which is what
+        // silently disables remove, move and edit for it: each of them looks the item up here and
+        // gives up when it is not found, so the user sees a menu entry that does nothing. See
+        // LauncherPayload.ItemsMatch for the sync merge that used to leave rows in that state.
+        if (!_syntheticGroups.Contains(item))
+            Logger.Warn($"Flyout item '{item.Name}' is not in launcher '{_launcher.Name}' " +
+                        "(row bound to a stale object); remove and move will do nothing");
+
         return null;
     }
 

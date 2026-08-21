@@ -156,7 +156,7 @@ internal static class LauncherPayload
     /// </param>
     public static async Task ApplyAsync(List<Launcher> launchers, List<BrowserExtension>? extensions = null)
     {
-        await MergeAsync(launchers);
+        var rebound = await MergeAsync(launchers);
 
         if (extensions != null) await BrowserExtensionService.ReconcileAsync(extensions);
 
@@ -173,6 +173,19 @@ internal static class LauncherPayload
         }
 
         SettingsManager.SaveSettings();
+
+        // Rebuild the flyouts of the launchers whose item objects were replaced above. A flyout's
+        // rows hold the item objects themselves, and its own rebuild check is a content hash of
+        // what it draws, which a change to an item's arguments does not move.
+        // Without this the flyout is left bound to items the launcher no longer contains, and
+        // every operation that finds an item by reference (remove, move, edit) silently does
+        // nothing, while a drag reorder writes the stale objects back over the merge.
+        if (rebound.Count > 0)
+            await RunOnUiThreadAsync(() =>
+            {
+                foreach (string id in rebound)
+                    Windows.FlyoutWindow.InvalidateItems(id, force: true);
+            });
     }
 
     /// <summary>
@@ -180,25 +193,17 @@ internal static class LauncherPayload
     /// Existing launchers are updated in-place (preserving object references for PropertyChanged
     /// subscriptions and FlyoutWindow instances). New launchers are added; missing ones removed.
     /// </summary>
-    private static async Task MergeAsync(List<Launcher> launchers)
+    /// <returns>
+    /// The ids of the launchers whose item objects were replaced, which is what the caller has to
+    /// rebuild a flyout for.
+    /// </returns>
+    private static async Task<List<string>> MergeAsync(List<Launcher> launchers)
     {
-        var dispatcher = DispatcherQueue.GetForCurrentThread();
-        if (dispatcher != null)
-        {
-            MergeLaunchers(launchers);
-        }
-        else
-        {
-            var tcs = new TaskCompletionSource();
-            App.MainDispatcherQueue.TryEnqueue(() =>
-            {
-                MergeLaunchers(launchers);
-                tcs.SetResult();
-            });
-            await tcs.Task;
-        }
+        var rebound = new List<string>();
+        await RunOnUiThreadAsync(() => MergeLaunchers(launchers, rebound));
+        return rebound;
 
-        static void MergeLaunchers(List<Launcher> launchers)
+        static void MergeLaunchers(List<Launcher> launchers, List<string> rebound)
         {
             var current = SettingsManager.Current.Launchers;
             var downloadedById = launchers.ToDictionary(l => l.Id);
@@ -219,7 +224,8 @@ internal static class LauncherPayload
                 var existing = current.FirstOrDefault(l => l.Id == downloaded.Id);
                 if (existing != null)
                 {
-                    CopyInto(existing, downloaded);
+                    if (CopyInto(existing, downloaded))
+                        rebound.Add(existing.Id);
                 }
                 else
                 {
@@ -237,7 +243,9 @@ internal static class LauncherPayload
     /// <para><b>In place is the point.</b> The existing object is kept so `PropertyChanged`
     /// subscriptions and the launcher's `FlyoutWindow` / `WebFlyoutWindow` instance survive the
     /// download; replacing the reference would leave every open panel bound to an orphan.
-    /// Collections are cleared and refilled for the same reason.</para>
+    /// Collections are cleared and refilled for the same reason, and <c>Items</c> goes further:
+    /// it is left alone entirely unless the download differs, because the objects inside it are
+    /// what a flyout's rows are bound to.</para>
     /// <para><b>This must list every property that should travel between machines.</b> A newly
     /// downloaded launcher is added wholesale and therefore carries everything, so anything
     /// missing here fails only on the *second* machine and only for launchers that already
@@ -245,7 +253,8 @@ internal static class LauncherPayload
     /// icons-per-row, title visibility and the whole bookmark bar never propagated at all.
     /// When adding a property to <see cref="Launcher"/>, add it here too.</para>
     /// </remarks>
-    private static void CopyInto(Launcher existing, Launcher downloaded)
+    /// <returns>Whether the item objects were replaced, which orphans anything bound to them.</returns>
+    private static bool CopyInto(Launcher existing, Launcher downloaded)
     {
         // ── Identity and tray presence ──────────────────────────────
         existing.Name = downloaded.Name;
@@ -326,15 +335,86 @@ internal static class LauncherPayload
             existing.WebBookmarks.Add(bookmark);
 
         // ── Items ───────────────────────────────────────────────────
-        existing.Items.Clear();
-        foreach (var item in downloaded.Items)
-            existing.Items.Add(item);
+        // Only when they differ, and this is not an optimisation. Refilling the collection with
+        // equal-valued copies is invisible in the settings file and breaks every open flyout: its
+        // rows hold the item objects, so replacing them leaves it displaying items the launcher
+        // no longer contains, and remove, move and edit all look for the row's item by reference
+        // and quietly find nothing. Most downloads carry items identical to the ones already
+        // here, which is how a periodic sync came to disable editing until the app was restarted.
+        bool itemsChanged = !ItemsMatch(existing.Items, downloaded.Items);
+        if (itemsChanged)
+        {
+            existing.Items.Clear();
+            foreach (var item in downloaded.Items)
+                existing.Items.Add(item);
+        }
 
         // Last, and after the bookmarks are in place: a launcher sent by an older build carries its
         // address in the legacy fields, and this is what turns that into a first bookmark. Running
         // it on every merge rather than only at startup is the whole point — the old build goes on
         // writing those fields for as long as the other machine is not upgraded.
         existing.MigrateWebModel();
+
+        return itemsChanged;
+    }
+
+    /// <summary>
+    /// Run <paramref name="action"/> on the UI thread, from whichever thread the caller is on.
+    /// </summary>
+    /// <remarks>
+    /// A download runs on a background thread, but everything it applies (the launcher
+    /// collection and the windows bound to it) belongs to the UI thread.
+    /// </remarks>
+    private static async Task RunOnUiThreadAsync(Action action)
+    {
+        if (DispatcherQueue.GetForCurrentThread() != null)
+        {
+            action();
+            return;
+        }
+
+        var tcs = new TaskCompletionSource();
+        App.MainDispatcherQueue.TryEnqueue(() =>
+        {
+            try
+            {
+                action();
+                tcs.SetResult();
+            }
+            catch (Exception ex)
+            {
+                tcs.SetException(ex);
+            }
+        });
+        await tcs.Task;
+    }
+
+    /// <summary>
+    /// Whether two item lists are identical in every field that travels between machines,
+    /// nested children included.
+    /// </summary>
+    /// <remarks>
+    /// <para>Compares the serialized form rather than field by field, because that is the wire
+    /// format these payloads already agree on: it cannot fall behind a property added to
+    /// <see cref="LauncherItem"/> later, and a comparison that quietly stopped covering a new
+    /// field would drop the very changes the caller is applying.</para>
+    /// <para>Callers use this to leave the collection alone when a download carries the same
+    /// items it already has: refilling it with equal-valued copies is not the no-op it looks
+    /// like, because the objects are what every open flyout is bound to.</para>
+    /// </remarks>
+    internal static bool ItemsMatch(IEnumerable<LauncherItem> left, IEnumerable<LauncherItem> right)
+    {
+        try
+        {
+            return JsonSerializer.Serialize(left, JsonOptions) == JsonSerializer.Serialize(right, JsonOptions);
+        }
+        catch (Exception ex)
+        {
+            // An answer that cannot be worked out is "changed": replacing the items is the older
+            // behaviour and is always correct, only wasteful.
+            Logger.Debug(ex, "Could not compare launcher items; treating them as changed");
+            return false;
+        }
     }
 
     /// <summary>

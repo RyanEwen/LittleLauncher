@@ -91,6 +91,16 @@ method clears `_launcher.Items` and regenerates it from `_columnLists`, so calli
 structural edit resurrects anything just removed — this is exactly how remove was once broken.
 Drag-drop is the opposite case and must flush the other way.
 
+**Identity matters as much as content.** Every operation in the table finds a row's item **by
+reference** (`FindParentCollection`), and `_columnLists` holds the very objects that were in
+`_launcher.Items` when the panel was last built. Anything that swaps those objects for
+equal-valued copies breaks all of them at once: remove, move up/down, move to and edit find no
+parent and return silently, and a drag reorder flushes the stale set back over whatever replaced
+it. A sync download used to do exactly that on every tick, which disabled item editing in every
+flyout until the app was restarted; see [sync.md](sync.md) for the guard that stops it.
+`FindParentCollection` logs a warning when a row's item is missing, because the only other
+symptom is a menu entry that does nothing.
+
 ## Architecture
 
 ### Multi-column layout

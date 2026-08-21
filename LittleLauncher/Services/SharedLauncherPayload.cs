@@ -111,12 +111,23 @@ internal static class SharedLauncherPayload
             if (file.TwoWay.HasValue && !launcher.IsSharedOwner)
                 launcher.SharedTwoWay = file.TwoWay.Value;
 
-            launcher.Items.Clear();
             foreach (var item in file.Items)
-            {
                 item.NormalizeGlyph();
-                launcher.Items.Add(item);
+
+            // Only when the pull actually carries something different. This runs on every
+            // periodic sync, and refilling the collection with equal-valued copies leaves the
+            // launcher's flyout bound to items the launcher no longer contains: remove, move and
+            // edit all look up the row's item by reference and quietly find nothing. Rebuilding
+            // the flyout is what re-binds it to the objects that are now in the launcher.
+            if (!LauncherPayload.ItemsMatch(launcher.Items, file.Items))
+            {
+                launcher.Items.Clear();
+                foreach (var item in file.Items)
+                    launcher.Items.Add(item);
+
+                Windows.FlyoutWindow.InvalidateItems(launcher.Id, force: true);
             }
+
             tcs.SetResult();
         });
         await tcs.Task;
