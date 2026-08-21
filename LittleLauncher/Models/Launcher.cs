@@ -218,6 +218,34 @@ public partial class Launcher : ObservableObject
     public const int MinWebZoomPercent = 25;
     public const int MaxWebZoomPercent = 400;
 
+    /// <summary>The zoom levels the UI offers, as percentages.</summary>
+    /// <remarks>
+    /// One ladder, so the flyout's "…" menu, its zoom keys and the settings dialog cannot drift
+    /// apart, and so a step lands on a level the other two can name. It is narrower than
+    /// <see cref="MinWebZoomPercent"/>…<see cref="MaxWebZoomPercent"/> on purpose: any value in
+    /// that range is still valid, and <see cref="WebZoomLevelsIncluding"/> is how a picker shows
+    /// one that is not on the ladder.
+    /// </remarks>
+    public static readonly int[] WebZoomLevels = [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200];
+
+    /// <summary>
+    /// The ladder, with <paramref name="percent"/> folded in when it is not already a rung.
+    /// </summary>
+    /// <remarks>
+    /// A launcher can hold a zoom the ladder does not list: one stepped there before the steps
+    /// followed the ladder, or arrived from a sync. A picker built on the bare ladder then has
+    /// nothing to select, and the settings combo answered that by falling back to its first
+    /// entry, so a launcher on 120% read as 50%, in the one place a user goes to put it back.
+    /// </remarks>
+    public static int[] WebZoomLevelsIncluding(int percent)
+    {
+        if (Array.IndexOf(WebZoomLevels, percent) >= 0) return WebZoomLevels;
+
+        int[] levels = [.. WebZoomLevels, percent];
+        Array.Sort(levels);
+        return levels;
+    }
+
     public static int ClampIconModeIconsPerRow(int value) => Math.Clamp(value, MinIconModeIconsPerRow, MaxIconModeIconsPerRow);
 
     /// <summary>Resolved web flyout width in DIPs, with 0 meaning the default.</summary>
@@ -232,11 +260,19 @@ public partial class Launcher : ObservableObject
         ? DefaultWebFlyoutHeight
         : Math.Clamp(WebFlyoutHeight, MinWebFlyoutHeight, MaxWebFlyoutDimension);
 
+    /// <summary>Resolved page zoom as a percentage, with 0 meaning 100.</summary>
+    /// <remarks>
+    /// What every surface that shows or changes the zoom reads, so none of them has to repeat what
+    /// an unset value means.
+    /// </remarks>
+    [JsonIgnore]
+    public int ResolvedWebZoomPercent => WebZoomPercent <= 0
+        ? 100
+        : Math.Clamp(WebZoomPercent, MinWebZoomPercent, MaxWebZoomPercent);
+
     /// <summary>Resolved page zoom factor, with 0 meaning 100%.</summary>
     [JsonIgnore]
-    public double ResolvedWebZoomFactor => WebZoomPercent <= 0
-        ? 1.0
-        : Math.Clamp(WebZoomPercent, MinWebZoomPercent, MaxWebZoomPercent) / 100.0;
+    public double ResolvedWebZoomFactor => ResolvedWebZoomPercent / 100.0;
 
     /// <summary>Resolved idle-unload delay, with 0 meaning the default.</summary>
     [JsonIgnore]

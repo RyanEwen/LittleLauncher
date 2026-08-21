@@ -66,9 +66,9 @@ public sealed partial class WebFlyoutWindow
         new("nav.address",  "Ctrl+L",            "Focus the address bar",             "Navigation"),
         new("nav.home",     "Alt+Home",          "Back to this launcher's own page",  "Navigation"),
 
-        new("page.zoomIn",  "Ctrl+Plus",         "Zoom in",                           "Page"),
-        new("page.zoomOut", "Ctrl+Minus",        "Zoom out",                          "Page"),
-        new("page.zoomOff", "Ctrl+0",            "Reset zoom",                        "Page"),
+        new("page.zoomIn",  "Ctrl+Plus  or  Ctrl+Wheel up",   "Zoom in",              "Page"),
+        new("page.zoomOut", "Ctrl+Minus  or  Ctrl+Wheel down", "Zoom out",             "Page"),
+        new("page.zoomOff", "Ctrl+0",            "Reset zoom to 100%",                "Page"),
         new("page.bookmark", "Ctrl+D",           "Add or remove this page's bookmark", "Page"),
         new("page.browser", "Ctrl+Shift+O",      "Open this page in your browser",    "Page"),
 
@@ -88,10 +88,13 @@ public sealed partial class WebFlyoutWindow
     /// Listens for the shortcut combos in the page and hands them to the host.
     /// </summary>
     /// <remarks>
-    /// Capture phase and <c>preventDefault</c>, so the page neither swallows the key first nor acts
-    /// on it afterwards — a chat app that binds Ctrl+W to something of its own would otherwise both
-    /// close the tab and do that. Everything not in the list is left entirely alone: the script
-    /// returns before touching the event, so ordinary typing is untouched.
+    /// <para>Capture phase and <c>preventDefault</c>, so the page neither swallows the key first nor
+    /// acts on it afterwards — a chat app that binds Ctrl+W to something of its own would otherwise
+    /// both close the tab and do that. Everything not in the list is left entirely alone: the script
+    /// returns before touching the event, so ordinary typing is untouched.</para>
+    /// <para>Ctrl+wheel is caught here too, for a different reason: left to the browser it drives a
+    /// zoom this app can neither read nor reset. The cost is that a page using Ctrl+wheel for a
+    /// canvas of its own does not see it, which is the same trade the keys above already make.</para>
     /// </remarks>
     private const string ShortcutBridgeScript = """
         (function () {
@@ -155,6 +158,29 @@ public sealed partial class WebFlyoutWindow
                 e.stopPropagation();
                 try { window.chrome.webview.postMessage(JSON.stringify({ __ll: 'key', id: id })); } catch (err) { }
             }, true);
+
+            // Ctrl+wheel is the browser's own zoom, and the browser's own zoom is the one thing this
+            // window cannot undo: it lives on the controller WinUI never exposes, so nothing in the
+            // menu, the settings dialog or Ctrl+0 can reach it. Taken here it becomes the launcher's
+            // zoom, which every one of those can put back. IsZoomControlEnabled is off to match, so
+            // a page that swallows this event first still cannot zoom out of the app's reach.
+            var wheeled = 0;
+            window.addEventListener('wheel', function (e) {
+                if (!e.ctrlKey || e.altKey || e.shiftKey || !e.deltaY) return;
+
+                e.preventDefault();
+                e.stopPropagation();
+
+                // One rung per notch, and a trackpad pinch arrives as a stream of small deltas
+                // rather than one of ~100, so without a threshold a pinch crosses the whole ladder.
+                if (wheeled * e.deltaY < 0) wheeled = 0;
+                wheeled += e.deltaY;
+                if (Math.abs(wheeled) < 100) return;
+
+                var id = wheeled < 0 ? 'page.zoomIn' : 'page.zoomOut';
+                wheeled = 0;
+                try { window.chrome.webview.postMessage(JSON.stringify({ __ll: 'key', id: id })); } catch (err) { }
+            }, { capture: true, passive: false });
         })();
         """;
 
@@ -258,8 +284,8 @@ public sealed partial class WebFlyoutWindow
             case "nav.address": FocusAddressBar(); break;
             case "nav.home": _ = ShowHomeContentAsync(); break;
 
-            case "page.zoomIn": StepZoom(10); break;
-            case "page.zoomOut": StepZoom(-10); break;
+            case "page.zoomIn": StepZoom(1); break;
+            case "page.zoomOut": StepZoom(-1); break;
             case "page.zoomOff": SetZoom(100); break;
             case "page.bookmark": ToggleBookmarkForAddress(); break;
             case "page.browser": OpenInBrowser(); break;
@@ -335,22 +361,35 @@ public sealed partial class WebFlyoutWindow
         _addressBox.SelectAll();
     }
 
-    /// <summary>Nudges the launcher's zoom, which is where a web launcher's zoom lives.</summary>
+    /// <summary>Moves <paramref name="rungs"/> along the zoom ladder, as a browser's zoom does.</summary>
     /// <remarks>
-    /// Persisted rather than held for the visit, because <see cref="Launcher.WebZoomPercent"/> is a
-    /// launcher setting and there is no per-visit zoom to write to — see <c>ApplyZoom</c> for why
-    /// this is a CSS zoom rather than the controller's.
+    /// <para>Persisted rather than held for the visit, because <see cref="Launcher.WebZoomPercent"/>
+    /// is a launcher setting and there is no per-visit zoom to write to — see <c>ApplyZoom</c> for
+    /// why this is a CSS zoom rather than the controller's.</para>
+    /// <para>Rungs of <see cref="Launcher.WebZoomLevels"/>, not a flat percentage: a step used to
+    /// add ten points, which walks straight off the levels the "…" menu and the settings dialog
+    /// offer. Two presses left the launcher on 120%, a value neither picker could show, and the
+    /// settings combo answered by displaying its first entry instead.</para>
     /// </remarks>
-    private void StepZoom(int deltaPercent)
+    private void StepZoom(int rungs)
     {
-        int current = _launcher.WebZoomPercent <= 0 ? 100 : _launcher.WebZoomPercent;
-        SetZoom(current + deltaPercent);
+        int current = _launcher.ResolvedWebZoomPercent;
+        int[] levels = Launcher.WebZoomLevelsIncluding(current);
+        int index = Array.IndexOf(levels, current);
+
+        SetZoom(levels[Math.Clamp(index + rungs, 0, levels.Length - 1)]);
     }
 
+    /// <summary>Puts the launcher on <paramref name="percent"/>, wherever the change came from.</summary>
+    /// <remarks>
+    /// Compared against the <em>resolved</em> zoom rather than the stored one, so resetting a
+    /// launcher that has never been zoomed is the no-op it looks like rather than a write of 100
+    /// over an unset 0, which would save settings and wake the sync service to say nothing.
+    /// </remarks>
     private void SetZoom(int percent)
     {
         int clamped = Math.Clamp(percent, Launcher.MinWebZoomPercent, Launcher.MaxWebZoomPercent);
-        if (clamped == _launcher.WebZoomPercent) return;
+        if (clamped == _launcher.ResolvedWebZoomPercent) return;
 
         _launcher.WebZoomPercent = clamped;
         Classes.Settings.SettingsManager.SaveSettings();

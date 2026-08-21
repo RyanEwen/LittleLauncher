@@ -2081,6 +2081,13 @@ public sealed partial class WebFlyoutWindow : Window
         var settings = core.Settings;
         settings.IsStatusBarEnabled = false;
         settings.AreBrowserAcceleratorKeysEnabled = false;   // no Ctrl+N/Ctrl+P from a tray panel
+
+        // The browser's own zoom is unreachable from here: it lives on CoreWebView2Controller, which
+        // WinUI never exposes, so a Ctrl+wheel zoom could be applied by the user and then undone by
+        // nobody. Not the "…" menu, not Ctrl+0, not the settings dialog: all three write the
+        // launcher's CSS zoom instead. Off, the gesture belongs to the shortcut bridge, and the
+        // launcher's zoom is the only zoom there is.
+        settings.IsZoomControlEnabled = false;
         // Off when a password manager extension is doing the job — otherwise both offer, and the
         // built-in one keeps proposing older saved logins over the manager's. Read per browser, so
         // it applies to a launcher the next time it starts rather than to one already open.

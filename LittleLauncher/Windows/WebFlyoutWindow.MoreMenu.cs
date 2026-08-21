@@ -16,9 +16,13 @@ namespace LittleLauncher.Windows;
 /// </summary>
 /// <remarks>
 /// <para>These are the settings whose right value is a per-moment judgement — how this launcher
-/// presents itself, and whether it gets out of the way when you click elsewhere. Everything that is
-/// configured once and forgotten (address, size, zoom, profiles, browsing data) stays in launcher
-/// settings; putting it all here would just be a second settings window in a worse place.</para>
+/// presents itself, whether it gets out of the way when you click elsewhere, and how big its page
+/// is. Everything that is configured once and forgotten (address, profiles, browsing data) stays in
+/// launcher settings; putting it all here would just be a second settings window in a worse
+/// place.</para>
+/// <para>Zoom is the one that changed sides. It looks like a set-once setting and is not: the
+/// gestures that change it are ones a user hits by accident, and the menu is where they then go
+/// looking for the way back.</para>
 /// <para>Each item writes the launcher and applies it immediately, because the menu is opened
 /// <em>while looking at the thing it changes</em> — a toggle that only took effect on the next open
 /// would be indistinguishable from one that did nothing.</para>
@@ -121,7 +125,11 @@ public sealed partial class WebFlyoutWindow
 
         menu.Items.Add(new MenuFlyoutSeparator());
 
-        // ── Where and how big it opens ──────────────────────────
+        // ── How big it is, and where it opens ───────────────────
+        // Zoom leads the section because it is the size question asked most often, and the only one
+        // a user arrives at the menu already needing fixed.
+        menu.Items.Add(BuildZoomSubmenu());
+
         menu.Items.Add(BuildAnchorSubmenu());
 
         // The one a user reaches for straight after dragging a flyout and finding the change did
@@ -160,6 +168,52 @@ public sealed partial class WebFlyoutWindow
         menu.Closed += (_, _) => _isMenuOpen = false;
 
         menu.ShowAt(_moreButton);
+    }
+
+    /// <summary>
+    /// The "Zoom" submenu: what the page's zoom is now, and every level it can be put back to.
+    /// </summary>
+    /// <remarks>
+    /// <para>Zoom used to be settings-only, on the grounds that it is set once and forgotten. It is
+    /// not: Ctrl+wheel and Ctrl+plus/minus change it in passing, often by accident, and the launcher
+    /// is then stuck at a size with nothing on screen admitting why. That makes the current level a
+    /// thing worth <em>reading</em> off the menu, which is why it is in the parent item's text
+    /// rather than only in the checked rung.</para>
+    /// <para>Reset leads, because coming back to 100% is the reason this submenu exists. The ladder
+    /// below it is <see cref="Launcher.WebZoomLevels"/>, the same rungs the settings dialog offers
+    /// and the zoom keys step through, plus the current level when a launcher holds one that is not
+    /// on it. Nudging is left to the keyboard and the wheel: a menu item closes the menu, so a
+    /// "Zoom in" here would be one rung per trip.</para>
+    /// </remarks>
+    private MenuFlyoutSubItem BuildZoomSubmenu()
+    {
+        int current = _launcher.ResolvedWebZoomPercent;
+        var submenu = new MenuFlyoutSubItem { Text = $"Zoom ({current}%)" };
+
+        var reset = new MenuFlyoutItem
+        {
+            Text = "Reset to 100%",
+            KeyboardAcceleratorTextOverride = "Ctrl+0",
+            IsEnabled = current != 100,
+        };
+        reset.Click += (_, _) => SetZoom(100);
+        submenu.Items.Add(reset);
+
+        submenu.Items.Add(new MenuFlyoutSeparator());
+
+        foreach (int level in Launcher.WebZoomLevelsIncluding(current))
+        {
+            var item = new RadioMenuFlyoutItem
+            {
+                Text = $"{level}%",
+                GroupName = "WebZoom",
+                IsChecked = level == current,
+            };
+            item.Click += (_, _) => SetZoom(level);
+            submenu.Items.Add(item);
+        }
+
+        return submenu;
     }
 
     /// <summary>

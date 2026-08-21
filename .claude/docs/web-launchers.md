@@ -76,6 +76,17 @@ This is the whole point of the feature, so it is the thing not to regress.
   `ZoomFactor` — which lives there — is unavailable, unlike in the WPF and WinForms wrappers. Zoom
   is applied as a CSS `zoom` on the document element and **re-applied on every
   `NavigationCompleted`**, because it lives in the document rather than on the control.
+  - **Which is why the browser's own zoom is switched off** (`IsZoomControlEnabled = false`). The
+    two zooms are not interchangeable: a Ctrl+wheel zoom is applied to a controller nothing here can
+    read, so it survives the "…" menu, Ctrl+0 and the settings dialog alike: all three write the
+    launcher's CSS zoom, and none of them can undo it. Left on, the app has a zoom the user can set
+    and nobody can reset. `AreBrowserAcceleratorKeysEnabled = false` covers only the *keys*; the
+    wheel needs this flag.
+  - **The gesture is kept, not dropped.** The shortcut bridge takes Ctrl+wheel in the page (capture
+    phase, `passive: false`) and posts `page.zoomIn` / `page.zoomOut`, so it moves one rung of
+    `Launcher.WebZoomLevels` and is persisted like any other zoom change. It accumulates `deltaY` to
+    a threshold of 100 first, because a trackpad pinch arrives as a stream of small deltas and
+    would otherwise cross the whole ladder in one gesture.
 - **Escape only works while the XAML tree has focus.** Once the page takes focus the browser owns
   the key, which is why the header keeps a close button. Both the `KeyboardAccelerator` and the
   `WM_KEYDOWN` subclass are best-effort.
@@ -199,9 +210,10 @@ data folder does not isolate them.
 `WebFlyoutWindow.MoreMenu.cs`. The header's "…" replaced the gear: it opens a menu of the
 per-launcher options whose right value is a **per-moment judgement** — Regular window, Close when
 focus is lost (window mode only), the pin, add/remove this page from the bookmarks, **Tab bar**,
-**Address bar**, **Opens at** (a submenu of radio items, being an eleven-way choice rather than a
-toggle — "Where you last dragged it" is one of its values, not a separate toggle), Remember size
-changes — with **Keyboard shortcuts**, **Launcher settings…** and **App settings…** at its foot.
+**Address bar**, **Zoom**, **Opens at** (a submenu of radio items, being an eleven-way choice rather
+than a toggle — "Where you last dragged it" is one of its values, not a separate toggle), Remember
+size changes — with **Keyboard shortcuts**, **Launcher settings…** and **App settings…** at its
+foot.
 
 App settings dismisses a flyout on its way, as the item flyout’s context menu does: the flyout is
 always-on-top and would otherwise sit over the window it just opened. A regular window is left
@@ -227,10 +239,21 @@ both a permanent setting and a temporary reveal, and one affordance beats two th
 how long they last, which is a distinction the header had no room to explain. The menu carries the
 same toggle, since a button that is only in the header is a button nobody finds.
 
-Anything configured once and forgotten (address, size, zoom, profiles,
-browsing data) deliberately stays in the settings window; putting it all here would be a second
-settings window in a worse place. The "…" is the same idiom the item cards use, so the affordance is
-not new.
+Anything configured once and forgotten (address, profiles, browsing data)
+deliberately stays in the settings window; putting it all here would be a second settings window in
+a worse place. The "…" is the same idiom the item cards use, so the affordance is not new.
+
+**Zoom went the other way, and is the clearest case of an item the membership test read wrong.** It
+looks like a set-once setting and sits in Advanced accordingly, but the gestures that change it
+(Ctrl+wheel and Ctrl+plus/minus) are ones a user hits *by accident*, and nothing on screen then
+admits why the page is the wrong size. That makes it two things at once: a value worth **reading**
+off the menu, which is why the current level is in the parent item's own text (`Zoom (125%)`) rather
+than only in the checked rung, and a value worth putting back from there. The submenu leads with
+**Reset to 100%** for that reason, and lists `Launcher.WebZoomLevels` below it: the same rungs the
+settings dialog offers and the zoom keys step through, plus the launcher's current level when it
+holds one that is not on the ladder. There is deliberately no Zoom in / Zoom out item: a
+`MenuFlyoutItem` closes the menu, so nudging from here would cost one trip per rung, and nudging is
+what the keyboard and the wheel are for.
 
 Three rules, and the first two are the traps this window has hit before:
 
@@ -1009,6 +1032,8 @@ Zoom, When Hidden, Unload After, Reload On Open, Open Links In Browser, Pin Open
 Close On Focus Loss, Taskbar Click, Site Permissions, Profile and Browsing Data stay in Advanced: they tune a launcher
 that already works, and all of them on one surface made the common case (paste a URL, pick a size)
 read as a form to fill in. Pin is safe to demote twice over — the flyout's header has a button for it.
+Zoom is here *and* on the "…" menu rather than promoted out of Advanced, because it is genuinely both:
+the level a launcher is set up with, and the one to put back after an accidental Ctrl+wheel.
 
 New per-launcher web settings should default to Advanced unless a launcher is unusable without
 them, or unless the setting changes what the flyout is rather than how well it is tuned.

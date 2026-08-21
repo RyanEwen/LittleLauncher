@@ -110,7 +110,11 @@ model default, which would have flipped it on for every existing launcher.
 - `WebUrl` (`string`) — the page a web launcher opens
 - `WebFlyoutWidth` / `WebFlyoutHeight` (`int`, DIPs) — **0 means unset**; read them through
   `ResolvedWebFlyoutWidth` / `ResolvedWebFlyoutHeight`
-- `WebZoomPercent` (`int`) — 0 means 100%; read `ResolvedWebZoomFactor`
+- `WebZoomPercent` (`int`) — 0 means 100%; read `ResolvedWebZoomPercent` (to show or step it) or
+  `ResolvedWebZoomFactor` (to apply it). Any value in `MinWebZoomPercent`…`MaxWebZoomPercent` is
+  legal, but the pickers offer `Launcher.WebZoomLevels` and the zoom keys step along it, so a
+  surface listing levels must build its list with `Launcher.WebZoomLevelsIncluding(current)` or
+  it will have nothing to select for a launcher holding an off-ladder value
 - `WebHiddenPolicy` (`int`) — `WebHiddenPolicies.UnloadWhenIdle` (0, default) / `Suspend` (1) / `KeepRunning` (2)
 - `WebIdleUnloadMinutes` (`int`) — 0 means the default; read `ResolvedWebIdleUnloadMinutes`
 - `WebReloadOnShow` (`bool`) — re-fetch on every open

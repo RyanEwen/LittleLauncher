@@ -1228,11 +1228,15 @@ public sealed class LauncherSettingsWindow : Window
 
         // ── Zoom ────────────────────────────────────────────────
         var zoomCombo = new ComboBox { MinWidth = 100 };
-        int[] zoomLevels = [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200];
+
+        // The launcher's own level is folded into the ladder when it is not already a rung, so the
+        // combo always has the current value to select. It used to fall back to the first entry
+        // instead, which read as 50%, in the one place a user comes to put an odd zoom back.
+        int currentZoom = launcher.ResolvedWebZoomPercent;
+        int[] zoomLevels = Launcher.WebZoomLevelsIncluding(currentZoom);
         foreach (int zoom in zoomLevels)
             zoomCombo.Items.Add(new ComboBoxItem { Content = $"{zoom}%", Tag = zoom });
-        int currentZoom = (int)Math.Round(launcher.ResolvedWebZoomFactor * 100);
-        zoomCombo.SelectedIndex = Math.Max(0, Array.IndexOf(zoomLevels, currentZoom));
+        zoomCombo.SelectedIndex = Array.IndexOf(zoomLevels, currentZoom);
         zoomCombo.SelectionChanged += (_, _) =>
         {
             if (zoomCombo.SelectedItem is not ComboBoxItem selected || selected.Tag is not int zoom) return;
@@ -1241,7 +1245,7 @@ public sealed class LauncherSettingsWindow : Window
             Services.AutoSyncService.NotifyLaunchersChanged();
             WebFlyoutWindow.ApplyLauncherChanges(launcher.Id);
         };
-        var zoomRow = BuildRow("Zoom", "Page zoom inside the flyout", zoomCombo);
+        var zoomRow = BuildRow("Zoom", "Page zoom inside the flyout, also on the flyout's “…” menu", zoomCombo);
 
         // ── Hidden policy ───────────────────────────────────────
         var policyCombo = new ComboBox { MinWidth = 200 };
