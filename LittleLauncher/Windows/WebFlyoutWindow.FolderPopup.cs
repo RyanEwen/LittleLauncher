@@ -336,6 +336,11 @@ public sealed partial class WebFlyoutWindow
             _draggingBookmark = bookmark;
             _isStripDragging = true;
 
+            // The overlay's backdrop covers the bar too, and it accepts nothing - so a bookmark
+            // dragged out of a folder landed on it and the drop was refused. Out of hit-testing for
+            // the length of the drag, and back afterwards so clicking away still closes the folder.
+            if (_folderBackdrop != null) _folderBackdrop.IsHitTestVisible = false;
+
             e.Data.SetText(bookmark.Url);
             e.Data.RequestedOperation =
                 global::Windows.ApplicationModel.DataTransfer.DataPackageOperation.Move |
@@ -346,6 +351,9 @@ public sealed partial class WebFlyoutWindow
         {
             _draggingBookmark = null;
             _isStripDragging = false;
+
+            if (_folderBackdrop != null) _folderBackdrop.IsHitTestVisible = true;
+
             CloseFolderPopups(0);
         };
 
@@ -568,6 +576,10 @@ public sealed partial class WebFlyoutWindow
         }
 
         if (_folderPanels.Count > 0) return;
+
+        // Whatever happened to the drag, the sheet is answering clicks again by the time the last
+        // list has gone.
+        if (_folderBackdrop != null) _folderBackdrop.IsHitTestVisible = true;
 
         _isMenuOpen = false;
         if (_folderOverlay != null) _folderOverlay.Visibility = Visibility.Collapsed;

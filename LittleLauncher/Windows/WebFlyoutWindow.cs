@@ -100,6 +100,20 @@ public sealed partial class WebFlyoutWindow : Window
     /// folder is open, so it never takes a click that was meant for the page.
     /// </remarks>
     private Grid? _folderOverlay;
+
+    /// <summary>
+    /// The transparent sheet inside <see cref="_folderOverlay"/> that closes a folder when clicked
+    /// past it.
+    /// </summary>
+    /// <remarks>
+    /// It has to stop hit-testing for the length of a drag. The overlay spans the whole window, so
+    /// while a folder is open this sheet lies over the bookmark bar as well - and a bookmark dragged
+    /// out of a folder was landing on it rather than on the bar, which accepts nothing and so
+    /// refused the drop. Taking it out of hit-testing lets the drag reach what is underneath; it
+    /// goes back the moment the drag ends, or the folder could no longer be dismissed by clicking
+    /// away from it.
+    /// </remarks>
+    private Border? _folderBackdrop;
     private readonly Controls.OverflowStripPanel _bookmarkStrip;
     private readonly Grid _bookmarkBar;
     /// <summary>
@@ -635,16 +649,16 @@ public sealed partial class WebFlyoutWindow : Window
 
         // A backdrop of our own, because click-outside-to-close came free with a light-dismiss
         // popup and does not with an overlay. First child, so it sits behind the lists.
-        var folderBackdrop = new Border
+        _folderBackdrop = new Border
         {
             Background = new SolidColorBrush(global::Windows.UI.Color.FromArgb(1, 0, 0, 0)),
         };
-        folderBackdrop.PointerPressed += (_, e) =>
+        _folderBackdrop.PointerPressed += (_, e) =>
         {
             e.Handled = true;
             CloseFolderPopups(0);
         };
-        _folderOverlay.Children.Add(folderBackdrop);
+        _folderOverlay.Children.Add(_folderBackdrop);
 
         root.Children.Add(_folderOverlay);
         AddResizeGrips(root);
