@@ -1870,9 +1870,12 @@ affordance to learn.
   not there.
 - **A folder cannot be moved into itself or into anything it contains.** That would take the whole
   branch off the bar with no way back to it.
-- **Removing a folder keeps what was in it**, returning its contents to the bar where the folder was.
-  A remove that quietly deletes bookmarks the user never selected is not what anyone means by
-  "remove folder", and there is no undo here to lean on.
+- **Removing a folder keeps what was in it**, returning its contents to *the collection that held
+  the folder* - the bar for a top-level one, the parent folder for a nested one - at the position it
+  occupied. A remove that quietly deletes bookmarks the user never selected is not what anyone means
+  by "remove folder", and there is no undo here to lean on. Like every other action on a bookmark it
+  resolves that collection with `OwnerOf`: reading the launcher's top level directly is what made
+  this, the right-click menu and the drag out of a folder each silently do nothing in turn.
 - **The bar's signature includes folder contents.** A folder's menu is built from its button, so a
   bookmark added or renamed inside one changes what the bar can show while every top-level entry
   stays identical - without it the rebuild is skipped and the folder keeps opening a menu of what it

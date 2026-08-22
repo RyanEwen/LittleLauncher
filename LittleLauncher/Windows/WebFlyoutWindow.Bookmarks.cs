@@ -810,16 +810,29 @@ public sealed partial class WebFlyoutWindow
     /// </remarks>
     private void RemoveFolder(WebBookmark folder)
     {
-        int at = _launcher.WebBookmarks.IndexOf(folder);
+        // Whichever collection actually holds it, which for a folder inside another folder is that
+        // one's children. Asking the launcher's top level returned -1 for those and gave up without
+        // a word, so Remove folder did nothing at all - the third time a top-level-only lookup has
+        // silently disabled an action in this file. OwnerOf is the answer to all of them.
+        var owner = OwnerOf(folder);
+        if (owner == null) return;
+
+        int at = owner.IndexOf(folder);
         if (at < 0) return;
 
-        _launcher.WebBookmarks.RemoveAt(at);
+        owner.RemoveAt(at);
 
+        // Its contents come out where it was, in the same collection: deleting a folder is not a
+        // request to delete the bookmarks inside it, and there is no undo here.
         foreach (var child in folder.Children.ToList())
-            _launcher.WebBookmarks.Insert(at++, child);
+            owner.Insert(at++, child);
 
         folder.Children.Clear();
         PersistBookmarks();
+
+        // The list this folder was drawn in is now describing something that no longer exists, and
+        // a nested one is drawn from a folder that has just been emptied.
+        CloseFolderPopups(0);
     }
 
     /// <summary>Files a bookmark into a folder, taking it out of wherever it was.</summary>
