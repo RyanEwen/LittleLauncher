@@ -28,7 +28,8 @@ public sealed partial class WebFlyoutWindow
     /// Intercepts a navigation to one of the browser's internal pages.
     /// </summary>
     /// <returns>True when the navigation was handled and the caller should stop.</returns>
-    private bool TryHandleBrowserPageNavigation(CoreWebView2 core, CoreWebView2NavigationStartingEventArgs e)
+    private bool TryHandleBrowserPageNavigation(CoreWebView2 core, WebTab tab,
+                                                CoreWebView2NavigationStartingEventArgs e)
     {
         string uri;
         try { uri = e.Uri ?? ""; }
@@ -48,6 +49,12 @@ public sealed partial class WebFlyoutWindow
         if (IsNewTabPage(uri))
         {
             Logger.Debug("Answering {Uri} with an empty tab for launcher {Name}", uri, _launcher.Name);
+
+            // Going nowhere after all, which is precisely what an empty tab is. Cleared, or the
+            // address the tab was built with (or was last sent to) would go on standing in for a
+            // destination — and "has a destination" is the test that decides whether this tab gets
+            // the address bar and the notice that say what an empty tab is for.
+            tab.NavigatedUrl = "";
 
             try { core.Navigate("about:blank"); }
             catch (Exception ex) { Logger.Debug(ex, "Blanking a tab failed"); }
@@ -76,6 +83,21 @@ public sealed partial class WebFlyoutWindow
         uri.StartsWith("chrome-search://", StringComparison.OrdinalIgnoreCase) ||
         uri.StartsWith("search://", StringComparison.OrdinalIgnoreCase) ||
         uri.StartsWith("edge://", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// True for an address that is not a place: nothing at all, the blank page, or a new tab page.
+    /// </summary>
+    /// <remarks>
+    /// What separates a tab that is loading from one that is empty, wherever the address came from
+    /// — the one it was built with, the one it was last sent to, or its live <c>Source</c>. The
+    /// new-tab test is gated on <see cref="IsBrowserPage"/> exactly as the interception above is,
+    /// because on its own it matches any address with "newtab" anywhere in it, and a site is
+    /// perfectly entitled to have a page called that.
+    /// </remarks>
+    private static bool IsBlankAddress(string? uri) =>
+        string.IsNullOrEmpty(uri) ||
+        uri.Equals("about:blank", StringComparison.OrdinalIgnoreCase) ||
+        (IsBrowserPage(uri) && IsNewTabPage(uri));
 
     /// <summary>True for the several addresses that all mean "the new tab page".</summary>
     private static bool IsNewTabPage(string uri) =>

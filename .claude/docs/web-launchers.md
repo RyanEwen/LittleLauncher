@@ -296,6 +296,20 @@ header carries a button that turns it on and off, tooltipped for whichever it wi
 - **A blank new tab shows the bar whatever the setting says** (`IsActiveTabBlank`). A tab opened
   with the "+" has no address yet, so it is a place to type; hiding the box would leave the user an
   empty window and no way to use it.
+- **"Blank" means "has nowhere to go", not "has not arrived yet"**, and the difference is the whole
+  reason a tab is built knowing its address. A browser reports an empty `Source` until its first
+  response commits, so a tab that learned where it was going only on arrival was indistinguishable
+  from an empty one for the length of the load: the bar slid in for every cold open and every link
+  opened in a tab, on launchers that have it switched off, and the "type an address" notice flashed
+  up over a page that was loading. `CreateTabAsync` therefore seeds `WebTab.NavigatedUrl` before the
+  tab goes on screen — including for a tab handed to `NewWindowRequested.NewWindow`, which WebView2
+  navigates itself (`adopted: true` says so, so it is recorded without being navigated twice).
+- **`IsBlankAddress` is the single test** for "this address is not a place", used on the seed, on the
+  live `Source` and by `ShowEmptyTabStatus`: nothing at all, `about:blank`, or a new-tab page. The
+  last two matter because `window.open()` with no address arrives as `about:blank` and a new-tab
+  request as `edge://newtab/` — recording either as a destination would take the address bar away
+  from the one tab that has nothing else in it. The new-tab test is gated on `IsBrowserPage` for the
+  same reason the interception is: on its own it matches any URL containing "newtab".
 - **It never becomes a fourth answer to "which URL".** `GoToTypedAddress` drives the browser that
   is already there and never creates one. Falling back to `PrepareContentAsync` looks helpful and
   is not — that path navigates to `CurrentTargetUrl()`, so an address typed with no live browser
@@ -1625,6 +1639,13 @@ paints nothing at all and the tab would be a bare rectangle of window background
 places, which is the whole set of ways a blank tab ends up in front: creation with no address,
 `ActivateTab` switching back to one, and `NavigationCompleted` for the `about:blank` a new-tab
 request is answered with.
+
+**Answering a new-tab request clears the tab's `NavigatedUrl`.** The navigation is cancelled and the
+tab blanked, so the address it was built with — or was last sent to — is no longer where it is going,
+and leaving it there would leave the tab claiming a destination it has abandoned. That claim is what
+decides whether the tab gets the address bar and the notice, which is exactly what a new tab needs
+and what the interception exists to give it. It is why `TryHandleBrowserPageNavigation` takes the
+`WebTab` as well as the browser.
 
 ## Saved logins are scoped to the profile
 

@@ -123,10 +123,17 @@ public sealed partial class WebFlyoutWindow
         public string? HomeKey { get; init; }
 
         /// <summary>
-        /// The address last handed to <see cref="WebFlyoutWindow.Navigate"/>, per tab rather than
-        /// per window: the reload-on-open and settings-changed checks compare against the home
-        /// tab's address, and a link tab must not be able to answer for it.
+        /// Where this tab has been sent, per tab rather than per window: the reload-on-open and
+        /// settings-changed checks compare against the home tab's address, and a link tab must not
+        /// be able to answer for it.
         /// </summary>
+        /// <remarks>
+        /// The address last handed to <see cref="WebFlyoutWindow.Navigate"/>, or — for a tab built
+        /// to load one — the address it was built with, set before it goes on screen. It is
+        /// therefore "where it is going", not "where it has arrived": a tab reports an empty
+        /// <c>Source</c> until its first response commits, and the things that ask are asking
+        /// whether this tab is a page rather than an empty one.
+        /// </remarks>
         public string NavigatedUrl { get; set; } = "";
 
         /// <summary>
@@ -1156,9 +1163,13 @@ public sealed partial class WebFlyoutWindow
         string uri = e.Uri;
         try
         {
-            // No navigateTo: WebView2 navigates the browser it is handed, and doing it here as well
-            // would load the page twice.
-            var tab = await CreateTabAsync(homeKey: null, navigateTo: null, background: background);
+            // adopted: WebView2 navigates the browser it is handed, so the address is where this tab
+            // is going rather than an instruction to send it there — navigating here as well would
+            // load the page twice. It is still handed over, because a tab that does not know where
+            // it is going until it arrives is a blank tab for the length of the load, and a blank
+            // tab forces the address bar on over a launcher that has it switched off.
+            var tab = await CreateTabAsync(homeKey: null, navigateTo: uri, background: background,
+                                           adopted: true);
             if (tab?.View.CoreWebView2 is { } core)
             {
                 e.NewWindow = core;

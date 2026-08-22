@@ -1986,16 +1986,21 @@ public sealed partial class WebFlyoutWindow : Window
     /// which nothing configured may re-navigate.
     /// </param>
     /// <param name="navigateTo">
-    /// Where to send it once its core is ready, or null when the caller navigates it — which is
-    /// what handing the browser to <c>NewWindowRequested.NewWindow</c> does.
+    /// Where this tab is going, or null for one built with nowhere to go — the "+".
     /// </param>
     /// <param name="background">
     /// Build it without bringing it forward, for the gestures that mean "open this but leave me
     /// where I am" — a middle-click, a Shift/Ctrl-click, <b>Open in new tab</b>. The chip appears
     /// and the page loads behind whatever is on screen.
     /// </param>
+    /// <param name="adopted">
+    /// The browser is about to be handed to <c>NewWindowRequested.NewWindow</c>, which navigates it
+    /// itself: <paramref name="navigateTo"/> is then where it is going rather than an instruction to
+    /// send it there, and navigating here as well would load the page twice.
+    /// </param>
     /// <returns>The tab, with its core ready, or null when the browser could not be started.</returns>
-    private async Task<WebTab?> CreateTabAsync(string? homeKey, string? navigateTo, bool background = false)
+    private async Task<WebTab?> CreateTabAsync(string? homeKey, string? navigateTo, bool background = false,
+                                               bool adopted = false)
     {
         // Re-entrancy only matters for the launcher's own page: two shows racing must not build two
         // browsers for it. A link tab is a distinct request every time and is never deduplicated.
@@ -2010,7 +2015,23 @@ public sealed partial class WebFlyoutWindow : Window
         Grid.SetRow(webView, 1);   // row 0 belongs to the prompt bar
         _contentHost.Children.Insert(0, webView);
 
-        var tab = new WebTab { View = webView, HomeKey = homeKey };
+        // Where it is going, recorded before it goes on screen. A tab reports an empty Source until
+        // its first response commits, so a tab that knows its address only once it has arrived is a
+        // blank tab for the length of the load — and a blank tab forces the address bar on. That is
+        // the bar sliding in for every cold open and every link opened in a tab, on launchers that
+        // have it switched off. See IsActiveTabBlank, which already made this test for a tab being
+        // re-navigated and could not make it for one being built.
+        //
+        // IsBlankAddress, not a null check: window.open() with no address arrives here as
+        // about:blank and a new-tab request as edge://newtab/, and both mean "an empty tab" rather
+        // than a destination. Recording either as one would take the address bar away from the one
+        // tab that has nothing else in it.
+        var tab = new WebTab
+        {
+            View = webView,
+            HomeKey = homeKey,
+            NavigatedUrl = IsBlankAddress(navigateTo) ? "" : navigateTo!,
+        };
         _tabs.Add(tab);
 
         // Background: the strip has to learn about the chip, but nothing else moves — _webView goes
@@ -2102,8 +2123,8 @@ public sealed partial class WebFlyoutWindow : Window
         // NavigateTab, not Navigate: Navigate drives whichever tab is in front, so a background tab
         // would otherwise load its address into the page the user is reading. That was safe only
         // while every new tab was activated on creation.
-        if (!string.IsNullOrEmpty(navigateTo)) NavigateTab(tab, navigateTo);
-        else ShowEmptyTabStatus(tab);
+        if (IsBlankAddress(navigateTo)) ShowEmptyTabStatus(tab);
+        else if (!adopted) NavigateTab(tab, navigateTo!);
 
         return tab;
     }
@@ -2120,9 +2141,10 @@ public sealed partial class WebFlyoutWindow : Window
     /// all, so the tab would be a bare rectangle of window background. It is the one line that says
     /// what an empty tab is for, and it sits directly under the address bar that
     /// <see cref="IsActiveTabBlank"/> forces on for exactly this case.</para>
-    /// <para>A tab whose caller navigates it (which is what handing the browser to
-    /// <c>NewWindowRequested.NewWindow</c> does) raises the overlay again from
-    /// <c>NavigationStarting</c> a moment later, so this is safe for that path too.</para>
+    /// <para>A tab built to load something never reaches here — it is created knowing its address,
+    /// including the one handed to <c>NewWindowRequested.NewWindow</c>, which WebView2 navigates
+    /// itself. The <c>NavigatedUrl</c> test below is the belt to that: <c>ActivateTab</c> calls this
+    /// for any tab switched back to, and one still loading must not be told it is empty.</para>
     /// </remarks>
     private void ShowEmptyTabStatus(WebTab tab)
     {
@@ -2130,7 +2152,7 @@ public sealed partial class WebFlyoutWindow : Window
 
         // Told to go somewhere, even if it has not arrived: the load owns the overlay, and a tab
         // mid-navigation still reports an empty Source until the first response commits.
-        if (!string.IsNullOrEmpty(tab.NavigatedUrl)) return;
+        if (!IsBlankAddress(tab.NavigatedUrl)) return;
         if (!IsActiveTabBlank) return;
 
         SetStatus("Type an address above to open a page.", busy: false, showRetry: false);
@@ -2180,7 +2202,7 @@ public sealed partial class WebFlyoutWindow : Window
         // the check it would drive the header of a page nobody is looking at.
         core.NavigationStarting += (_, e) =>
         {
-            if (TryHandleBrowserPageNavigation(core, e)) return;
+            if (TryHandleBrowserPageNavigation(core, tab, e)) return;
 
             if (IsActiveCore(core)) ShowLoading(tab);
         };
@@ -2960,13 +2982,15 @@ public sealed partial class WebFlyoutWindow : Window
             // loading page a blank tab - and the address bar slid in for the length of the load and
             // back out again, on launchers that have it switched off. Same test ShowEmptyTabStatus
             // already makes, for the same reason.
-            if (!string.IsNullOrEmpty(_activeTab.NavigatedUrl)) return false;
+            //
+            // Which is only worth anything because a tab is built knowing where it is going: read
+            // after the fact, this said nothing at all until the page arrived, and the bar came and
+            // went for every cold open and every link opened in a tab. See CreateTabAsync.
+            if (!IsBlankAddress(_activeTab.NavigatedUrl)) return false;
 
             try
             {
-                string source = _activeTab.View.CoreWebView2?.Source ?? "";
-                return string.IsNullOrEmpty(source) ||
-                       source.Equals("about:blank", StringComparison.OrdinalIgnoreCase);
+                return IsBlankAddress(_activeTab.View.CoreWebView2?.Source);
             }
             catch (Exception ex)
             {
