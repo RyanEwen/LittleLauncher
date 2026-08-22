@@ -1,7 +1,8 @@
-// Copyright © 2024-2026 The Little Launcher Authors
+﻿// Copyright © 2024-2026 The Little Launcher Authors
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 using LittleLauncher.Classes.Settings;
+using LittleLauncher.Models;
 using System.Collections.Generic;
 using System.Linq;
 using Launcher = LittleLauncher.Models.Launcher;
@@ -27,6 +28,70 @@ internal static class LauncherPanels
             WebFlyoutWindow.Toggle(owner, screenX, screenY, launcherId);
         else
             FlyoutWindow.Toggle(owner, screenX, screenY, launcherId);
+    }
+
+    /// <summary>
+    /// Acts on one entry of a launcher's taskbar jump list: launches the item, or opens the
+    /// launcher on the bookmark.
+    /// </summary>
+    /// <remarks>
+    /// <para>The two kinds do genuinely different things here, which is why this is a kind
+    /// decision and not a shared "launch entry N". An item launcher's task starts something and
+    /// shows no window of its own; a web launcher's task has nowhere to open a page except the
+    /// launcher itself, so it opens it.</para>
+    /// <para><b>An entry that cannot be found opens the launcher instead.</b> A jump list is a
+    /// snapshot, so a task can outlive the item it names - the launcher was edited, or synced
+    /// from another machine - and the alternative to a fallback is a click that does nothing at
+    /// all. Opening what the button opens is both the honest answer and the one that puts the
+    /// user in front of the real list.</para>
+    /// </remarks>
+    public static void LaunchFromJumpList(MainWindow owner, string launcherId, int index, int token,
+        int screenX, int screenY)
+    {
+        var launcher = SettingsManager.Current.Launchers.FirstOrDefault(l => l.Id == launcherId);
+        if (launcher == null) return;
+
+        bool handled = launcher.IsWebLauncher
+            ? WebFlyoutWindow.OpenBookmarkFromJumpList(owner, launcher, index, token, screenX, screenY)
+            : FlyoutWindow.LaunchItemFromJumpList(launcher, index, token);
+
+        if (!handled)
+            Toggle(owner, screenX, screenY, launcherId);
+    }
+
+    /// <summary>
+    /// Runs one of a launcher's own commands, from its taskbar jump list.
+    /// </summary>
+    /// <remarks>
+    /// Here rather than in the service that published it, for the same reason every other entry
+    /// point is: two of these mean different things depending on the launcher's kind, and this is
+    /// the one place allowed to ask what kind it is. An action that does not apply is ignored
+    /// rather than approximated - a stale pin naming "Edit items" on a launcher since turned into
+    /// a web launcher has asked for something that no longer exists.
+    /// </remarks>
+    public static void RunLauncherAction(MainWindow owner, string launcherId, int action)
+    {
+        var launcher = SettingsManager.Current.Launchers.FirstOrDefault(l => l.Id == launcherId);
+        if (launcher == null) return;
+
+        switch (action)
+        {
+            case LauncherActions.LauncherSettings:
+                _ = LauncherSettingsWindow.ShowAsync(launcher);
+                break;
+
+            case LauncherActions.EditItems when !launcher.IsWebLauncher:
+                FlyoutWindow.ShowInEditMode(owner, launcherId);
+                break;
+
+            case LauncherActions.OpenInBrowser when launcher.IsWebLauncher:
+                WebFlyoutWindow.OpenAddressExternally(launcher);
+                break;
+
+            case LauncherActions.AppSettings:
+                SettingsWindow.ShowInstance(owner);
+                break;
+        }
     }
 
     /// <summary>Destroys both possible panels for a launcher that has been deleted.</summary>

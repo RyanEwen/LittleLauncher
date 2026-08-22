@@ -1,4 +1,4 @@
-> **Scope:** Use when working on web launchers — the WebView2 flyout, its resource policy, or the
+﻿> **Scope:** Use when working on web launchers — the WebView2 flyout, its resource policy, or the
 > per-launcher web settings. Covers why the browser is torn down rather than kept warm, the
 > WebView2 APIs that make that work, and the WinUI-specific limits worked around here.
 > **Governs:** `**/WebFlyoutWindow.cs`, `**/LauncherPanels.cs`, the `Web*` properties on `Models/Launcher.cs`.
@@ -692,7 +692,8 @@ address" is a launcher with one bookmark. There is no mode switch, and no `WebUs
 | Concept | Where it lives |
 |---|---|
 | The page the tray icon opens | `Launcher.WebAddress` — `WebBookmarks[0].Url` |
-| Whether the strip is drawn | `Launcher.ShowsBookmarkBar` — more than one bookmark, and nothing else |
+| Whether the strip is drawn | `Launcher.ShowsBookmarkBar` — `WebShowBookmarkBar`, or the old rule when unset |
+| Whether it stands for several sites | `Launcher.HoldsSeveralSites` — more than one bookmark |
 | What is on screen right now | The tab. Never the launcher, never the bar |
 
 **First place is a rule the user can see and can drag.** A stored "which one opens" pointer
@@ -1755,3 +1756,252 @@ the CLR default is **omitted from the file**. Two consequences shape these prope
 The window is a *flyout*, not a *panel* — matching `FlyoutWindow`, the `Flyout*` settings, and the
 sibling Persistent app it takes its conventions from (`AppFlyout`, `FlyoutWidth`/`FlyoutHeight`,
 `PinFlyout`, `SuspendWebViewAsync`). Keep new names in that family.
+
+## The address is a setting, not the first bookmark
+
+`Launcher.WebHomeUrl` is where a web launcher opens. It is **not** a pointer into the bookmark bar,
+and a bookmark holding the same URL is an ordinary bookmark that nothing tries to merge or notice.
+
+This reverses an earlier design in which the address *was* the first bookmark. That design's
+objection is recorded on `Launcher.WebAddress` and was sound: a hidden "which one opens" field could
+disagree with the order on screen, so reordering the bar appeared to do nothing. A home URL does not
+re-open it, because it never claims to be one of the bar's entries and so has no order to disagree
+with. It is the same split every browser makes between a home page and a bookmarks bar.
+
+What forced the change is folders: position zero can hold something with no address at all.
+
+Consequences worth knowing:
+
+- **Empty means "the first bookmark", and `MigrateWebModel` writes it down.** The fallback keeps
+  every settings file written before this opening where it did, so the CLR default is the compatible
+  direction - but a launcher left on the fallback is still one whose first bookmark *is* its home
+  page, which reordering the bar would move. The migration seeds `WebHomeUrl` from the first
+  bookmark once, which changes nothing (the value is identical) and is what actually separates the
+  two. The legacy `WebDefaultBookmarkUrl` now becomes `WebHomeUrl` rather than being converted into
+  position.
+- **Editing the address in launcher settings no longer rewrites a bookmark.** The one exception is a
+  launcher with no bookmarks at all, which is one being set up: it gets a bookmark for the address
+  too, so it arrives with something in the bar.
+- **"Set as home page" on the bar moves nothing, and links nothing.** It used to drag the bookmark
+  to the front, because the front was the address. It now copies the bookmark's URL and that is all
+  that happens: the bookmark is not remembered, marked or referred to, so renaming it, re-addressing
+  it or removing it later leaves the home page where it was. The row is a convenient way to type an
+  address the user already has, not a way to make one bookmark special.
+- Removing or reordering bookmarks no longer changes where the launcher opens, and the settings
+  list says so by saying nothing: the first row used to carry an "Opens with the launcher" badge,
+  because being first was the only thing that made it the address. Editing that row's address now
+  edits the bookmark like any other rather than being routed into the launcher's address.
+- **The address field seeds a bookmark only for a launcher being set up** - no bookmarks *and* no
+  home page. It commits on lost focus, so without the second half of that test, deleting a
+  launcher's last bookmark and then clicking anywhere near the field re-created it, which reads as
+  a bookmark that refuses to be removed.
+- **Home is `GoHome`, not `ShowHomeContentAsync`.** Those answer different questions, and wiring the
+  button to the wrong one made it do nothing at all: `ShowHomeContentAsync` asks "what should this
+  launcher be showing", whose answer is `CurrentTargetUrl` - the *remembered* address once the user
+  has clicked a bookmark. Click a bookmark, click Home, and it navigated to the page already on
+  screen. `GoHome` aims at `WebAddress`, and overwrites the remembered address on the way, because
+  going home is itself a steer.
+- **The header carries a Home button**, beside back, forward and reload. It is not decoration: once
+  the home page is a setting of its own it need not be in the bar at all, so there may be no other
+  way back to it. `Alt+Home` (`nav.home`) already did this, and a gesture with no visible control is
+  a feature only its author knows about.
+
+## Folders in the bookmark bar
+
+A `WebBookmark` with `IsFolder` and `Children` is a folder, the same shape a group takes in an item
+launcher (`LauncherItem.IsGroup`). It draws with Segoe Fluent's Folder glyph and never a favicon,
+because it stands for a group of pages rather than any one of them, and clicking it opens a menu of
+what it holds - which is what a bookmarks bar folder is in every browser, so it costs no new
+affordance to learn.
+
+- **Folders nest, without a depth limit.** A folder inside a folder is a submenu, built recursively.
+  Importing a browser's bookmarks brings whatever arrangement the user already had, and flattening
+  or refusing that on the way in would be losing their arrangement rather than honouring it.
+- **A folder opens a popup, not a `MenuFlyout`** (`WebFlyoutWindow.FolderPopup.cs`). A menu was the
+  first answer and cannot do the one thing a bookmarks bar folder has to: a `MenuFlyoutItem` is not
+  an element that can be given `CanDrag`, menu rows mark every pointer press handled for their own
+  click bookkeeping, and a menu light-dismisses on pointer activity outside itself - so a drag that
+  starts in a folder and ends on the bar closes the menu half way through. No browser uses the
+  platform menu here either. The popup is assembled from what the window already had: the rows are
+  the bar's own buttons, dragging through `WireStripDragSource`, and the drop index is the
+  Y-midpoint scan the flyout's edit mode uses. `ShouldConstrainToRootBounds` is what lets it escape
+  a window that may be a 34px strip; an owned window would put the rows in a different XAML tree and
+  the drag between them out of reach.
+- **The feedback is a line and a tint, never a caption.** A 2px accent caret marks the gap a
+  reorder would land in, and hovering a nested folder tints that row instead. `DragUIOverride`'s
+  caption is switched off in the list: it is 260px wide and the caption box covered most of the rows
+  the user was reading to decide where to drop. The bar keeps its caption, where there is room.
+- **A nested list cascades off its parent's right edge, overlapping it slightly** (32px) and lifted
+  a little (9px) so its first row lines up with the row that opened it. Both are what a cascading
+  menu does everywhere else, and both matter more in a flyout than in a full window: the overlap
+  shortens the pointer's trip from row to child, and it buys back width, which is the difference
+  between two levels fitting and one. It folds across the parent's left edge when there is no room
+  to the right. Offsetting from the row's own position instead - the first attempt - put the child
+  exactly where the row was, so it covered the list it came from and read as the subfolder being
+  replaced by its contents.
+- **A list sizes to its rows**, between 150 and 300 DIPs. A fixed width was tried first and made a
+  folder of short names take a third of the flyout for nothing; the cap stops one long bookmark
+  claiming the window. Everything that positions a cascade therefore reads the list's *own* width,
+  never a constant, or a narrow list is placed as though it were the widest possible.
+- **A row stretches its content.** `HorizontalContentAlignment` on a `Button` defaults to sizing the
+  content to itself, so the row's star column had nothing to expand into and the chevron sat against
+  the name rather than at the row's right edge. Stretch is what makes the right-aligned column mean
+  anything.
+- **They cannot leave the window, and that is the price of the drag.** The overlay is inside the
+  flyout's root grid because that is the only tree XAML will route a drop into, so a cascade is
+  clamped to the window. If deeper folders become common the answer is drill-down navigation - one
+  list at a time with a back row - not a wider cascade.
+- **Placement waits for a real height.** The list's height is what decides how far *up* from the bar
+  it starts, so a first pass before layout put its top edge level with the bar and hung the whole
+  list off the bottom of the window. It measures if it must, refuses to place at zero, and re-places
+  on `SizeChanged` rather than only on `Loaded`.
+- **A bookmark is filed by dropping it on a folder** - on the bar or on a row inside a popup - or
+  through *Move to folder* on its own menu, which lists every folder by path (`Work / Dashboards`)
+  because two folders at different depths may share a name. The drop counts only the middle half of
+  a folder, so a bookmark can still be dropped *beside* one; without that margin a folder would
+  swallow every nearby drop and reordering past it would be impossible.
+- **Reordering works at every level**, by drag inside the popup and by *Move up / Move down* on the
+  row's menu. The menu resolves the collection that actually holds the bookmark (`OwnerOf`) rather
+  than the launcher's top level, which returned -1 for anything inside a folder and handed back an
+  empty menu - so a right-click inside a folder opened nothing at all. The rows are named for the
+  direction they travel: left/right on the bar, up/down in a popup.
+- **A bookmark dragged out of a folder onto the bar is detached and inserted**, rather than moved:
+  the bar's drop used to look the dragged bookmark up in the top-level list and give up when it was
+  not there.
+- **A folder cannot be moved into itself or into anything it contains.** That would take the whole
+  branch off the bar with no way back to it.
+- **Removing a folder keeps what was in it**, returning its contents to the bar where the folder was.
+  A remove that quietly deletes bookmarks the user never selected is not what anyone means by
+  "remove folder", and there is no undo here to lean on.
+- **The bar's signature includes folder contents.** A folder's menu is built from its button, so a
+  bookmark added or renamed inside one changes what the bar can show while every top-level entry
+  stays identical - without it the rebuild is skipped and the folder keeps opening a menu of what it
+  used to hold.
+- **Launcher settings is the full tree**, indented one level per depth, and each row acts on the
+  collection that actually holds it. A row moving itself against the launcher's top-level list would
+  silently jump out of its folder.
+- **The jump list flattens them.** A jump list is one flat menu with no submenus, so a folder can
+  only appear as its contents, in the position the folder held.
+- `Launcher.WebAddress` skips folders when falling back to the first bookmark: a folder has no
+  address to open.
+
+## The bar is a setting, and settings no longer lists bookmarks
+
+**Launcher settings has no bookmark list.** It was a second editor for something the bar does better
+and in front of the pages being bookmarked - adding by address or from a browser, renaming,
+re-addressing, foldering, reordering by drag, removing - and keeping both meant two places to learn,
+two to keep in step, and a folder tree rendered twice. The copy that went is the one that could not
+see what page you were on. What is left is a **Bookmarks Bar** toggle, which is the one thing the
+bar cannot do for itself.
+
+`Launcher.WebShowBookmarkBar` is a `bool?`: on, off, or never chosen. Null falls back to the rule
+the bar had before it was a setting - a second bookmark shows it - so nothing changes for a launcher
+whose owner has never said. A plain `bool` seeded once by a migration was tried first and is what
+this replaces; see the note in [user-settings.md](user-settings.md) for why that could not survive a
+sync download.
+
+**Bar visibility and "holds several sites" are now different questions, and conflating them would
+break two rules quietly.** While the bar appeared only once there was a second bookmark, visibility
+*was* that fact, and both of these leaned on it:
+
+- a launcher of several sites must not adopt one page's icon as the launcher's own;
+- its jump list lists its bookmarks rather than repeating what the button already does.
+
+Both now ask `Launcher.HoldsSeveralSites`. Reading visibility instead would strip the icon from every
+launcher the moment the bar defaulted on, and would put a single-address launcher's one bookmark
+back on its jump list.
+
+## The tab menu
+
+Right-clicking a tab opens a menu (`WebFlyoutWindow.Tabs.cs`): reload, duplicate, copy address, open
+in browser, add/remove bookmark, close, close others, reopen closed. It follows the bookmark menu's
+shape exactly - the same local `Item`/`Divide` helpers, `IsEnabled` rather than hidden rows, and the
+More menu's convention of a row whose *text* says which way it will go for the bookmark toggle.
+
+**Every entry acts on the tab it was opened on, not the tab in front.** That is the point of having
+it on a strip where any chip can be right-clicked without being switched to, and it is why `ReloadTab`
+and `TabUrl` exist alongside the header's `ReloadPage`, which acts on `_webView`. It opens *below* the
+chip where the bookmark bar's menus open above theirs, because both open into the window rather than
+off the edge of it.
+
+Both flyout-window menu rules apply, for the reasons in [xaml.md](xaml.md):
+`ShouldConstrainToRootBounds = false`, and `_isMenuOpen` set from `Opened`/`Closed`.
+
+## The launcher icon, and why it may not shrink
+
+A web launcher's tray icon is `web-favicon-{launcherId}.png`, written by two paths that disagree about
+quality: `AdoptPageIconAsync` takes `CoreWebView2.GetFaviconAsync`, which is the browser-tab favicon
+and commonly 16 or 32px, while `AdoptHighResPageIcon` takes what the in-page probe found in the web
+app manifest or as an `apple-touch-icon`, commonly 512px or more.
+
+**The favicon path refuses to shrink what is already stored** (`WouldShrinkIcon`). Discord is the case
+that forced it, and it was failing in both directions at once: its declared icon is 16px, which a tray
+icon and far more a taskbar pin upscale into a blur, and it swaps that icon for an unread-badge
+variant as messages arrive - so the launcher's identity flickered with the message count. Measured on
+the dev machine: `web-favicon-{discord}.png` was 16x16 while another launcher's was 1024x1024.
+
+Sizes are measured, not inferred from which path produced them: a page is free to declare a good
+`link rel=icon`, and a site that genuinely changes its logo should still be able to. Only shrinking is
+refused. Anything unreadable answers "no opinion" rather than blocking, so a launcher can never be
+stranded on an icon nothing may replace.
+
+### Three things had to be true before any of it worked
+
+The high-resolution path existed long before it ever ran. Each of these failed silently, and the only
+symptom was a launcher that stayed blurry, which is indistinguishable from a site that offers nothing
+better. The probe now reports what it found at every step (`pageIconProbe`), which is how they were
+finally told apart.
+
+- **The bridge must know its own tab.** `AdoptHighResPageIcon` used to find the tab by matching the
+  `CoreWebView2` an event handed back against the one held on each tab. That comparison never
+  succeeded, so every icon the probe found was declined as "not the launcher's own tab". The tab is
+  now captured when the bridge is installed, which is what every other per-tab handler on that
+  browser already did.
+- **An `.ico` is a candidate worth fetching.** It declares no `sizes`, so it scored 32 and lost to the
+  96px floor. It is a container, and a plain favicon.ico routinely holds a 256px frame beside the 16
+  the tab uses. It now scores 128: high enough to be fetched, low enough that a site declaring a real
+  manifest icon still wins.
+- **The frame inside it has to be read by hand.** Since Vista the large frame is usually an embedded
+  PNG while the small ones stay uncompressed, and `System.Drawing.Icon` does not see the PNG ones -
+  asked for 256 it returned Discord's 48. `LargestIcoFrame` reads the directory itself.
+
+Measured on Discord end to end: 16x16 before, 48x48 with only the first two fixed, 256x256 with all
+three. A site whose manifest fetch is blocked by its own CSP still gets nothing, and Teams is
+currently in that group.
+
+## Regular-window mode and the pin identity
+
+A launcher under `Launcher.WebRegularWindow` gets a real taskbar button, and it lights the launcher's
+pin only while the window carries the same AppUserModelID the pin does. **A re-pin mints a fresh
+AUMID**, so the identity moves while the presentation does not, and a window still carrying the
+previous one does not fail quietly: it raises a *second* taskbar button beside the pin the user just
+clicked.
+
+`ApplyTaskbarButton` therefore re-stamps on every show, ahead of its own "nothing changed" return -
+that early exit is what let a live window keep a dead identity for as long as it stayed open. The
+window is torn off the taskbar and re-added when the identity changes, because the shell reads the
+AUMID when it creates the button and groups from that; rewriting the property under a live button
+leaves the grouping where it was.
+
+## The taskbar jump list
+
+A pinned web launcher's right-click menu lists its bookmarks (`Services/JumpListService.cs`, which
+also does the same for an item launcher's items). Three decisions are specific to web launchers:
+
+- **A launcher with a single address publishes nothing.** It shows no bookmark bar, and its one
+  entry would go exactly where clicking the button already goes. A menu whose only line repeats the
+  button is worse than no menu, so Windows shows the plain right-click menu instead. The gate is
+  `Launcher.ShowsBookmarkBar`, the same test the bar itself uses.
+- **A bookmark opens in a new tab, in front.** This is the only place a bookmark is reached without
+  the launcher being on screen, so there is no "tab in front" the user chose to replace - only
+  whatever the launcher was left on, possibly days ago. In front rather than behind, because unlike
+  a middle-click the gesture says nothing but "show me this". The exception is a launcher with
+  nothing loaded at all, where the bookmark simply becomes its first tab.
+- **The show is awaited before the tab is added.** A show may be restoring the tabs the launcher had
+  open last time, which builds tabs and activates one; a tab added alongside that races it.
+  `ShowFlyout` keeps its `PrepareContentAsync` task in `_contentPreparation` for exactly this.
+
+A task carries the bookmark's position **and a token hashed from its name and URL**, because a
+published list is a snapshot that can outlive an edit. The token decides; the position only saves a
+search. When neither finds a bookmark the launcher is opened instead, so a stale task is never a
+dead click and never opens the wrong page.

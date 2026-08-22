@@ -160,6 +160,53 @@ opening.
 indistinguishable from the call having done nothing — and minimized is exactly where a
 regular-window launcher lands after its taskbar button is clicked.
 
+## Jump list COM section
+
+The `#region Jump lists (COM)` section is what publishes the menu behind a pinned taskbar button:
+`ICustomDestinationList` (CLSID `77F10CF0-…`), `IObjectCollection`, `IShellLinkW`, and `PKEY_Title`.
+`Services/JumpListService.cs` is the only caller.
+
+- **The sequence is fixed and silent when broken.** `SetAppID` → `BeginList` → `AddUserTasks` →
+  `CommitList`. Nothing appears until the commit, and every one of those returns an HRESULT rather
+  than throwing, so a skipped check looks exactly like a list nobody opened.
+- **`BeginList` hands back the destinations the user removed by hand.** It must be read and
+  released even though user tasks can never be among them, and the slot count it reports is the
+  number of entries the user's settings will show.
+- **The heading cannot be ours, and this was measured rather than assumed.** Only `AppendCategory`
+  takes a name; `AddUserTasks` always produces Windows' localized "Tasks". But a category is made of
+  *destinations*, and the shell requires those to be file types the publishing app is registered to
+  open, checked against the AppUserModelID being published for. A per-launcher AUMID is registered
+  for nothing at all: it is minted at pin time with a tick in it, so it is a fresh identity on every
+  pin with nothing to hang a file association on. `AppendCategory` returns **`E_ACCESSDENIED`
+  (0x80070005)** - verified on three launchers, freshly published, with no removed destinations
+  outstanding. The property that makes one list per launcher possible is the same one that makes
+  naming it impossible. `JumpListService.Publish` attempts the category and falls back to user
+  tasks, and the first refusal is remembered so nothing pays for the attempt twice.
+- **"Remove from this list" comes with the category, not with user tasks.** Destinations are
+  removable and user tasks are not, so the fallback above is also a menu nothing can be taken out
+  of. Reaching it would mean a real file-type registration and one file per entry on disk, which
+  changes what a jump list entry *is* - see the note in `JumpListService`.
+- **A removed destination is remembered forever.** If categories ever do work here, `AppendCategory`
+  fails for the whole list if it names one, so anything acting on a removal must call `DeleteList`
+  in the same pass. That is also the only reason an entry the user removed can come back after they
+  add it to the launcher again.
+- **`PKEY_Title` is not optional.** A shell link with no title shows its own path, so every task in
+  the list reads `LittleLauncherFlyout.exe`. `SetShellLinkTitle` takes the link as `object` because
+  reaching its `IPropertyStore` face is a QueryInterface, which is what casting the RCW does.
+- **A task's icon is a path and an index, never a bitmap.** Only files carrying icon resources
+  qualify (`.exe`, `.dll`, `.ico`), which is why an app item points at its own executable and
+  everything else is rasterised to a cached `.ico` first.
+- **`IShellLinkW`'s getters take raw buffers.** Nothing calls them; only the vtable order matters,
+  and a wrong marshalling attribute on a method that is never invoked is a trap for the first caller.
+- **Interfaces that derive from another COM interface repeat the base methods.** C# cannot express
+  COM inheritance, so `IObjectCollection` restates `IObjectArray`'s two slots to keep the vtable
+  order right. Getting this wrong calls the wrong function, not a compile error.
+
+**MSIX note, measured:** the shell's own write lands in the **real** user profile
+(`%AppData%\Microsoft\Windows\Recent\CustomDestinations`), not in the package's redirected
+AppData, so jump lists work from the packaged build with nothing special done. Do not "fix" this by
+routing it through `GetPhysicalAppDataDir()` - nothing here writes a path of ours.
+
 ## IShellItemImageFactory COM Section
 
 The `#region shell32.dll` section includes `SHCreateItemFromParsingName` and the `IShellItemImageFactory` COM interface for extracting app icons from `shell:AppsFolder` items (used for PWA and Store app icons). The `#region gdi32.dll` section provides `DeleteObject` (HBITMAP cleanup), `GetObject` / `GetObjectDibSection` (reading bitmap metadata), `CreateCompatibleDC` / `DeleteDC` / `SelectObject` / `BitBlt` (blitting source HBITMAPs into controlled DIBs), and `CreateDIBSection` with `BITMAPINFO` (creating a top-down 32bpp DIB section with known pixel layout for reliable icon extraction).

@@ -21,6 +21,13 @@ Little Launcher uses a flat upright rocket as its identity icon. The **app ident
 | **Exe embedded icon** | `Resources/LittleLauncher.ico` (compiled into exe) | No — always Blue rocket |
 | **Pin-to-taskbar dialog** | Per-launcher `app-icon-{id}.ico` loaded via `WM_SETICON` in companion exe | Yes (per launcher `TrayIconMode`) |
 | **Windows notifications (per launcher)** | `toast-icon-{id}.png` written by `SaveToastIconToAppData(Launcher)` | Yes (per launcher `TrayIconMode`) |
+| **Taskbar jump list task (per entry)** | The item's own `.exe` where it has one, else `JumpListIcons\task-{hash}.ico` rasterised from the item's icon or glyph | Follows the item's own icon |
+
+**A web launcher's icon may never shrink.** `web-favicon-{id}.png` is written both by the browser-tab
+favicon (16-32px, and on some sites it carries unread badges) and by the page's manifest or
+apple-touch-icon (512px+). The favicon path measures both and declines to replace a larger image with
+a smaller one, which is what keeps a pinned launcher sharp and stops its identity changing with an
+unread count. See the web-launchers guide.
 
 ## Key Files
 

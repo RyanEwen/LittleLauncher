@@ -1,4 +1,4 @@
-using LittleLauncher.Classes;
+﻿using LittleLauncher.Classes;
 using LittleLauncher.Classes.Settings;
 using LittleLauncher.Models;
 using Microsoft.UI;
@@ -229,49 +229,52 @@ public sealed class LauncherSettingsWindow : Window
     }
 
     /// <summary>
-    /// Points the launcher at an address, which means writing its <em>first</em> bookmark.
+    /// Points the launcher at the page it opens.
     /// </summary>
     /// <remarks>
-    /// A web launcher is a list of bookmarks whose first entry is what it opens, so "the address"
-    /// is a position rather than a field of its own. An empty list gets one; a list that already
-    /// has entries has its first re-addressed, which is what the row above the list is editing.
+    /// <para>A setting of the launcher's own, not a position in the bar. Editing it never rewrites
+    /// a bookmark: the two are independent, and a bookmark holding the same URL is an ordinary
+    /// bookmark that happens to agree with it.</para>
+    /// <para>The exception is a launcher that has no bookmarks at all, which is one being set up.
+    /// It gets a bookmark for the address as well, so a new launcher arrives with something in the
+    /// bar rather than an empty one.</para>
     /// </remarks>
     private void CommitWebAddress(string url)
     {
         url = (url ?? "").Trim();
         if (url == _launcher.WebAddress) return;
 
-        if (_launcher.WebBookmarks.Count == 0)
+        // Only ever for a launcher being set up: no bookmarks *and* no home page yet. The bar is
+        // the user's after that, and a launcher whose last bookmark was just deleted must not have
+        // one put back the moment this field is left - the address box commits on lost focus, so
+        // clicking anywhere after the deletion would have re-created it, which reads as a bookmark
+        // that refuses to be removed.
+        WebBookmark? seeded = null;
+        if (_launcher.WebBookmarks.Count == 0 && string.IsNullOrWhiteSpace(_launcher.WebHomeUrl))
         {
             if (string.IsNullOrEmpty(url)) return;
-            _launcher.WebBookmarks.Add(new WebBookmark(HostOf(url), url));
-        }
-        else
-        {
-            var first = _launcher.WebBookmarks[0];
-            bool namedAfterItsHost = string.Equals(first.Name, HostOf(first.Url), StringComparison.OrdinalIgnoreCase);
 
-            first.Url = url;
-            first.IconPath = "";
-            if (namedAfterItsHost) first.Name = HostOf(url);
+            seeded = new WebBookmark(HostOf(url), url);
+            _launcher.WebBookmarks.Add(seeded);
         }
+
+        _launcher.WebHomeUrl = url;
 
         SettingsManager.SaveSettings();
         WebFlyoutWindow.ApplyLauncherChanges(_launcher.Id);
-        _bookmarksChanged?.Invoke();
 
         if (string.IsNullOrEmpty(url)) return;
 
-        _ = WebFlyoutWindow.FetchBookmarkIconAsync(_launcher, _launcher.WebBookmarks[0]);
+        // Only the bookmark this just made. The others are the user's and already have their icons;
+        // re-fetching one because the *address* changed would be fetching for the wrong reason.
+        if (seeded != null)
+            _ = WebFlyoutWindow.FetchBookmarkIconAsync(_launcher, seeded);
 
         if (WebFlyoutWindow.MayAdoptPageIcon(_launcher))
             _iconAdoption = AdoptAndShowSiteIconAsync(_launcher, WebFlyoutWindow.NormalizeUrl(url));
     }
 
-    /// <summary>Re-reads the bookmark list into the editor, when one is on screen.</summary>
-    private Action? _bookmarksChanged;
-
-    /// <summary>Puts the launcher's address — its first bookmark — back in the address field.</summary>
+    /// <summary>Puts the launcher's address back in the address field.</summary>
     private void SyncAddressBox()
     {
         if (_urlBox != null) _urlBox.Text = _launcher.WebAddress;
@@ -811,285 +814,76 @@ public sealed class LauncherSettingsWindow : Window
     /// <para>A second bookmark is what makes the bar appear, which the row's subtitle says for the
     /// same reason — it is a visible change the user is one click away from causing.</para>
     /// </remarks>
+    /// <summary>
+    /// The bookmark bar's on/off switch, which is all this window says about bookmarks now.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>The list that used to be here is gone.</b> It was a second editor for something the
+    /// bar itself does better and in front of the pages being bookmarked: adding by address or from
+    /// a browser, renaming, re-addressing, foldering, reordering by drag, and removing all happen on
+    /// the bar. Keeping both meant two places to learn, two to keep in step, and a folder tree
+    /// rendered twice - and this one was the copy that could not see what page you were on.</para>
+    /// <para>What is left is the one thing the bar cannot do for itself, because it is the thing
+    /// that decides whether the bar is there at all.</para>
+    /// </remarks>
     private FrameworkElement BuildBookmarksRow(Launcher launcher)
     {
-        var list = new StackPanel { Spacing = 4 };
-
-        var urlBox = new TextBox
+        // MinWidth = 0 is not optional: a ToggleSwitch has a wide default that pushes it out of
+        // the Auto column BuildRow lays it in, so the row comes out misaligned against every other
+        // toggle in the dialog. Every other one here sets it; this one did not.
+        var toggle = new ToggleSwitch
         {
-            PlaceholderText = "https://…",
-            HorizontalAlignment = HorizontalAlignment.Stretch,
-            VerticalAlignment = VerticalAlignment.Center,
+            IsOn = launcher.ShowsBookmarkBar,
+            OnContent = "",
+            OffContent = "",
+            MinWidth = 0,
         };
 
-        var addButton = new Button { Content = "Add", Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
-        var pickButton = new Button { Content = "From browser…", Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
-
-        void Persist()
+        toggle.Toggled += (_, _) =>
         {
+            launcher.WebShowBookmarkBar = toggle.IsOn;
             SettingsManager.SaveSettings();
             Services.AutoSyncService.NotifyLaunchersChanged();
             WebFlyoutWindow.ApplyLauncherChanges(launcher.Id);
-        }
-
-        void Rebuild()
-        {
-            list.Children.Clear();
-
-            if (launcher.WebBookmarks.Count == 0)
-            {
-                list.Children.Add(new TextBlock
-                {
-                    Text = "No bookmarks yet.",
-                    FontSize = 12,
-                    Opacity = 0.5,
-                });
-            }
-
-            foreach (var bookmark in launcher.WebBookmarks.ToList())
-            {
-                var captured = bookmark;
-                bool isAddress = launcher.WebBookmarks.IndexOf(captured) == 0;
-
-                var label = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-                label.Children.Add(new TextBlock
-                {
-                    Text = string.IsNullOrWhiteSpace(captured.Name) ? captured.Url : captured.Name,
-                    FontSize = 13,
-                    TextTrimming = TextTrimming.CharacterEllipsis,
-                });
-                label.Children.Add(new TextBlock
-                {
-                    Text = captured.Url,
-                    FontSize = 11,
-                    Opacity = 0.5,
-                    TextTrimming = TextTrimming.CharacterEllipsis,
-                });
-
-                // Said on the row rather than in a legend: the only thing that makes this bookmark
-                // the launcher's address is being first, so it has to be readable from the order.
-                if (isAddress)
-                {
-                    label.Children.Add(new TextBlock
-                    {
-                        Text = "Opens with the launcher",
-                        FontSize = 11,
-                        Opacity = 0.6,
-                        Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"],
-                    });
-                }
-
-                var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2, VerticalAlignment = VerticalAlignment.Center };
-
-                Button Small(string glyph, string tooltip, Action onClick, bool enabled = true)
-                {
-                    var b = new Button
-                    {
-                        Content = new FontIcon { Glyph = glyph, FontSize = 11 },
-                        Padding = new Thickness(6, 4, 6, 4),
-                        MinWidth = 0,
-                        MinHeight = 0,
-                        IsEnabled = enabled,
-                        Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["SubtleFillColorTransparentBrush"],
-                        BorderThickness = new Thickness(0),
-                    };
-                    ToolTipService.SetToolTip(b, tooltip);
-                    b.Click += (_, _) => onClick();
-                    return b;
-                }
-
-                int index = launcher.WebBookmarks.IndexOf(captured);
-
-                // A bookmark is named from its host when it is added, which is rarely what anyone
-                // would call it — and with an icons-only bar the name becomes the tooltip, so it is
-                // the only thing identifying the button.
-                buttons.Children.Add(Small("", "Rename", async () =>
-                {
-                    string? renamed = await TextPromptWindow.ShowAsync(
-                        "Rename bookmark", "Name", captured.Name, "Rename", _hwnd);
-                    if (renamed == null) return;
-
-                    captured.Name = string.IsNullOrWhiteSpace(renamed) ? HostOf(captured.Url) : renamed.Trim();
-                    Persist();
-                    Rebuild();
-                }));
-                buttons.Children.Add(Small("", "Edit address", async () =>
-                {
-                    string? entered = await TextPromptWindow.ShowAsync(
-                        "Edit address", "https://…", captured.Url, "Save", _hwnd);
-                    if (entered == null) return;
-
-                    string edited = WebFlyoutWindow.NormalizeUrl(entered);
-                    if (string.IsNullOrEmpty(edited) || edited == captured.Url) return;
-
-                    // The address row above edits the same bookmark when this is the first one, so
-                    // that path owns it — including the site-icon fetch a new address needs.
-                    if (launcher.WebBookmarks.IndexOf(captured) == 0)
-                    {
-                        CommitWebAddress(edited);
-                        return;
-                    }
-
-                    bool namedAfterItsHost = string.Equals(captured.Name, HostOf(captured.Url), StringComparison.OrdinalIgnoreCase);
-                    captured.Url = edited;
-                    captured.IconPath = "";
-                    if (namedAfterItsHost) captured.Name = HostOf(edited);
-
-                    Persist();
-                    Rebuild();
-                    _ = FetchBookmarkIconAsync(launcher, captured);
-                }));
-                buttons.Children.Add(Small("", "Move up", () =>
-                {
-                    int i = launcher.WebBookmarks.IndexOf(captured);
-                    if (i <= 0) return;
-                    launcher.WebBookmarks.Move(i, i - 1);
-                    Persist();
-                    Rebuild();
-                    _bookmarksListChanged?.Invoke();
-                    SyncAddressBox();
-                }, index > 0));
-                buttons.Children.Add(Small("", "Move down", () =>
-                {
-                    int i = launcher.WebBookmarks.IndexOf(captured);
-                    if (i < 0 || i >= launcher.WebBookmarks.Count - 1) return;
-                    launcher.WebBookmarks.Move(i, i + 1);
-                    Persist();
-                    Rebuild();
-                    _bookmarksListChanged?.Invoke();
-                    SyncAddressBox();
-                }, index >= 0 && index < launcher.WebBookmarks.Count - 1));
-                buttons.Children.Add(Small("", "Remove", () =>
-                {
-                    launcher.WebBookmarks.Remove(captured);
-                    Persist();
-                    Rebuild();
-
-                    // Removing or reordering the first one changes the launcher's address, so the
-                    // field above the list is now describing a bookmark that is not there.
-                    SyncAddressBox();
-                }));
-
-                var row = new Grid();
-                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-                Grid.SetColumn(label, 0);
-                Grid.SetColumn(buttons, 1);
-                row.Children.Add(label);
-                row.Children.Add(buttons);
-                list.Children.Add(row);
-            }
-        }
-
-        void Add(string name, string url)
-        {
-            url = WebFlyoutWindow.NormalizeUrl(url);
-            if (string.IsNullOrWhiteSpace(url)) return;
-
-            var bookmark = new WebBookmark(string.IsNullOrWhiteSpace(name) ? HostOf(url) : name, url);
-            launcher.WebBookmarks.Add(bookmark);
-            Persist();
-            Rebuild();
-            _bookmarksListChanged?.Invoke();
-            SyncAddressBox();
-
-            // A provisional icon so the bar is not a row of globes; the real one replaces it the
-            // first time the bookmark is opened with a signed-in browser.
-            _ = FetchBookmarkIconAsync(launcher, bookmark);
-        }
-
-        addButton.Click += (_, _) =>
-        {
-            Add("", urlBox.Text.Trim());
-            urlBox.Text = "";
         };
 
-        pickButton.Click += async (_, _) =>
-        {
-            var picked = await Pages.BookmarkPicker.PickAsync(Content.XamlRoot);
-            if (picked == null) return;
-            Add(picked.Name, picked.Url);
-        };
+        return BuildRow("Bookmarks Bar",
+            "Shows this launcher's bookmarks along the bottom of the flyout, where they are added, "
+            + "renamed, put into folders and reordered.",
+            toggle);
+    }
 
-        var addRow = new Grid { Margin = new Thickness(0, 8, 0, 0) };
-        addRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        addRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        addRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        Grid.SetColumn(urlBox, 0);
-        Grid.SetColumn(addButton, 1);
-        Grid.SetColumn(pickButton, 2);
-        addRow.Children.Add(urlBox);
-        addRow.Children.Add(addButton);
-        addRow.Children.Add(pickButton);
-
-        // ── Bar appearance ──────────────────────────────────────
-        // ── Bar appearance ──────────────────────────────────────
-        var iconsOnlyToggle = new ToggleSwitch
+    /// <summary>
+    /// The launcher-wide "icons only" switch for the bar.
+    /// </summary>
+    /// <remarks>
+    /// It came back out of the bookmark list that was removed, rather than going with it: it is a
+    /// property of the <em>bar</em> rather than of any bookmark, so the bar's own per-bookmark
+    /// "Icon only" cannot express it - that one collapses one awkward name and leaves the rest
+    /// readable, while this one is "I know these sites by sight". The per-bookmark flag only ever
+    /// adds to what this collapses; see ShowsIconOnly.
+    /// </remarks>
+    private FrameworkElement BuildBookmarkIconsOnlyRow(Launcher launcher)
+    {
+        var toggle = new ToggleSwitch
         {
             IsOn = launcher.WebBookmarkIconsOnly,
             OnContent = "",
             OffContent = "",
             MinWidth = 0,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        iconsOnlyToggle.Toggled += (_, _) =>
-        {
-            launcher.WebBookmarkIconsOnly = iconsOnlyToggle.IsOn;
-            Persist();
         };
 
-        var iconsOnlyRow = BuildRow("Icons Only",
-            "Hide the labels in the bar; names still show as tooltips",
-            iconsOnlyToggle);
-        iconsOnlyRow.Margin = new Thickness(0, 12, 0, 0);
-
-        var body = new StackPanel();
-        body.Children.Add(list);
-        body.Children.Add(addRow);
-        body.Children.Add(iconsOnlyRow);
-
-        // Folded away, like Advanced. A launcher with one page — which is most of them — has a
-        // bookmark list of exactly the address already showing in the field above, so laid out flat
-        // it was a second copy of the answer taking up most of the dialog.
-        var headerLabel = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-        headerLabel.Children.Add(new TextBlock { Text = "Bookmarks", FontSize = 14 });
-
-        // The subtitle is what has to survive the fold: collapsed, it is the only thing saying that
-        // a second page is what produces the bar, and it counts what is inside so the section is
-        // worth opening (or worth leaving shut) without opening it.
-        var headerSubtitle = new TextBlock { FontSize = 12, Opacity = 0.5, TextWrapping = TextWrapping.Wrap };
-        headerLabel.Children.Add(headerSubtitle);
-
-        void UpdateHeader()
+        toggle.Toggled += (_, _) =>
         {
-            int count = launcher.WebBookmarks.Count;
-            headerSubtitle.Text = count > 1
-                ? $"{count} pages, shown as a bar along the bottom of the flyout"
-                : "The first is the page this launcher opens. Add another and they show as a bar along the bottom";
-        }
-
-        Rebuild();
-        UpdateHeader();
-
-        // So the address field above the list follows an edit made down here.
-        _bookmarksChanged = () => { Rebuild(); UpdateHeader(); SyncAddressBox(); };
-        _bookmarksListChanged = UpdateHeader;
-
-        var bookmarks = new Expander
-        {
-            Header = headerLabel,
-            IsExpanded = false,
-            HorizontalAlignment = HorizontalAlignment.Stretch,
-            HorizontalContentAlignment = HorizontalAlignment.Stretch,
-            Content = body,
+            launcher.WebBookmarkIconsOnly = toggle.IsOn;
+            SettingsManager.SaveSettings();
+            Services.AutoSyncService.NotifyLaunchersChanged();
+            WebFlyoutWindow.ApplyLauncherChanges(launcher.Id);
         };
 
-        ExpanderReveal.Attach(bookmarks);
-        return bookmarks;
+        return BuildRow("Bookmark Icons Only",
+            "Hides every bookmark's label, leaving just its icon.", toggle);
     }
-
-    /// <summary>Re-reads the bookmark count into the section header, when one is on screen.</summary>
-    private Action? _bookmarksListChanged;
 
     /// <summary>
     /// Host of a URL, used as a bookmark's name until the page offers a better one.
@@ -1150,9 +944,12 @@ public sealed class LauncherSettingsWindow : Window
 
         // Typing a dashboard URL from memory is the worst way to enter one; it is already a
         // bookmark in the browser the user set it up in.
+        //
+        // Worded exactly as the button beside the bookmark list is. They open the same picker for
+        // the same reason, and two labels for one action reads as two features.
         var bookmarkButton = new Button
         {
-            Content = "Bookmark…",
+            Content = "From browser…",
             Margin = new Thickness(8, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center,
         };
@@ -1718,7 +1515,13 @@ public sealed class LauncherSettingsWindow : Window
             UpdateIdleVisibility();
         }
 
-        return ([urlRow, bookmarksRow], [tabBarRow, addressRow, sizeRow, anchorRow, rememberSizeRow], advanced, Refresh);
+        // Ordered as the strips appear on the flyout: header, tabs, address, then the bar along
+        // the bottom. Two toggles for two rows of chrome read as mislabelled when the list disagrees
+        // with the window - the same reasoning that put tabs before address.
+        return ([urlRow],
+            [tabBarRow, addressRow, bookmarksRow, BuildBookmarkIconsOnlyRow(launcher),
+             sizeRow, anchorRow, rememberSizeRow],
+            advanced, Refresh);
     }
 
     private (Button Button, Grid CustomRow, Action Refresh) BuildIconChooser(Launcher launcher)
@@ -2006,9 +1809,7 @@ public sealed class LauncherSettingsWindow : Window
         }
 
         // Launch the companion exe in --pin mode with the launcher's ID
-        string flyoutExe = Path.Combine(appDataDir, "LittleLauncherFlyout.exe");
-        if (!File.Exists(flyoutExe))
-            flyoutExe = Path.Combine(AppContext.BaseDirectory, "LittleLauncherFlyout.exe");
+        string flyoutExe = MainWindow.GetFlyoutCompanionPath();
 
         if (!File.Exists(flyoutExe))
         {

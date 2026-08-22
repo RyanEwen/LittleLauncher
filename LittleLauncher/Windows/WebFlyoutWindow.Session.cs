@@ -1,4 +1,4 @@
-// Copyright © 2024-2026 The Little Launcher Authors
+﻿// Copyright © 2024-2026 The Little Launcher Authors
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 using LittleLauncher.Classes.Settings;
@@ -142,16 +142,24 @@ public sealed partial class WebFlyoutWindow
         _restoringSession = true;
         try
         {
-            // The launcher's own tab is whichever held the address it opens at, so the restored set
-            // keeps one home tab and the rest come back as the user's own pages.
-            string home = NormalizeUrl(CurrentTargetUrl());
-            bool homeUsed = false;
+            // The launcher's own tab is a role, not an address, and exactly one of the restored
+            // tabs has to hold it: everything that asks "is this the launcher's page?" - adopting
+            // its icon, letting a settings change re-navigate it - goes unanswered otherwise, and
+            // silently, since a launcher with no home tab simply never qualifies for any of it.
+            //
+            // Matching on the address alone was too strict to hold it. An app that redirects on
+            // sign-in never comes back on the URL it was configured with: Discord is set to
+            // discord.com/app and is at /channels/{whatever you read last} within a second, so the
+            // saved session never matched, no tab took the role, and the launcher's icon was stuck
+            // on the 16px favicon for the life of the install. Falling back to the same host is
+            // what "the launcher's own page" actually means - a link tab, the thing the role exists
+            // to exclude, is by definition somewhere a page sent the user, which is elsewhere.
+            int home = IndexOfHomeTab(urls);
 
             for (int i = 0; i < urls.Count; i++)
             {
                 string url = urls[i];
-                bool isHome = !homeUsed && string.Equals(url, home, StringComparison.OrdinalIgnoreCase);
-                if (isHome) homeUsed = true;
+                bool isHome = i == home;
 
                 await CreateTabAsync(
                     homeKey: isHome ? PrimaryTabKey : null,
@@ -171,5 +179,29 @@ public sealed partial class WebFlyoutWindow
         // Written once at the end, so the stored list reflects what actually came back rather than
         // each step of it.
         SaveSession();
+    }
+
+    /// <summary>
+    /// Which restored tab should come back as the launcher's own, or -1 when none of them should.
+    /// </summary>
+    /// <remarks>
+    /// The configured address first, since a launcher still sitting on it is the unambiguous case.
+    /// Otherwise the first tab on the same host, which is the launcher's page after it has
+    /// redirected, signed in, or simply been navigated within the app. If nothing shares the host
+    /// then the launcher's own page is genuinely not open and no tab takes the role - handing it to
+    /// an unrelated site would be worse than leaving it vacant.
+    /// </remarks>
+    private int IndexOfHomeTab(List<string> urls)
+    {
+        string home = NormalizeUrl(CurrentTargetUrl());
+        if (string.IsNullOrEmpty(home)) return -1;
+
+        int exact = urls.FindIndex(u => string.Equals(u, home, StringComparison.OrdinalIgnoreCase));
+        if (exact >= 0) return exact;
+
+        string host = HostOf(home);
+        if (string.IsNullOrEmpty(host)) return -1;
+
+        return urls.FindIndex(u => string.Equals(HostOf(u), host, StringComparison.OrdinalIgnoreCase));
     }
 }

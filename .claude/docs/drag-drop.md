@@ -1,4 +1,4 @@
-> **Scope:** Use when modifying drag-and-drop or edit mode in the flyout. Covers the custom drag-drop system, cross-list moves, insertion indicators, the edit-mode geometry contract, and known WinUI 3 limitations.
+﻿> **Scope:** Use when modifying drag-and-drop or edit mode in the flyout. Covers the custom drag-drop system, cross-list moves, insertion indicators, the edit-mode geometry contract, and known WinUI 3 limitations.
 > **Governs:** `**/FlyoutWindow.xaml*`, `**/FlyoutWindow.EditMode.cs`.
 
 # Drag-and-Drop & Edit Mode Conventions (FlyoutWindow)
@@ -15,6 +15,22 @@ drag-drop (between column lists and group child lists) impossible with `CanReord
 
 **Solution:** All ListViews use `CanDragItems="True"` (not `CanReorderItems`) with fully custom
 `DragOver`, `DragLeave`, `Drop`, `DragItemsStarting`, and `DragItemsCompleted` handlers.
+
+**The same rule reaches a second surface.** A web launcher's bookmark bar and its folder lists
+(`WebFlyoutWindow.Bookmarks.cs`, `WebFlyoutWindow.FolderPopup.cs`) move bookmarks between the bar,
+a folder, and a folder inside a folder - which is the cross-collection case above, one type over.
+They reuse this file's shapes rather than inventing others: a Y-midpoint drop index, a drawn caret
+instead of shuffled children, and a tint for "into this one" rather than a caption. Two findings
+from building it are worth knowing before touching either:
+
+- **A `Button` is not a drag source on its own.** It captures the pointer on press for its own click
+  handling, so `CanDrag` never fires - `ListViewBase` is what makes it work for list items.
+  `WireStripDragSource` starts the drag by hand past a threshold, which is also what keeps the click.
+- **A drop target must be in the window's own visual tree.** A `MenuFlyout` cannot host a drag source
+  at all, and a `Popup` renders and clicks perfectly while never receiving a drag - measured, with
+  `DragOver` not firing once. XAML registers the *window* as the drop target. That is why the folder
+  lists are an overlay in the flyout's root grid rather than a popup, at the cost of being clamped to
+  the window. See web-launchers.md.
 
 ## Edit mode
 

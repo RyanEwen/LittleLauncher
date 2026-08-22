@@ -1,4 +1,4 @@
-// Copyright © 2024-2026 The Little Launcher Authors
+﻿// Copyright © 2024-2026 The Little Launcher Authors
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 using LittleLauncher.Classes.Settings;
@@ -121,6 +121,15 @@ public sealed partial class WebFlyoutWindow
         {
             _launcher.WebShowAddressBar = on;
             ApplyAddressBarVisibility();
+        }));
+
+        // The bar is where bookmarks are managed, so being able to bring it back without walking to
+        // launcher settings matters more than it did when it appeared on its own. Listed after the
+        // address bar because that is the order the two strips appear in on the flyout.
+        menu.Items.Add(Toggle("Bookmarks bar", _launcher.ShowsBookmarkBar, on =>
+        {
+            _launcher.WebShowBookmarkBar = on;
+            RebuildBookmarkBar(force: true);
         }));
 
         menu.Items.Add(new MenuFlyoutSeparator());

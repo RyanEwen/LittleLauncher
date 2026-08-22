@@ -1,9 +1,10 @@
-// Copyright © 2024-2026 The Little Launcher Authors
+﻿// Copyright © 2024-2026 The Little Launcher Authors
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 using LittleLauncher.Models;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
@@ -528,6 +529,12 @@ public sealed partial class WebFlyoutWindow
             CloseTab(tab);
         };
 
+        chip.ContextRequested += (_, e) =>
+        {
+            e.Handled = true;
+            ShowTabMenu(tab, chip);
+        };
+
         tab.Chip = chip;
         tab.Label = label;
         tab.Icon = icon;
@@ -535,6 +542,150 @@ public sealed partial class WebFlyoutWindow
         tab.Indicator = indicator;
         UpdateTabChip(tab);
         return chip;
+    }
+
+    // ── The tab menu ────────────────────────────────────────────────
+
+    /// <summary>
+    /// Opens one tab's right-click menu.
+    /// </summary>
+    /// <remarks>
+    /// <para>The same two rules every menu in this window follows, for the reasons
+    /// <c>ShowBookmarkMenu</c> sets out: <c>ShouldConstrainToRootBounds = false</c>, because a
+    /// menu constrained to a window this narrow is clipped, and <c>_isMenuOpen</c>, because the
+    /// unconstrained menu lives in a popup of its own and would otherwise deactivate the flyout
+    /// that raised it.</para>
+    /// <para>Below the chip, where the bookmark bar's menus open above theirs: both open into the
+    /// window rather than off the edge of it, and the strip is at the top while the bar is at the
+    /// foot.</para>
+    /// </remarks>
+    private void ShowTabMenu(WebTab tab, FrameworkElement anchor)
+    {
+        var items = BuildTabMenuItems(tab);
+        if (items.Count == 0) return;
+
+        var menu = new MenuFlyout
+        {
+            Placement = FlyoutPlacementMode.Bottom,
+            ShouldConstrainToRootBounds = false,
+        };
+
+        foreach (var item in items)
+            menu.Items.Add(item);
+
+        menu.Opened += (_, _) => _isMenuOpen = true;
+        menu.Closed += (_, _) => _isMenuOpen = false;
+
+        menu.ShowAt(anchor);
+    }
+
+    /// <summary>
+    /// The entries on a tab's menu.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Every entry names the tab it was opened on, not the tab in front.</b> That is the
+    /// whole reason this menu is worth having on a strip where any tab can be right-clicked
+    /// without being switched to, and it is why reload, copy and bookmark all take the tab rather
+    /// than reading <c>_webView</c> the way the header's buttons do.</para>
+    /// <para>Enabled rather than hidden where an entry does not apply, matching the bookmark menu:
+    /// a row that comes and goes is harder to learn than one that greys out. The exception is the
+    /// bookmark row, which follows the More menu's convention of changing its <em>text</em> to say
+    /// which way it will go.</para>
+    /// </remarks>
+    private List<MenuFlyoutItemBase> BuildTabMenuItems(WebTab tab)
+    {
+        var items = new List<MenuFlyoutItemBase>();
+
+        MenuFlyoutItem Item(string text, Action invoke, bool enabled = true)
+        {
+            var item = new MenuFlyoutItem { Text = text, IsEnabled = enabled };
+            item.Click += (_, _) => invoke();
+            return item;
+        }
+
+        void Divide() => items.Add(new MenuFlyoutSeparator());
+
+        string url = TabUrl(tab);
+        bool hasUrl = !string.IsNullOrEmpty(url);
+        var bookmark = hasUrl ? FindBookmark(url) : null;
+
+        items.Add(Item("Reload", () => ReloadTab(tab), tab.View.CoreWebView2 != null));
+        items.Add(Item("Duplicate", () => _ = OpenLinkTabAsync(url, background: true), hasUrl));
+
+        Divide();
+
+        items.Add(Item("Copy address", () => CopyToClipboard(url), hasUrl));
+        items.Add(Item("Open in browser", () => OpenExternally(url), hasUrl));
+        items.Add(Item(
+            bookmark != null ? "Remove from bookmarks" : "Add to bookmarks",
+            () =>
+            {
+                if (bookmark != null) RemoveBookmark(bookmark);
+                else AddBookmark(url);
+            },
+            hasUrl));
+
+        Divide();
+
+        items.Add(Item("Close tab", () => CloseTab(tab)));
+        items.Add(Item("Close other tabs", () => CloseOtherTabs(tab), _tabs.Count > 1));
+        items.Add(Item("Reopen closed tab", ReopenClosedTab, _closedTabUrls.Count > 0));
+
+        return items;
+    }
+
+    /// <summary>The address a tab is showing, or the one it was last sent to.</summary>
+    /// <remarks>
+    /// The live <c>Source</c> first, because a tab that has navigated since it was created is
+    /// showing something its <c>NavigatedUrl</c> does not know about. Reading it can throw on a
+    /// browser that is being torn down, which is why this is guarded rather than inlined.
+    /// </remarks>
+    private string TabUrl(WebTab tab)
+    {
+        try
+        {
+            return NormalizeUrl(tab.View.CoreWebView2?.Source ?? tab.NavigatedUrl);
+        }
+        catch (Exception ex)
+        {
+            Logger.Debug(ex, "Reading a tab's address failed");
+            return NormalizeUrl(tab.NavigatedUrl);
+        }
+    }
+
+    /// <summary>Reloads one named tab, whether or not it is the tab in front.</summary>
+    /// <remarks>
+    /// <c>ReloadPage</c> is the header button's version and acts on <c>_webView</c>. A menu opened
+    /// on a background chip has to say which browser it means.
+    /// </remarks>
+    private void ReloadTab(WebTab tab)
+    {
+        try
+        {
+            tab.View.CoreWebView2?.Reload();
+        }
+        catch (Exception ex)
+        {
+            Logger.Debug(ex, "Reloading a tab failed");
+        }
+    }
+
+    /// <summary>Closes every tab but this one.</summary>
+    /// <remarks>
+    /// Over a copy of the list, because <see cref="CloseTab"/> mutates it. The kept tab is switched
+    /// to first: closing the one in front would otherwise pick its own replacement partway through,
+    /// only for the next close to move it again.
+    /// </remarks>
+    private void CloseOtherTabs(WebTab keep)
+    {
+        if (_tabs.Count <= 1) return;
+
+        if (_activeTab != keep) SwitchToTab(keep);
+
+        foreach (var tab in _tabs.ToList())
+        {
+            if (tab != keep) CloseTab(tab);
+        }
     }
 
     private void TabStrip_DragOver(object sender, DragEventArgs e)

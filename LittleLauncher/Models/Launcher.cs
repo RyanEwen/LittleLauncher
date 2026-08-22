@@ -645,7 +645,43 @@ public partial class Launcher : ObservableObject
     /// that would each be useless without the other.
     /// </remarks>
     [JsonIgnore]
-    public bool ShowsBookmarkBar => IsWebLauncher && WebBookmarks.Count > 1;
+    /// <summary>Shows the bookmark bar, or null to fall back to the old rule.</summary>
+    /// <remarks>
+    /// <para><b>Nullable, and that is what makes it safe to add.</b> Three states are needed and a
+    /// <c>bool</c> only has two: on, off, and <em>never chosen</em>. Under
+    /// <c>WhenWritingDefault</c> only <c>null</c> is omitted, so an explicit <c>false</c> is
+    /// written and survives - which a plain <c>bool</c> could not manage in either direction here.
+    /// </para>
+    /// <para><b>It replaces a migration, and a bug that came with it.</b> Seeding a plain
+    /// <c>bool</c> once and marking it done meant the marker had to be right, and it was not:
+    /// the seed ran where the launcher's bookmarks were not in hand, and the marker travelled over
+    /// sync, so a download from a machine that had never seen the setting reset both and turned a
+    /// bar off again on every restart. Deriving the old behaviour from <c>null</c> needs no marker,
+    /// no seeding pass, and cannot be undone by a payload written before it existed.</para>
+    /// <para>Old files and old payloads therefore behave exactly as they did: the bar appears where
+    /// a launcher holds a second bookmark. The moment the user says otherwise, what they said is
+    /// stored and nothing derives it again.</para>
+    /// </remarks>
+    [ObservableProperty]
+    public partial bool? WebShowBookmarkBar { get; set; }
+
+    /// <summary>Whether the flyout draws a bookmark bar.</summary>
+    public bool ShowsBookmarkBar =>
+        IsWebLauncher && (WebShowBookmarkBar ?? WebBookmarks.Count > 1);
+
+    /// <summary>
+    /// Whether this launcher stands for several sites rather than one.
+    /// </summary>
+    /// <remarks>
+    /// <b>Not the same question as "is the bar showing", though it used to be answered by it.</b>
+    /// While the bar appeared only once there was a second bookmark, bar visibility *was* this
+    /// fact, and two rules leaned on it: a launcher of several sites must not adopt one page's icon
+    /// as its own, and its jump list lists its bookmarks rather than repeating the button. Now that
+    /// the bar is a setting, reading visibility for either would break both the moment a user
+    /// hid the bar on a launcher holding ten pages - or showed it on one holding a single page,
+    /// which is the new default.
+    /// </remarks>
+    public bool HoldsSeveralSites => IsWebLauncher && WebBookmarks.Count > 1;
 
     /// <summary>Parses <see cref="WebFlyoutPosition"/>, or null when it has never been moved.</summary>
     public (int X, int Y)? GetWebFlyoutPosition()
@@ -657,16 +693,35 @@ public partial class Launcher : ObservableObject
     }
 
     /// <summary>
-    /// The address this web launcher opens: its first bookmark.
+    /// The page this web launcher opens, as a setting of its own.
     /// </summary>
     /// <remarks>
-    /// Position, not a stored pointer. A separate "which one opens" setting was tried and is
-    /// redundant once one address and a bar of them are the same thing — it could disagree with
-    /// the order on screen, and reordering the bar then changed nothing while a hidden field
-    /// decided the answer. First is a rule the user can see and can drag.
+    /// <para><b>Not a pointer into the bar, and that distinction is the whole design.</b> An
+    /// earlier version made the address <em>be</em> the first bookmark, on the reasoning that one
+    /// address and a bar of them are the same thing and a hidden field could disagree with the
+    /// order on screen. The objection was sound and this does not re-open it: a home URL never
+    /// claims to be one of the bar's entries, so there is no order for it to disagree with. It is
+    /// the split every browser already makes between a home page and a bookmarks bar.</para>
+    /// <para>What forced the change is folders. Position zero can now hold something that has no
+    /// address at all, so "first" stopped being an answer.</para>
+    /// <para>A bookmark may hold the same URL, and nothing tries to notice or merge them. The bar
+    /// is a list of places the user put there; this is where the launcher opens. That they often
+    /// coincide is not a reason to make one of them stand for the other.</para>
+    /// </remarks>
+    [ObservableProperty]
+    public partial string WebHomeUrl { get; set; } = "";
+
+    /// <summary>The address this web launcher opens.</summary>
+    /// <remarks>
+    /// Empty <see cref="WebHomeUrl"/> falls back to the first bookmark, which is what every
+    /// settings file written before this existed relies on: the CLR default is what those files
+    /// resolve to, so they keep opening exactly where they did. See the WhenWritingDefault note in
+    /// user-settings.md.
     /// </remarks>
     [JsonIgnore]
-    public string WebAddress => WebBookmarks.Count > 0 ? WebBookmarks[0].Url : "";
+    public string WebAddress => !string.IsNullOrWhiteSpace(WebHomeUrl)
+        ? WebHomeUrl
+        : (WebBookmarks.FirstOrDefault(b => !b.IsFolder)?.Url ?? "");
 
     /// <summary>
     /// Brings a launcher written before single-address and bookmark-bar launchers merged onto the
@@ -706,14 +761,23 @@ public partial class Launcher : ObservableObject
             WebRememberPosition = false;
         }
 
+        // The field this used to be converted into position; it is now the same idea as
+        // WebHomeUrl and simply becomes it. Cleared either way, so a launcher arriving repeatedly
+        // from an older build cannot keep re-applying it over a home the user has since changed.
         if (!string.IsNullOrWhiteSpace(WebDefaultBookmarkUrl))
         {
-            var wanted = WebBookmarks.FirstOrDefault(
-                b => string.Equals(b.Url, WebDefaultBookmarkUrl, StringComparison.OrdinalIgnoreCase));
-
-            if (wanted != null) WebBookmarks.Move(WebBookmarks.IndexOf(wanted), 0);
+            if (string.IsNullOrWhiteSpace(WebHomeUrl)) WebHomeUrl = WebDefaultBookmarkUrl;
             WebDefaultBookmarkUrl = "";
         }
+
+        // Every launcher written before WebHomeUrl existed leans on the fallback in WebAddress,
+        // which reads the first bookmark - so until this runs, the first bookmark still *is* the
+        // home page and reordering the bar still moves it. Writing it down once is what actually
+        // separates them: the value is identical, so nothing moves, and afterwards that bookmark is
+        // an ordinary bookmark like any other.
+        if (string.IsNullOrWhiteSpace(WebHomeUrl))
+            WebHomeUrl = WebBookmarks.FirstOrDefault(b => !b.IsFolder)?.Url ?? "";
+
     }
 
     /// <summary>

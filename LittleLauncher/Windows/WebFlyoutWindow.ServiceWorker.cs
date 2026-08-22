@@ -1,4 +1,4 @@
-using Microsoft.Web.WebView2.Core;
+﻿using Microsoft.Web.WebView2.Core;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -230,7 +230,19 @@ public sealed partial class WebFlyoutWindow
                 }
 
                 document.querySelectorAll('link[rel~="icon"]').forEach(function (l) {
-                    consider(l.getAttribute('href'), sizeOf(l.getAttribute('sizes')) || 32);
+                    var href = l.getAttribute('href') || '';
+                    var declared = sizeOf(l.getAttribute('sizes'));
+
+                    // An .ico is a container, and what it holds is not declared anywhere: a plain
+                    // favicon.ico routinely carries a 256px frame alongside the 16 and 32 the tab
+                    // uses. Discord is the case that proved it - no manifest, no apple-touch-icon,
+                    // one <link rel=icon> to favicon.ico, and a 256px PNG inside it. Guessing high
+                    // enough to be fetched is the only way to find out; the host measures what
+                    // actually arrives and will not shrink what it already has, so guessing wrong
+                    // costs a download and nothing else. Below a declared manifest icon on purpose,
+                    // so a site that does say what it has still wins.
+                    var isIco = /\.ico($|[?#])/i.test(href);
+                    consider(href, declared || (isIco ? 128 : 32));
                 });
                 document.querySelectorAll('link[rel~="apple-touch-icon"], link[rel~="apple-touch-icon-precomposed"]').forEach(function (l) {
                     consider(l.getAttribute('href'), sizeOf(l.getAttribute('sizes')) || 180);
@@ -251,23 +263,41 @@ public sealed partial class WebFlyoutWindow
             }
 
             function reportBestIcon() {
+                // Every path says what happened. This ran silently for a long time and the only
+                // symptom was a launcher that stayed blurry, which is indistinguishable from the
+                // site simply not offering anything better.
+                function probe(stage, best, extra) {
+                    post({
+                        __ll: 'pageIconProbe', stage: stage,
+                        size: (best && best.size) || 0, url: (best && best.url) || '',
+                        detail: extra || ''
+                    });
+                }
+
                 bestIconUrl().then(function (best) {
                     // Not worth replacing Chromium's own favicon with something no larger.
-                    if (!best.url || best.size < 96) return;
+                    if (!best.url || best.size < 96) {
+                        probe('none', best);
+                        return;
+                    }
 
                     return fetch(best.url, { credentials: 'include' })
                         .then(function (r) { return r.ok ? r.blob() : null; })
                         .then(function (b) {
                             // Rasters only: a manifest icon is often an SVG, which nothing
                             // downstream of here can decode.
-                            if (!b || b.size > 512 * 1024 || b.type.indexOf('svg') >= 0) return;
+                            if (!b) { probe('unfetchable', best); return; }
+                            if (b.size > 512 * 1024) { probe('toobig', best, String(b.size)); return; }
+                            if (b.type.indexOf('svg') >= 0) { probe('svg', best, b.type); return; }
+
                             var fr = new FileReader();
                             fr.onload = function () {
+                                probe('sending', best, b.type);
                                 post({ __ll: 'pageIcon', icon: fr.result, size: best.size });
                             };
                             fr.readAsDataURL(b);
                         });
-                }).catch(function () { });
+                }).catch(function (e) { probe('threw', null, String(e)); });
             }
 
             if (document.readyState === 'complete') setTimeout(reportBestIcon, 0);
@@ -341,11 +371,16 @@ public sealed partial class WebFlyoutWindow
     /// document-created script added after the navigation has started misses the page the flyout
     /// was opened to show.
     /// </remarks>
-    private async Task InstallServiceWorkerBridgeAsync(CoreWebView2 core)
+    private async Task InstallServiceWorkerBridgeAsync(CoreWebView2 core, WebTab tab)
     {
         try
         {
-            core.WebMessageReceived += OnBridgeMessageReceived;
+            // The tab is captured rather than looked up from the event's sender. Every other
+            // per-tab handler on this browser does the same (see the FaviconChanged wiring), and
+            // the reason is that a lookup here has to match a CoreWebView2 handed back by an event
+            // against the one held on the tab, which is an identity comparison across a COM
+            // boundary and not one worth betting a feature on.
+            core.WebMessageReceived += (_, e) => OnBridgeMessageReceived(core, tab, e);
             core.WebResourceRequested += OnServiceWorkerResourceRequested;
             await core.AddScriptToExecuteOnDocumentCreatedAsync(ServiceWorkerBridgeScript);
         }
@@ -355,7 +390,7 @@ public sealed partial class WebFlyoutWindow
         }
     }
 
-    private void OnBridgeMessageReceived(CoreWebView2 sender, CoreWebView2WebMessageReceivedEventArgs e)
+    private void OnBridgeMessageReceived(CoreWebView2 sender, WebTab tab, CoreWebView2WebMessageReceivedEventArgs e)
     {
         JsonNode? message;
         try
@@ -378,7 +413,16 @@ public sealed partial class WebFlyoutWindow
         }
         else if (kind == "pageIcon")
         {
-            AdoptHighResPageIcon(sender, message);
+            AdoptHighResPageIcon(tab, message);
+        }
+        else if (kind == "pageIconProbe")
+        {
+            Logger.Info("Icon probe for {Name}: {Stage} {Size}px {Url} {Detail}",
+                _launcher.Name,
+                message?["stage"]?.GetValue<string>() ?? "",
+                message?["size"]?.GetValue<int>() ?? 0,
+                message?["url"]?.GetValue<string>() ?? "",
+                message?["detail"]?.GetValue<string>() ?? "");
         }
         else if (kind == "bgIntent")
         {

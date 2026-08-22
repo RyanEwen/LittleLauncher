@@ -1,4 +1,4 @@
-// Copyright © 2024-2026 The Little Launcher Authors
+﻿// Copyright © 2024-2026 The Little Launcher Authors
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 using LittleLauncher.Services;
@@ -284,8 +284,12 @@ public sealed partial class WebFlyoutWindow
     {
         get
         {
-            int address = _headerButtons.Children.IndexOf(_addressBarButton);
-            return address < 0 ? 0 : address + 1;
+            // Anchored on the "…" button now that the address-bar toggle has gone: extensions sit
+            // with the page controls, immediately after it, rather than among the window controls
+            // further right. Computed rather than written as a constant, so adding a header button
+            // later cannot silently move them.
+            int more = _headerButtons.Children.IndexOf(_moreButton);
+            return more < 0 ? 0 : more + 1;
         }
     }
 

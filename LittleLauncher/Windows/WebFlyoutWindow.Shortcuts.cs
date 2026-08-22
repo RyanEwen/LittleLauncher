@@ -1,4 +1,4 @@
-// Copyright © 2024-2026 The Little Launcher Authors
+﻿// Copyright © 2024-2026 The Little Launcher Authors
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 using Microsoft.UI.Xaml;
@@ -282,7 +282,7 @@ public sealed partial class WebFlyoutWindow
             case "nav.forward": GoForward(); break;
             case "nav.reload": ReloadPage(); break;
             case "nav.address": FocusAddressBar(); break;
-            case "nav.home": _ = ShowHomeContentAsync(); break;
+            case "nav.home": GoHome(); break;
 
             case "page.zoomIn": StepZoom(1); break;
             case "page.zoomOut": StepZoom(-1); break;

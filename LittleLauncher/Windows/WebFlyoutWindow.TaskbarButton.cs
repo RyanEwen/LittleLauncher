@@ -1,4 +1,4 @@
-// Copyright © 2024-2026 The Little Launcher Authors
+﻿// Copyright © 2024-2026 The Little Launcher Authors
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 using Microsoft.Win32;
@@ -43,6 +43,9 @@ public sealed partial class WebFlyoutWindow
     /// <summary>Whether the flyout is currently presenting as a regular window.</summary>
     private bool _isRegularWindow;
 
+    /// <summary>The AppUserModelID currently stamped on the window, so a changed one is noticed.</summary>
+    private string _appliedAumid = "";
+
     /// <summary>
     /// Applies or removes regular-window presentation to match whether the flyout is on screen.
     /// </summary>
@@ -56,20 +59,22 @@ public sealed partial class WebFlyoutWindow
     private void ApplyTaskbarButton(bool wanted)
     {
         bool target = wanted && _launcher.WebRegularWindow;
-        if (target == _isRegularWindow) return;
         if (_hwnd == IntPtr.Zero || !IsWindow(_hwnd)) return;
+
+        // Checked on every show, ahead of the presentation short-circuit below, because the
+        // identity can move while the presentation does not. Re-pinning a launcher mints a fresh
+        // AUMID, and a window still carrying the previous one does not fail quietly: it raises a
+        // second taskbar button beside the pin the user just clicked, which is exactly what the
+        // mint's own comment in LauncherSettingsWindow warns about. The window outlives the pin,
+        // so nothing else is in a position to notice.
+        if (target) RestampAppUserModelId();
+
+        if (target == _isRegularWindow) return;
 
         try
         {
             if (target)
             {
-                // No pin means no button to light. Without a matching AUMID the window would raise
-                // a taskbar button of its own *beside* the pin instead of lighting it, which is
-                // both not the point and worse than leaving it alone — but the window still
-                // becomes a regular window, because that is what the setting asked for.
-                string aumid = PinAppUserModelId();
-                if (!string.IsNullOrEmpty(aumid)) SetWindowAppUserModelId(_hwnd, aumid);
-
                 ApplyWindowIcon();
                 SetToolWindow(false);
 
@@ -90,6 +95,41 @@ public sealed partial class WebFlyoutWindow
         catch (Exception ex)
         {
             Logger.Debug(ex, "Applying regular-window mode failed for launcher {Name}", _launcher.Name);
+        }
+    }
+
+    /// <summary>
+    /// Puts the launcher's current pin identity on the window, if it is not already there.
+    /// </summary>
+    /// <remarks>
+    /// <para>No pin means no button to light, and stamping nothing is the right answer then - the
+    /// window still becomes a regular window, because that is what the setting asked for.</para>
+    /// <para>A window that already had a taskbar button is torn off the taskbar and re-added when
+    /// the identity changes. The shell reads the AUMID when it creates the button and groups it
+    /// from that; rewriting the property under a live button leaves the grouping where it was, so
+    /// the button has to be made again to move.</para>
+    /// </remarks>
+    private void RestampAppUserModelId()
+    {
+        string aumid = PinAppUserModelId();
+        if (string.IsNullOrEmpty(aumid) || string.Equals(aumid, _appliedAumid, StringComparison.Ordinal))
+            return;
+
+        try
+        {
+            bool hadButton = _isRegularWindow;
+            if (hadButton) GetTaskbarList()?.DeleteTab(_hwnd);
+
+            SetWindowAppUserModelId(_hwnd, aumid);
+            _appliedAumid = aumid;
+
+            if (hadButton) GetTaskbarList()?.AddTab(_hwnd);
+
+            Logger.Info("Taskbar identity for {Name} is now {Aumid}", _launcher.Name, aumid);
+        }
+        catch (Exception ex)
+        {
+            Logger.Debug(ex, "Re-stamping the taskbar identity failed for launcher {Name}", _launcher.Name);
         }
     }
 

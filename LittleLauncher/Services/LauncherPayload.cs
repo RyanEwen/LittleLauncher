@@ -1,4 +1,4 @@
-using LittleLauncher.Classes.Settings;
+﻿using LittleLauncher.Classes.Settings;
 using LittleLauncher.Models;
 using Microsoft.UI.Dispatching;
 using System.Collections.ObjectModel;
@@ -277,6 +277,8 @@ internal static class LauncherPayload
         // here and nothing in WebBookmarks. MigrateWebModel at the foot of this method turns it
         // into the first bookmark, the same way loading an old settings file does.
         existing.WebUrl = downloaded.WebUrl;
+        existing.WebHomeUrl = downloaded.WebHomeUrl;
+        existing.WebShowBookmarkBar = downloaded.WebShowBookmarkBar;
         existing.WebDefaultBookmarkUrl = downloaded.WebDefaultBookmarkUrl;
         existing.WebFlyoutWidth = downloaded.WebFlyoutWidth;
         existing.WebFlyoutHeight = downloaded.WebFlyoutHeight;

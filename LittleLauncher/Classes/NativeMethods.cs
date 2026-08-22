@@ -1,4 +1,4 @@
-// Copyright © 2024-2026 The Little Launcher Authors
+﻿// Copyright © 2024-2026 The Little Launcher Authors
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 using System.Runtime.InteropServices;
@@ -593,7 +593,7 @@ public static partial class NativeMethods
     /// <summary>
     /// Sets a VT_LPWSTR string value on an IPropertyStore. Does NOT call Commit().
     /// </summary>
-    private static void SetPropertyStoreString(IPropertyStore store, PROPERTYKEY key, string value)
+    internal static void SetPropertyStoreString(IPropertyStore store, PROPERTYKEY key, string value)
     {
         const int PROPVARIANT_SIZE = 24;
         IntPtr pv = Marshal.AllocCoTaskMem(PROPVARIANT_SIZE);
@@ -705,6 +705,144 @@ public static partial class NativeMethods
         {
             return null;
         }
+    }
+
+    #endregion
+
+    #region Jump lists (COM) — the task list on a pinned taskbar button
+
+    /// <summary>PKEY_Title = { {F29F85E0-4FF9-1068-AB91-08002B27B3D9}, 2 }</summary>
+    /// <remarks>
+    /// The label a jump list task shows. It is not optional: a shell link with no title falls
+    /// back to its own path, so every task in the list reads "LittleLauncherFlyout.exe".
+    /// </remarks>
+    internal static readonly PROPERTYKEY PKEY_Title = new()
+    {
+        fmtid = new Guid("F29F85E0-4FF9-1068-AB91-08002B27B3D9"),
+        pid = 2
+    };
+
+    [ComImport]
+    [Guid("92CA9DCD-5622-4BBA-A805-5E9F541BD8C9")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IObjectArray
+    {
+        [PreserveSig] int GetCount(out uint cObjects);
+        [PreserveSig] int GetAt(uint index, ref Guid riid, [MarshalAs(UnmanagedType.Interface)] out object ppv);
+    }
+
+    /// <summary>
+    /// The collection a jump list is assembled into. Its first two slots are
+    /// <see cref="IObjectArray"/>'s, because it derives from it — C# interfaces cannot express
+    /// COM inheritance, so the base methods are repeated to keep the vtable order right.
+    /// </summary>
+    [ComImport]
+    [Guid("5632B1A4-E38A-400A-928A-D4CD63230295")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IObjectCollection
+    {
+        [PreserveSig] int GetCount(out uint cObjects);
+        [PreserveSig] int GetAt(uint index, ref Guid riid, [MarshalAs(UnmanagedType.Interface)] out object ppv);
+        [PreserveSig] int AddObject([MarshalAs(UnmanagedType.Interface)] object pvObject);
+        [PreserveSig] int AddFromArray(IObjectArray poaSource);
+        [PreserveSig] int RemoveObjectAt(uint index);
+        [PreserveSig] int Clear();
+    }
+
+    /// <summary>
+    /// Publishes the custom part of an AppUserModelID's jump list — the menu Windows shows when
+    /// its taskbar button is right-clicked.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>The list belongs to an AUMID, not to a process</b>, which is what makes a list per
+    /// launcher possible: <c>SetAppID</c> names whichever identity is being published for, and
+    /// <see cref="Models.Launcher.PinAumid"/> already records one per pinned launcher.</para>
+    /// <para>The sequence is fixed and unforgiving. <c>BeginList</c>, then the content, then
+    /// <c>CommitList</c> — and nothing at all appears until the commit. <c>BeginList</c> also
+    /// hands back the destinations the user has removed by hand, which must be read (and released)
+    /// even though user tasks cannot be removed and so can never be among them.</para>
+    /// </remarks>
+    [ComImport]
+    [Guid("6332DEBF-87B5-4670-90C0-5E57B408A49E")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface ICustomDestinationList
+    {
+        [PreserveSig] int SetAppID([MarshalAs(UnmanagedType.LPWStr)] string pszAppID);
+        [PreserveSig] int BeginList(out uint pcMinSlots, ref Guid riid, [MarshalAs(UnmanagedType.Interface)] out object ppv);
+        [PreserveSig] int AppendCategory([MarshalAs(UnmanagedType.LPWStr)] string pszCategory, IObjectArray poa);
+        [PreserveSig] int AppendKnownCategory(int category);
+        [PreserveSig] int AddUserTasks(IObjectArray poa);
+        [PreserveSig] int CommitList();
+        [PreserveSig] int GetRemovedDestinations(ref Guid riid, [MarshalAs(UnmanagedType.Interface)] out object ppv);
+        [PreserveSig] int DeleteList([MarshalAs(UnmanagedType.LPWStr)] string pszAppID);
+        [PreserveSig] int AbortList();
+    }
+
+    /// <summary>
+    /// A shell link, used here only as the carrier for one jump list task.
+    /// </summary>
+    /// <remarks>
+    /// The getters take raw buffers rather than <see cref="StringBuilder"/>: nothing in this app
+    /// calls them, and a wrong marshalling attribute on a method that is never invoked is a trap
+    /// waiting for the first caller. Only the vtable order matters, and that is preserved.
+    /// </remarks>
+    [ComImport]
+    [Guid("000214F9-0000-0000-C000-000000000046")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IShellLinkW
+    {
+        [PreserveSig] int GetPath(IntPtr pszFile, int cch, IntPtr pfd, uint fFlags);
+        [PreserveSig] int GetIDList(out IntPtr ppidl);
+        [PreserveSig] int SetIDList(IntPtr pidl);
+        [PreserveSig] int GetDescription(IntPtr pszName, int cch);
+        [PreserveSig] int SetDescription([MarshalAs(UnmanagedType.LPWStr)] string pszName);
+        [PreserveSig] int GetWorkingDirectory(IntPtr pszDir, int cch);
+        [PreserveSig] int SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string pszDir);
+        [PreserveSig] int GetArguments(IntPtr pszArgs, int cch);
+        [PreserveSig] int SetArguments([MarshalAs(UnmanagedType.LPWStr)] string pszArgs);
+        [PreserveSig] int GetHotkey(out short pwHotkey);
+        [PreserveSig] int SetHotkey(short wHotkey);
+        [PreserveSig] int GetShowCmd(out int piShowCmd);
+        [PreserveSig] int SetShowCmd(int iShowCmd);
+        [PreserveSig] int GetIconLocation(IntPtr pszIconPath, int cch, out int piIcon);
+        [PreserveSig] int SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string pszIconPath, int iIcon);
+        [PreserveSig] int SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string pszPathRel, uint dwReserved);
+        [PreserveSig] int Resolve(IntPtr hwnd, uint fFlags);
+        [PreserveSig] int SetPath([MarshalAs(UnmanagedType.LPWStr)] string pszFile);
+    }
+
+    [ComImport]
+    [Guid("77F10CF0-3DB5-4966-B520-B7C54FD35ED6")]
+    [ClassInterface(ClassInterfaceType.None)]
+    internal class DestinationListClass { }
+
+    [ComImport]
+    [Guid("2D3468C1-36A7-43B6-AC24-D3F02FD9607A")]
+    [ClassInterface(ClassInterfaceType.None)]
+    internal class EnumerableObjectCollectionClass { }
+
+    [ComImport]
+    [Guid("00021401-0000-0000-C000-000000000046")]
+    [ClassInterface(ClassInterfaceType.None)]
+    internal class ShellLinkClass { }
+
+    internal static readonly Guid IID_IObjectArray = new("92CA9DCD-5622-4BBA-A805-5E9F541BD8C9");
+
+
+    /// <summary>
+    /// Names a jump list task, by setting System.Title on the shell link carrying it.
+    /// </summary>
+    /// <remarks>
+    /// The link has to be handed in as <c>object</c>: the title lives on the same COM object's
+    /// <see cref="IPropertyStore"/> face, and reaching it means a QueryInterface, which is what
+    /// casting the runtime callable wrapper does.
+    /// </remarks>
+    internal static void SetShellLinkTitle(object shellLink, string title)
+    {
+        if (shellLink is not IPropertyStore store) return;
+
+        SetPropertyStoreString(store, PKEY_Title, title);
+        store.Commit();
     }
 
     #endregion

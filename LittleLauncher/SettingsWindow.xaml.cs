@@ -1,4 +1,4 @@
-using LittleLauncher.Classes.Settings;
+﻿using LittleLauncher.Classes.Settings;
 using LittleLauncher.Models;
 using LittleLauncher.Pages;
 using LittleLauncher.Services;
@@ -72,13 +72,13 @@ public sealed partial class SettingsWindow : Window
         double scale = dpi / 96.0;
         var settings = SettingsManager.Current;
 
-        if (settings.SettingsWindowWidth > 0 && settings.SettingsWindowHeight > 0)
+        if (IsUsableSavedGeometry(settings))
         {
-            // Restore saved size and position
             appWindow.Resize(new global::Windows.Graphics.SizeInt32(
                 settings.SettingsWindowWidth, settings.SettingsWindowHeight));
-            appWindow.Move(new global::Windows.Graphics.PointInt32(
-                settings.SettingsWindowX, settings.SettingsWindowY));
+            appWindow.Move(ClampToWorkArea(
+                settings.SettingsWindowX, settings.SettingsWindowY,
+                settings.SettingsWindowWidth, settings.SettingsWindowHeight));
         }
         else
         {
@@ -322,7 +322,15 @@ public sealed partial class SettingsWindow : Window
         bool isMaximized = appWindow.Presenter is OverlappedPresenter p && p.State == OverlappedPresenterState.Maximized;
         settings.SettingsWindowMaximized = isMaximized;
 
-        if (!isMaximized)
+        // A minimized window reports the placeholder rect Windows parks it in - about 237x39 at
+        // (-32000, -32000) - and saving that means the next open restores a window a few pixels
+        // tall, off every screen. The maximized case above is excluded for the same reason: neither
+        // is the size the user chose. `IsIconic` rather than the presenter's state, because the
+        // window can be minimized by the shell (a taskbar click, Win+D) without the presenter being
+        // asked.
+        bool isMinimized = IsIconic(hwnd);
+
+        if (!isMaximized && !isMinimized)
         {
             settings.SettingsWindowX = appWindow.Position.X;
             settings.SettingsWindowY = appWindow.Position.Y;
@@ -336,5 +344,50 @@ public sealed partial class SettingsWindow : Window
         // Flush any pending sync and upload immediately so the server
         // has the latest settings even if the app is killed shortly after.
         AutoSyncService.FlushPendingUpload();
+    }
+
+    /// <summary>The smallest stored size worth restoring, in physical pixels.</summary>
+    /// <remarks>
+    /// Well under any size a person would drag this window to, and well over the placeholder rect a
+    /// minimized window reports. It is a corruption check, not a minimum size.
+    /// </remarks>
+    private const int MinRestorableWidth = 400;
+    private const int MinRestorableHeight = 300;
+
+    /// <summary>Whether the stored geometry is worth restoring at all.</summary>
+    /// <remarks>
+    /// Settings files already carry a bad size on any machine that closed this window while it was
+    /// minimized, so rejecting one is what repairs them: the default path runs instead, and the
+    /// next ordinary close writes a real size over it.
+    /// </remarks>
+    private static bool IsUsableSavedGeometry(ViewModels.UserSettings settings) =>
+        settings.SettingsWindowWidth >= MinRestorableWidth &&
+        settings.SettingsWindowHeight >= MinRestorableHeight;
+
+    /// <summary>
+    /// Nudges a stored position back onto a screen, so a window saved on a monitor that has since
+    /// been unplugged still comes back somewhere the user can see it.
+    /// </summary>
+    private static global::Windows.Graphics.PointInt32 ClampToWorkArea(int x, int y, int width, int height)
+    {
+        try
+        {
+            var origin = new POINT { X = x, Y = y };
+            IntPtr monitor = MonitorFromPoint(origin, MONITOR_DEFAULTTONEAREST);
+
+            var info = new MONITORINFOEX { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<MONITORINFOEX>() };
+            if (!GetMonitorInfo(monitor, ref info))
+                return new global::Windows.Graphics.PointInt32(x, y);
+
+            var work = info.rcWork;
+            int left = Math.Clamp(x, work.Left, Math.Max(work.Left, work.Right - width));
+            int top = Math.Clamp(y, work.Top, Math.Max(work.Top, work.Bottom - height));
+
+            return new global::Windows.Graphics.PointInt32(left, top);
+        }
+        catch
+        {
+            return new global::Windows.Graphics.PointInt32(x, y);
+        }
     }
 }

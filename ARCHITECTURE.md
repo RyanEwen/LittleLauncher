@@ -1,4 +1,4 @@
-# Architecture — Little Launcher
+﻿# Architecture — Little Launcher
 
 ## High-level flow
 
@@ -386,7 +386,7 @@ For pinned taskbar launches, `MainWindow` now tries to resolve the actual taskba
 
 ## Companion exe (`LauncherShortcut`)
 
-`LittleLauncherFlyout.exe` is a tiny companion binary pinned to the taskbar. Clicking it sends a `PostMessage` to the main app to show the flyout, then exits. Because it launches on every click, startup latency is critical:
+`LittleLauncherFlyout.exe` is a tiny companion binary pinned to the taskbar. Clicking it sends a `PostMessage` to the main app to show the flyout, then exits. Run with `--item {index} --token {n}` it posts "launch this entry" instead, which is what every taskbar jump list task does (see below). Because it launches on every click, startup latency is critical:
 
 - **Release builds** use Native AOT (`dotnet publish`) producing a single ~1.6 MB native binary with no .NET runtime dependency.
 - **Debug builds** copy the framework-dependent output for fast iteration (startup is slower but build is faster).
@@ -395,7 +395,46 @@ For pinned taskbar launches, `MainWindow` now tries to resolve the actual taskba
 
 ### Companion exe deployment
 
-At startup, `EnsureFlyoutShortcut()` copies the companion exe to the external helper directory returned by `GetPhysicalAppDataDir()` and writes a `main-exe-path.txt` breadcrumb alongside it so the helper can launch the main app with `--silent` if `FindWindow` fails. In packaged builds it also mirrors the helper into the real shared `%AppData%\\LittleLauncher\\` path so old unpackaged launcher pins stop cold-starting a stale debug or portable build after an install-type switch. No Start Menu flyout shortcut is created anymore.
+At startup, `EnsureFlyoutShortcut()` copies the companion exe to the external helper directory returned by `GetPhysicalAppDataDir()` and writes a `main-exe-path.txt` breadcrumb alongside it so the helper can launch the main app with `--silent` if `FindWindow` fails. No Start Menu flyout shortcut is created anymore.
+
+**There is exactly one destination, and a second one cannot be added.** This used to write another copy into the real shared `%AppData%\LittleLauncher\`, so that pins made by an unpackaged build would stop cold-starting the exe they were pinned against. Under MSIX that copy never happened: a write to `C:\Users\{user}\AppData\Roaming\LittleLauncher\` from a process with package identity is redirected into the package's `LocalCache\Roaming\LittleLauncher\`, and reads from inside the package see it at the path that was asked for, so every call reported success while the file stayed invisible to everything outside. Measured directly, and visible on any machine that ran an unpackaged build first: that folder still holds a frozen snapshot of it, its own `settings.json` and all. The destination that survives is genuinely unredirected: `GetPhysicalAppDataDir()` resolves through `ApplicationData.Current.RoamingFolder.Path` to the package's `RoamingState`, which is not filtered, and is why shortcuts and jump list tasks can be pointed at it at all.
+
+Start Menu shortcuts are not a counter-example. They do land in the real profile, because MSIX exempts the shell's own folders from redirection so that desktop apps can still create shortcuts; ordinary application folders under AppData get no such exemption. An old unpackaged pin is therefore beyond reach (writing, deleting and replacing that file all redirect identically), and re-pinning the launcher is the fix. Any pin made by a current build already names the one directory above.
+
+## Taskbar jump lists
+
+Right-clicking a pinned launcher's taskbar button shows that launcher's own contents: its items,
+flattened as the flyout flattens them, or its bookmarks for a web launcher.
+`Services/JumpListService.cs` publishes them.
+
+- **A jump list belongs to an AppUserModelID, not to a process.** That is what allows one list per
+  launcher from a single app: `Launcher.PinAumid` records the identity minted when the launcher was
+  pinned, and the shell is told which one is being published for, one launcher at a time. For
+  launchers pinned before the app recorded it, the taskbar's own pin store
+  (`HKCU\...\Explorer\Taskband`) is read as a fallback. **That fallback is for publishing only** -
+  it is deliberately never written back to `PinAumid`, because that value is also read as *window*
+  identity, and a window carrying an AUMID that does not match its pin raises a second taskbar
+  button beside it.
+- **Nothing published can be a live menu.** The shell never tells an app its jump list was opened,
+  so the list sits in the user's profile until republished. `SettingsManager.Saved` triggers a
+  debounced rebuild, skipped entirely when the resulting list is identical to the one already out
+  there - which is most saves.
+- **A task can only be a command line**, because it is a shell link. Each runs the companion exe
+  with the entry's position **and a token hashed from what the entry launches**. A published list is
+  a snapshot that can outlive an edit, so the token decides and the position only saves a search;
+  when neither finds the entry, the launcher is opened instead. Nothing ever launches whatever
+  happens to have taken that position.
+- **Publishing runs on a private STA thread**, from a snapshot taken on the UI thread. Rasterising
+  icons and talking to the shell is slow enough to be visible, and the launcher objects are
+  observable collections the UI thread is free to be editing.
+- **Below a separator, the launcher's own commands.** `Models/LauncherActions.cs` numbers them, because a task can only be a command line and the number travels through the companion exe, which forwards it without knowing what it means. Never renumber one: a published list outlives the version that wrote it. The commands are reserved out of the slot budget first and the entries take what is left, since the entries are a sample of something the button already shows in full.
+- **The menu is headed "Tasks", and that is forced.** Naming it needs a custom category, a category
+  needs destinations the app is registered to open, and a per-launcher AUMID is registered for
+  nothing (it is re-minted on every pin). `AppendCategory` returns `E_ACCESSDENIED`; the publish
+  attempts it, falls back to user tasks, and remembers the refusal. The same constraint is why no
+  entry offers "Remove from this list".
+- Web launchers add two rules of their own - a single-address launcher publishes nothing, and a
+  bookmark opens in a new foreground tab. See [.claude/docs/web-launchers.md](.claude/docs/web-launchers.md).
 
 ## Distribution
 

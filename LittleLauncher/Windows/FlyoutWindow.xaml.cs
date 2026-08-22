@@ -1,4 +1,4 @@
-using LittleLauncher.Classes;
+﻿using LittleLauncher.Classes;
 using LittleLauncher.Classes.Settings;
 using LittleLauncher.Controls;
 using LittleLauncher.Models;
@@ -2201,6 +2201,19 @@ public partial class FlyoutWindow : Window
         HideFlyout();
         _lastDismissed = DateTime.UtcNow;
 
+        Launch(item);
+    }
+
+    /// <summary>
+    /// Runs one item, whatever kind it is, with no flyout involved.
+    /// </summary>
+    /// <remarks>
+    /// Static because the flyout is not always the caller: a task on a pinned taskbar button
+    /// launches an item without anything being on screen, and duplicating this switch is how the
+    /// two would come to disagree about, say, what a <c>.bat</c> or a folder means.
+    /// </remarks>
+    internal static void Launch(LauncherItem item)
+    {
         try
         {
             if (item.IsWebsite || item.Path.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
@@ -2267,12 +2280,59 @@ public partial class FlyoutWindow : Window
                 }
                 Process.Start(psi);
             }
-            Logger.Info($"Launched from flyout: {item.Name} ({item.Path})");
+            Logger.Info($"Launched item: {item.Name} ({item.Path})");
         }
         catch (Exception ex)
         {
-            Logger.Error(ex, $"Failed to launch from flyout: {item.Name} ({item.Path})");
+            Logger.Error(ex, $"Failed to launch item: {item.Name} ({item.Path})");
         }
+    }
+
+    /// <summary>
+    /// Runs the item a taskbar jump list task names, and reports whether it found one.
+    /// </summary>
+    /// <remarks>
+    /// <para>The position is only a hint. It is where the item sat when the list was published,
+    /// which is right almost every time and wrong exactly when it matters - after an edit, a
+    /// drag, or a sync that brought another machine's items in. So the token has the final say:
+    /// it identifies the item by what it launches, and the position merely saves searching for
+    /// it.</para>
+    /// <para>Returning false rather than guessing is deliberate. Launching whatever now occupies
+    /// that position would be the one outcome worse than doing nothing, and the caller has a
+    /// better answer anyway - see <see cref="LauncherPanels.LaunchFromJumpList"/>.</para>
+    /// </remarks>
+    internal static bool LaunchItemFromJumpList(Launcher launcher, int index, int token)
+    {
+        var target = ResolveJumpListItem(launcher, index, token);
+        if (target == null)
+        {
+            Logger.Info($"Jump list task no longer matches an item in {launcher.Name}; opening the launcher instead");
+            return false;
+        }
+
+        Launch(target);
+        return true;
+    }
+
+    /// <summary>
+    /// The item a jump list entry stands for, or null when the launcher no longer has it.
+    /// </summary>
+    /// <remarks>
+    /// The position is only a hint. It is where the item sat when the list was published, which is
+    /// right almost every time and wrong exactly when it matters - after an edit, a drag, or a sync
+    /// that brought another machine's items in. So the token has the final say: it identifies the
+    /// item by what it launches, and the position merely saves searching for it. Guessing when
+    /// neither matches would mean launching, or deleting, whatever now occupies that position.
+    /// </remarks>
+    private static LauncherItem? ResolveJumpListItem(Launcher launcher, int index, int token)
+    {
+        var items = new List<LauncherItem>();
+        MainWindow.CollectLaunchableItems(launcher.Items, items, int.MaxValue);
+
+        if (index >= 0 && index < items.Count && JumpListService.ItemToken(items[index]) == token)
+            return items[index];
+
+        return items.FirstOrDefault(i => JumpListService.ItemToken(i) == token);
     }
 
     /// <summary>

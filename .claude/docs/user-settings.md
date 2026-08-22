@@ -1,4 +1,4 @@
-> **Scope:** Use when adding or modifying observable settings properties in UserSettings.cs, Launcher model properties, handling property change side-effects, or extending the serialized settings schema.
+﻿> **Scope:** Use when adding or modifying observable settings properties in UserSettings.cs, Launcher model properties, handling property change side-effects, or extending the serialized settings schema.
 > **Governs:** `**/ViewModels/UserSettings*.cs`, `**/Models/Launcher.cs`.
 
 # UserSettings Conventions
@@ -107,7 +107,32 @@ model default, which would have flipped it on for every existing launcher.
 ### Web launcher properties (all `[ObservableProperty]`)
 
 - `Kind` (`int`) — `LauncherKinds.Items` (0, default) or `LauncherKinds.Web` (1)
-- `WebUrl` (`string`) — the page a web launcher opens
+- `WebUrl` (`string`) — **legacy**, read once by `MigrateWebModel` and cleared; the page a web
+  launcher opened before the bookmark model
+- `WebBookmarks` (`ObservableCollection<WebBookmark>`) — the bar. A `WebBookmark` with `IsFolder`
+  (`[ObservableProperty]`) is a folder and holds `Children` (a plain property, like
+  `LauncherItem.Children`); folders nest without limit and `Flatten()` is how a surface with no
+  nesting of its own reads them. `CopyInto` copies the collection wholesale, so nesting travels
+  without further work
+- `WebShowBookmarkBar` (`bool?`) — **nullable on purpose**, because three states are needed and a
+  `bool` has two: on, off, and never chosen. `WhenWritingDefault` omits only `null`, so an explicit
+  `false` is written and survives, and `null` falls back to the old rule (a second bookmark shows the
+  bar). Read it through `Launcher.ShowsBookmarkBar`, never directly. **A plain `bool` plus a
+  one-time seeding pass was tried first and is the thing this replaces** — the seed ran where the
+  bookmarks were not in hand, and its "already migrated" marker travelled over sync, so a download
+  from a machine that had never seen the setting reset both and switched a bar off again on every
+  restart. A nullable needs no marker and no seeding pass, and cannot be undone by a payload written
+  before it existed. Do not read `ShowsBookmarkBar` to mean "this launcher holds several sites" —
+  that is `Launcher.HoldsSeveralSites`, and the two were one fact only while the bar appeared on its
+  own at the second bookmark
+- `WebHomeUrl` (`string`) — the page a web launcher opens, as a setting of its own rather than a
+  position in the bar. Empty falls back to the first bookmark, which is what every file written
+  before this existed relies on, so the CLR default is the compatible direction under
+  `WhenWritingDefault`. Read it through `Launcher.WebAddress`, never directly.
+  **An earlier version made the address *be* the first bookmark and this reverses that** — see
+  the remarks on `WebAddress` for why the original objection does not apply to a home URL, and
+  note that a bookmark holding the same URL is an ordinary bookmark that nothing tries to merge
+  or notice
 - `WebFlyoutWidth` / `WebFlyoutHeight` (`int`, DIPs) — **0 means unset**; read them through
   `ResolvedWebFlyoutWidth` / `ResolvedWebFlyoutHeight`
 - `WebZoomPercent` (`int`) — 0 means 100%; read `ResolvedWebZoomPercent` (to show or step it) or

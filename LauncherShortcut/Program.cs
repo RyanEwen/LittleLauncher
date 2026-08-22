@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace LauncherShortcut;
@@ -10,6 +10,11 @@ namespace LauncherShortcut;
 ///                a registered window message, passing the cursor position, then exits.
 ///                If Little Launcher is not running, launches it first, waits for its
 ///                window to appear, then signals the flyout.
+/// --item mode:   Signals the main app to launch one entry of the launcher - an item, or a
+///                bookmark for a web launcher - rather than showing the flyout. This is what a
+///                task on the pinned button's jump list runs; the app publishes those tasks and
+///                bakes the position and token into each one. Same "start the app if it is not
+///                running" path as the default mode.
 /// --pin mode:    Keeps the process alive with a MessageBox dialog so the user can
 ///                right-click the taskbar icon and choose "Pin to taskbar".
 ///
@@ -31,6 +36,12 @@ namespace LauncherShortcut;
 /// Arguments:
 ///   --launcher {guid}  Target launcher ID
 ///   --name {name}      Launcher display name (used for pin title: "Little Launcher - {name}")
+///   --item {index}     Launch this entry of the launcher instead of showing the flyout
+///   --token {n}        Identifies what was published at that position, so an edited launcher
+///                      cannot have the wrong entry launched out from under a stale jump list
+///   --action {n}       Run one of the launcher's own commands (settings, edit, open in browser).
+///                      The number is meaningless here and is forwarded as-is; Models/
+///                      LauncherActions.cs on the app side is the only place it means anything.
 ///   --pin              Show the MessageBox for pin-to-taskbar flow
 ///   --layout {guid}    Legacy alias for --launcher
 /// </summary>
@@ -178,6 +189,9 @@ static class Program
         string? launcherName = null;
         string? explicitIconPath = null;
         string? explicitAumid = null;
+        int itemIndex = -1;
+        int itemToken = 0;
+        int launcherAction = 0;
         for (int i = 0; i < args.Length - 1; i++)
         {
             if (args[i] == "--launcher" || args[i] == "--layout")
@@ -188,6 +202,12 @@ static class Program
                 explicitIconPath ??= args[i + 1];
             else if (args[i] == "--aumid")
                 explicitAumid ??= args[i + 1];
+            else if (args[i] == "--item" && itemIndex < 0)
+                _ = int.TryParse(args[i + 1], out itemIndex);
+            else if (args[i] == "--token")
+                _ = int.TryParse(args[i + 1], out itemToken);
+            else if (args[i] == "--action" && launcherAction == 0)
+                _ = int.TryParse(args[i + 1], out launcherAction);
         }
 
         if (args.Length > 0 && args[0] == "--pin")
@@ -322,7 +342,23 @@ static class Program
                 return;
         }
 
-        // App is running — signal it to show the flyout.
+        // App is running — signal it. A jump list task names an entry to launch; everything else
+        // means "show the flyout", and the two are different messages because their two words of
+        // payload mean different things.
+        if (itemIndex >= 0 && !string.IsNullOrEmpty(launcherId))
+        {
+            var launchMsg = (int)RegisterWindowMessage($"LittleLauncher_LaunchItem_{launcherId}");
+            PostMessage(target, launchMsg, itemIndex, itemToken);
+            return;
+        }
+
+        if (launcherAction > 0 && !string.IsNullOrEmpty(launcherId))
+        {
+            var actionMsg = (int)RegisterWindowMessage($"LittleLauncher_LauncherAction_{launcherId}");
+            PostMessage(target, actionMsg, launcherAction, 0);
+            return;
+        }
+
         GetCursorPos(out var pt);
         // Use a per-launcher message name if a launcher ID was specified,
         // otherwise use the legacy message for backward compat.

@@ -1,4 +1,4 @@
-// Copyright © 2024-2026 The Little Launcher Authors
+﻿// Copyright © 2024-2026 The Little Launcher Authors
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 using LittleLauncher.Models;
@@ -35,6 +35,15 @@ public static class SettingsManager
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault,
         PropertyNamingPolicy = null, // PascalCase to match property names
     };
+
+    /// <summary>Raised after settings have been written to disk.</summary>
+    /// <remarks>
+    /// An event rather than a call into whatever needs to know, so the dependency points the way
+    /// it should: this class knows nothing about the surfaces that have to be rebuilt when
+    /// something changes, and they subscribe to it. First subscriber is
+    /// <c>Services.JumpListService</c>, which republishes the taskbar jump lists.
+    /// </remarks>
+    internal static event Action? Saved;
 
     private static UserSettings _current = new();
 
@@ -210,6 +219,8 @@ public static class SettingsManager
 
             string json = JsonSerializer.Serialize(_current, JsonOptions);
             File.WriteAllText(filePath, json);
+
+            Saved?.Invoke();
         }
         catch (UnauthorizedAccessException ex)
         {

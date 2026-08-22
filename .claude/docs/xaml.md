@@ -1,4 +1,4 @@
-> **Scope:** Use when editing XAML files for WinUI 3 controls, Fluent Design, NavigationView pages, or resource dictionaries. Covers WinUI 3 control conventions, resource localization, and Mica/Acrylic backdrop patterns.
+﻿> **Scope:** Use when editing XAML files for WinUI 3 controls, Fluent Design, NavigationView pages, or resource dictionaries. Covers WinUI 3 control conventions, resource localization, and Mica/Acrylic backdrop patterns.
 > **Governs:** `**/*.xaml` (all XAML across the solution).
 
 # WinUI 3 XAML Conventions
@@ -142,6 +142,21 @@ Two more, for menus whose rows answer more than a plain click:
   submenu comes up against bounds the row does not have yet, in the corner of the window, and
   afterwards neither menu can be light-dismissed. A submenu only opens on hover or a click, so a
   gesture that has to *show* something immediately cannot be built out of one.
+
+## A popup cannot receive a drag
+
+Menus and flyouts escape a small window because they are hosted outside it (`ShouldConstrainToRootBounds
+= false`, above). That hosting is exactly why **a `Popup` can never be a drop target**: XAML registers
+the *window* for drag-and-drop, so a popup renders, hit-tests and clicks normally while its `DragOver`
+never fires once. Measured twice on the web flyout's bookmark folders, with light dismiss on and off;
+dragging *out* of the popup worked throughout, because the receiving element was in the window's tree.
+
+A `MenuFlyoutItem` cannot be a drag *source* either - it is not an element `CanDrag` applies to, and
+menu rows mark every pointer press handled.
+
+So anything that must be dragged into lives in the window's own tree, as an overlay spanning the root
+grid, and is clamped to the window in exchange. Anything that merely has to be clicked can stay a
+popup and overflow. `WebFlyoutWindow.FolderPopup.cs` records the whole chain.
 
 ## Expander rows for on/off + settings
 

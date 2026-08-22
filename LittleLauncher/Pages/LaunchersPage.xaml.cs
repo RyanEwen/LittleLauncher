@@ -614,6 +614,10 @@ public sealed partial class LaunchersPage : Page
         // nothing can identify it again. After Dispose, so no browser still has its files open.
         Services.WebProfileCleanupService.DeleteFor(launcher);
 
+        // Its taskbar jump list too. A refresh cannot reach it once the launcher is gone: the
+        // list is filed under an AUMID only the launcher knew.
+        Services.JumpListService.Remove(launcher);
+
         SettingsManager.Current.Launchers.Remove(launcher);
         SettingsManager.SaveSettings();
 

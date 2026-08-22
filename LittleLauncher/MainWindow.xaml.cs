@@ -1,4 +1,4 @@
-using LittleLauncher.Classes;
+﻿using LittleLauncher.Classes;
 using LittleLauncher.Classes.Settings;
 using LittleLauncher.Models;
 using LittleLauncher.Windows;
@@ -107,17 +107,6 @@ public sealed partial class MainWindow : Window
             "LittleLauncher");
     }
 
-    /// <summary>
-    /// Returns the real, shared %AppData% path used by unpackaged builds.
-    /// In packaged builds this bypasses MSIX redirection so we can keep old
-    /// unpackaged launcher pins pointing at a current companion exe.
-    /// </summary>
-    internal static string GetLegacySharedAppDataDir()
-    {
-        string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return Path.Combine(userProfile, "AppData", "Roaming", "LittleLauncher");
-    }
-
 
 
     /// <summary>Holds the Win32 HICON state for one launcher's tray icon.</summary>
@@ -133,6 +122,23 @@ public sealed partial class MainWindow : Window
 
     /// <summary>Per-launcher registered window message IDs (key = Launcher.Id).</summary>
     private readonly Dictionary<string, int> _wmShowFlyoutPerLauncher = new();
+
+    /// <summary>
+    /// Per-launcher "launch one of my entries" message IDs (key = Launcher.Id), sent by the
+    /// companion exe when a taskbar jump list task is clicked.
+    /// </summary>
+    /// <remarks>
+    /// A separate message rather than a parameter on the show-flyout one, because the two carry
+    /// entirely different payloads: that one carries the anchor point the flyout opens at, and
+    /// this one carries which entry to launch. A message has only two words to say it in.
+    /// </remarks>
+    private readonly Dictionary<string, int> _wmLaunchItemPerLauncher = new();
+
+    /// <summary>
+    /// Per-launcher "run one of my commands" message IDs (key = Launcher.Id), sent by the companion
+    /// exe for the entries below the separator on a taskbar jump list.
+    /// </summary>
+    private readonly Dictionary<string, int> _wmLauncherActionPerLauncher = new();
     private static int _wmShowSettings;
     private int _wmTrayCallback;
     private IntPtr _hwnd;
@@ -218,6 +224,10 @@ public sealed partial class MainWindow : Window
 
         CleanUpStaleIconFiles();
         LauncherPanels.WarmUp(this, SettingsManager.Current.Launchers);
+
+        // After EnsureFlyoutShortcut too: every jump list task runs the companion exe, so there
+        // is nothing to publish until it is on disk.
+        Services.JumpListService.Initialize(DispatcherQueue);
         _ = StartAutoSyncAsync();
         _ = FetchMissingIconsOnStartupAsync();
 
@@ -400,6 +410,13 @@ public sealed partial class MainWindow : Window
         int wmFlyout = RegisterWindowMessage($"LittleLauncher_ShowFlyout_{launcher.Id}");
         _wmShowFlyoutPerLauncher[launcher.Id] = wmFlyout;
 
+        // And the two a jump list task on this launcher's pinned button sends.
+        int wmLaunchItem = RegisterWindowMessage($"LittleLauncher_LaunchItem_{launcher.Id}");
+        _wmLaunchItemPerLauncher[launcher.Id] = wmLaunchItem;
+
+        int wmLauncherAction = RegisterWindowMessage($"LittleLauncher_LauncherAction_{launcher.Id}");
+        _wmLauncherActionPerLauncher[launcher.Id] = wmLauncherAction;
+
         uint uid = _nextIconId++;
         Guid trayGuid = GetTrayIconGuid(launcher.Id);
         var icon = ResolveTrayIcon(launcher);
@@ -535,6 +552,8 @@ public sealed partial class MainWindow : Window
                 entry.Icon?.Dispose();
                 _trayIcons.Remove(id);
                 _wmShowFlyoutPerLauncher.Remove(id);
+                _wmLaunchItemPerLauncher.Remove(id);
+                _wmLauncherActionPerLauncher.Remove(id);
             }
         }
 
@@ -734,6 +753,52 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
+    /// Rasterises one launcher item's icon at the requested size: its cached image if it has one,
+    /// otherwise its glyph rendered in its colour. Returns null when the item has neither.
+    /// </summary>
+    /// <remarks>
+    /// <para>Shared by the composite tray icon and the taskbar jump list, which need the same
+    /// answer at different sizes. It deliberately takes the item's icon fields rather than the
+    /// item: the jump list resolves icons on a background thread from a snapshot, and must not
+    /// touch the observable objects the UI thread is free to be editing.</para>
+    /// <para><paramref name="dark"/> is passed in rather than read here for the same reason -
+    /// <c>ThemeManager</c> is the UI thread's to ask.</para>
+    /// </remarks>
+    internal static System.Drawing.Bitmap? ResolveItemIconBitmap(
+        string iconPath, string iconGlyph, string iconColor, int size, bool dark)
+    {
+        try
+        {
+            if (!string.IsNullOrEmpty(iconPath) && File.Exists(iconPath))
+            {
+                if (iconPath.EndsWith(".ico", StringComparison.OrdinalIgnoreCase))
+                {
+                    using var ico = new System.Drawing.Icon(iconPath, size, size);
+                    using var icoBitmap = ico.ToBitmap();
+                    return new System.Drawing.Bitmap(icoBitmap, size, size);
+                }
+
+                using var orig = new System.Drawing.Bitmap(iconPath);
+                return new System.Drawing.Bitmap(orig, size, size);
+            }
+
+            if (!string.IsNullOrEmpty(iconGlyph))
+            {
+                var fg = !string.IsNullOrEmpty(iconColor)
+                    ? ParseHexColor(iconColor, dark ? System.Drawing.Color.White : System.Drawing.Color.Black)
+                    : (dark ? System.Drawing.Color.White : System.Drawing.Color.Black);
+                string fontName = Classes.IconGallery.IsFluentGlyph(iconGlyph)
+                    ? "Segoe Fluent Icons"
+                    : "Segoe UI Emoji";
+                return RenderGlyphBitmap(iconGlyph[0], fg, size, size * 0.8f, fontName);
+            }
+        }
+        catch { /* best-effort: an unreadable icon is not a reason to fail the whole surface */ }
+
+        return null;
+    }
+
+    /// <summary>
     /// Renders a 2×2 composite icon from the first 4 launchable items, similar to
     /// how Windows 11 Start menu shows folder/group previews.
     /// </summary>
@@ -772,35 +837,7 @@ public sealed partial class MainWindow : Window
             var item = items[i];
             var pos = positions[i];
 
-            // Try to load the item's icon
-            System.Drawing.Bitmap? subIcon = null;
-            try
-            {
-                if (!string.IsNullOrEmpty(item.IconPath) && File.Exists(item.IconPath))
-                {
-                    if (item.IconPath.EndsWith(".ico", StringComparison.OrdinalIgnoreCase))
-                    {
-                        using var ico = new System.Drawing.Icon(item.IconPath, 64, 64);
-                        subIcon = new System.Drawing.Bitmap(ico.ToBitmap(), cellSize, cellSize);
-                    }
-                    else
-                    {
-                        using var orig = new System.Drawing.Bitmap(item.IconPath);
-                        subIcon = new System.Drawing.Bitmap(orig, cellSize, cellSize);
-                    }
-                }
-                else if (!string.IsNullOrEmpty(item.IconGlyph) && item.IconGlyph.Length > 0)
-                {
-                    var fg = !string.IsNullOrEmpty(item.IconColor)
-                        ? ParseHexColor(item.IconColor, dark ? System.Drawing.Color.White : System.Drawing.Color.Black)
-                        : (dark ? System.Drawing.Color.White : System.Drawing.Color.Black);
-                    string fontName = Classes.IconGallery.IsFluentGlyph(item.IconGlyph)
-                        ? "Segoe Fluent Icons"
-                        : "Segoe UI Emoji";
-                    subIcon = RenderGlyphBitmap(item.IconGlyph[0], fg, cellSize, cellSize * 0.8f, fontName);
-                }
-            }
-            catch { /* best-effort */ }
+            var subIcon = ResolveItemIconBitmap(item.IconPath, item.IconGlyph, item.IconColor, cellSize, dark);
 
             if (subIcon == null) continue;
 
@@ -820,7 +857,7 @@ public sealed partial class MainWindow : Window
     /// Collects the first N launchable (non-group, non-heading, non-column-break) items,
     /// flattening groups.
     /// </summary>
-    private static void CollectLaunchableItems(IEnumerable<LauncherItem> source, List<LauncherItem> result, int max)
+    internal static void CollectLaunchableItems(IEnumerable<LauncherItem> source, List<LauncherItem> result, int max)
     {
         foreach (var item in source)
         {
@@ -923,7 +960,7 @@ public sealed partial class MainWindow : Window
     /// Writing these bytes directly to disk avoids System.Drawing.Icon.Save() which
     /// is known to lose multi-resolution data on .NET.
     /// </summary>
-    private static byte[] BitmapToIcoBytes(System.Drawing.Bitmap bitmap)
+    internal static byte[] BitmapToIcoBytes(System.Drawing.Bitmap bitmap)
     {
         int[] sizes = [16, 24, 32, 48, 64, 256];
         byte[][] pngEntries = new byte[sizes.Length][];
@@ -1728,6 +1765,41 @@ public sealed partial class MainWindow : Window
             }
         }
 
+        // A jump list task on a pinned taskbar button. wParam is the entry's position in the
+        // published list and lParam the token identifying what was published there; both are
+        // needed because the list is a snapshot that may predate an edit.
+        foreach (var (launcherId, wmLaunchItem) in _wmLaunchItemPerLauncher)
+        {
+            if ((int)msg == wmLaunchItem && wmLaunchItem != 0)
+            {
+                int index = (int)wParam;
+                int token = (int)lParam;
+                var targetId = launcherId;
+
+                // The cursor is over the jump list, which is over the taskbar button - close
+                // enough to anchor a panel that has to open anyway (a web launcher's bookmark
+                // needs its window), and the same resolution the pinned click uses.
+                GetCursorPos(out var cursor);
+                TryResolveLauncherAnchorPoint(targetId, cursor.X, cursor.Y, out int anchorX, out int anchorY);
+
+                DispatcherQueue.TryEnqueue(() =>
+                    LauncherPanels.LaunchFromJumpList(this, targetId, index, token, anchorX, anchorY));
+                return IntPtr.Zero;
+            }
+        }
+
+        // One of the launcher's own commands, from below the separator on its jump list.
+        foreach (var (launcherId, wmLauncherAction) in _wmLauncherActionPerLauncher)
+        {
+            if ((int)msg == wmLauncherAction && wmLauncherAction != 0)
+            {
+                int action = (int)wParam;
+                var targetId = launcherId;
+                DispatcherQueue.TryEnqueue(() => LauncherPanels.RunLauncherAction(this, targetId, action));
+                return IntPtr.Zero;
+            }
+        }
+
         if ((int)msg == _wmShowSettings && _wmShowSettings != 0)
         {
             DispatcherQueue.TryEnqueue(() => SettingsWindow.ShowInstance(this));
@@ -1880,13 +1952,59 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Copies the companion flyout exe to %AppData%\LittleLauncher\ so it has
-    /// a consistent, non-packaged location for both build types (portable and
-    /// MSIX). In packaged builds, also mirrors the helper into the legacy
-    /// shared Roaming path so old unpackaged launcher pins stop cold-starting a
-    /// stale debug or portable build. Also writes a main-exe-path.txt breadcrumb and
-    /// cleans up legacy Start Menu shortcuts from previous versions.
+    /// Copies the companion flyout exe to the app data directory so it has a consistent location
+    /// external processes can be pointed at, writes the <c>main-exe-path.txt</c> breadcrumb beside
+    /// it, and cleans up legacy Start Menu shortcuts from previous versions.
     /// </summary>
+    /// <remarks>
+    /// <para><b>One destination, and it has to be <see cref="GetPhysicalAppDataDir"/>.</b> This used
+    /// to write a second copy into the real shared <c>%AppData%\LittleLauncher\</c>, so that pins
+    /// made by an unpackaged build would stop cold-starting whatever exe they were pinned against.
+    /// <b>Under MSIX that copy never happened</b>, and it failed in the worst possible way: silently
+    /// and with every call reporting success.</para>
+    /// <para>Measured, because the theory alone is not obvious enough to keep anyone from adding it
+    /// back. A file written to <c>C:\Users\{user}\AppData\Roaming\LittleLauncher\</c> by a
+    /// process running under the package identity lands in the package's
+    /// <c>LocalCache\Roaming\LittleLauncher\</c>, and reads from inside the package see it back at
+    /// the path that was asked for, so nothing looks wrong from in here. From outside it is not
+    /// there, and an external process pointed at the shared path finds whatever an
+    /// <em>unpackaged</em> build left behind. On the dev machine that was a complete frozen snapshot
+    /// of one: its own settings.json, logs, icons, and a breadcrumb naming a debug build in the
+    /// source tree.</para>
+    /// <para><b>The surviving destination is genuinely unredirected, which is the distinction worth
+    /// keeping straight.</b> <see cref="GetPhysicalAppDataDir"/> resolves through
+    /// <c>ApplicationData.Current.RoamingFolder.Path</c> to the package's <c>RoamingState</c>, and
+    /// writes there are not filtered - that is the whole reason it exists, and why shortcuts and
+    /// jump list tasks can be pointed at it. So the two targets were never the same directory: they
+    /// were the real one, and a third one nothing outside the package can find.</para>
+    /// <para><b>Start Menu shortcuts are not a counter-example.</b> Those do land in the real profile
+    /// (see <see cref="GetPhysicalStartMenuProgramsDir"/>) because MSIX excludes the shell's own
+    /// folders from redirection so that desktop apps can still create shortcuts. Ordinary
+    /// application folders under AppData get no such exemption.</para>
+    /// <para>So an old unpackaged pin is left pointing at whatever it was pinned against, and
+    /// nothing this process can do reaches it: writing, deleting and replacing that file are all
+    /// redirected identically. Re-pinning the launcher is the fix, and a pin made by any current
+    /// build already names this directory.</para>
+    /// </remarks>
+    /// <summary>
+    /// The companion exe every pin, Start Menu shortcut and jump list task runs.
+    /// </summary>
+    /// <remarks>
+    /// <para>The AppData copy first, because that is the one <see cref="EnsureFlyoutShortcut"/>
+    /// deploys and the one a pin's relaunch command already names: a portable folder can be moved
+    /// or deleted, and under MSIX the install directory is not a path an external process should
+    /// be pointed at. The build output is the fallback for a first run that has not deployed yet,
+    /// and for a developer running straight out of bin.</para>
+    /// <para>Callers must still check it exists. It is a path, not a promise.</para>
+    /// </remarks>
+    internal static string GetFlyoutCompanionPath()
+    {
+        string deployed = Path.Combine(GetPhysicalAppDataDir(), "LittleLauncherFlyout.exe");
+        return File.Exists(deployed)
+            ? deployed
+            : Path.Combine(AppContext.BaseDirectory, "LittleLauncherFlyout.exe");
+    }
+
     private static void EnsureFlyoutShortcut()
     {
         try
@@ -1898,28 +2016,26 @@ public sealed partial class MainWindow : Window
             string mainExePath = Environment.ProcessPath ?? "";
             string baseDir = AppDomain.CurrentDomain.BaseDirectory;
 
-            foreach (string targetDir in GetFlyoutCompanionTargetDirs())
+            string targetDir = GetPhysicalAppDataDir();
+            Directory.CreateDirectory(targetDir);
+
+            string destExe = Path.Combine(targetDir, "LittleLauncherFlyout.exe");
+            File.Copy(sourceExe, destExe, overwrite: true);
+
+            // In debug (framework-dependent) builds, the companion exe also
+            // needs its .dll, .deps.json, and .runtimeconfig.json to run.
+            // Release builds are Native AOT single-file and don't need these.
+            foreach (var ext in new[] { ".dll", ".deps.json", ".runtimeconfig.json" })
             {
-                Directory.CreateDirectory(targetDir);
-
-                string destExe = Path.Combine(targetDir, "LittleLauncherFlyout.exe");
-                File.Copy(sourceExe, destExe, overwrite: true);
-
-                // In debug (framework-dependent) builds, the companion exe also
-                // needs its .dll, .deps.json, and .runtimeconfig.json to run.
-                // Release builds are Native AOT single-file and don't need these.
-                foreach (var ext in new[] { ".dll", ".deps.json", ".runtimeconfig.json" })
-                {
-                    string src = Path.Combine(baseDir, "LittleLauncherFlyout" + ext);
-                    if (File.Exists(src))
-                        File.Copy(src, Path.Combine(targetDir, "LittleLauncherFlyout" + ext), overwrite: true);
-                }
-
-                // Write a breadcrumb so the companion exe can launch the main app
-                // if it isn't running (FindWindow returns null).
-                if (!string.IsNullOrEmpty(mainExePath))
-                    File.WriteAllText(Path.Combine(targetDir, "main-exe-path.txt"), mainExePath);
+                string src = Path.Combine(baseDir, "LittleLauncherFlyout" + ext);
+                if (File.Exists(src))
+                    File.Copy(src, Path.Combine(targetDir, "LittleLauncherFlyout" + ext), overwrite: true);
             }
+
+            // Write a breadcrumb so the companion exe can launch the main app
+            // if it isn't running (FindWindow returns null).
+            if (!string.IsNullOrEmpty(mainExePath))
+                File.WriteAllText(Path.Combine(targetDir, "main-exe-path.txt"), mainExePath);
 
             // Remove the old Start Menu shortcut (no longer created — the
             // pin-to-taskbar button in Settings handles pinning directly).
@@ -1932,18 +2048,6 @@ public sealed partial class MainWindow : Window
         catch (Exception ex)
         {
             Logger.Warn(ex, "Failed to create flyout shortcut");
-        }
-    }
-
-    private static IEnumerable<string> GetFlyoutCompanionTargetDirs()
-    {
-        yield return GetPhysicalAppDataDir();
-
-        if (IsPackaged)
-        {
-            string legacyDir = GetLegacySharedAppDataDir();
-            if (!string.Equals(legacyDir, GetPhysicalAppDataDir(), StringComparison.OrdinalIgnoreCase))
-                yield return legacyDir;
         }
     }
 

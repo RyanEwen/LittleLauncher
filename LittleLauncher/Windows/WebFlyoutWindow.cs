@@ -1,4 +1,4 @@
-// Copyright © 2024-2026 The Little Launcher Authors
+﻿// Copyright © 2024-2026 The Little Launcher Authors
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 using LittleLauncher.Classes;
@@ -83,7 +83,6 @@ public sealed partial class WebFlyoutWindow : Window
     private readonly Button _moreButton;
 
     /// <summary>Shows and hides the address bar. Its glyph reports which it will do.</summary>
-    private readonly Button _addressBarButton;
     private readonly Grid _addressBar;
     private readonly TextBox _addressBox;
     private readonly Grid _header;
@@ -91,6 +90,16 @@ public sealed partial class WebFlyoutWindow : Window
     /// <summary>The header's right-hand button strip, which extension buttons are inserted into.</summary>
     private readonly StackPanel _headerButtons;
     private readonly Grid _root;
+
+    /// <summary>
+    /// Where bookmark folder lists are drawn: a collapsed overlay spanning the whole window.
+    /// </summary>
+    /// <remarks>
+    /// In the window's own tree rather than in a popup, which is what lets a bookmark be dragged
+    /// between a folder and the bar at all - see WebFlyoutWindow.FolderPopup.cs. Collapsed unless a
+    /// folder is open, so it never takes a click that was meant for the page.
+    /// </remarks>
+    private Grid? _folderOverlay;
     private readonly Controls.OverflowStripPanel _bookmarkStrip;
     private readonly Grid _bookmarkBar;
     /// <summary>
@@ -204,6 +213,9 @@ public sealed partial class WebFlyoutWindow : Window
     /// restart, which would be a promise the resource model does not make.</para>
     /// </remarks>
     private string _rememberedUrl = "";
+
+    /// <summary>The in-flight <see cref="PrepareContentAsync"/> from the last show, if any.</summary>
+    private Task? _contentPreparation;
 
     /// <summary>
     /// Identifies the bookmark set the bar was last built from, so it is only rebuilt when the
@@ -349,12 +361,9 @@ public sealed partial class WebFlyoutWindow : Window
 
         var headerButtons = _headerButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
         headerButtons.Children.Add(_moreButton);
-        // The address bar's toggle, where Open in browser used to be. Open in browser stays in the
-        // "…" menu, which is where a once-in-a-while action belongs; showing the address is the
-        // per-moment decision, and the one worth a button — it is how you see where you are, type
-        // somewhere else, and reach the bookmark star.
-        _addressBarButton = BuildHeaderButton("", "Address bar", (_, _) => ToggleAddressBar());
-        headerButtons.Children.Add(_addressBarButton);
+        // No address-bar button: the "…" menu carries the toggle, and a header this narrow is
+        // better spent on the page controls. The menu was always the twin of this button anyway -
+        // one affordance beats two that differ only in where they live.
         // Pin sits beside maximize rather than at the head of the group: both decide how the
         // flyout behaves as a window, and the page actions between them made that read as two
         // unrelated buttons.
@@ -378,10 +387,20 @@ public sealed partial class WebFlyoutWindow : Window
         _forwardButton = BuildHeaderButton("\uE111", "Forward", (_, _) => GoForward());
         _forwardButton.IsEnabled = false;
 
+        // Home, beside the other page controls and for the same reason a browser has one: the
+        // launcher's home page is a setting of its own now, so it need not be in the bar and there
+        // may be no other way back to it. Alt+Home already did this (nav.home); a gesture with no
+        // visible control is a feature only its author knows about.
+        //
+        // U+E80F is Segoe Fluent's Home, escaped for the reason recorded on the back button.
+        var homeButton = BuildHeaderButton("\uE80F", "Home", (_, _) => GoHome());
+        homeButton.Margin = new Thickness(0, 0, 4, 0);
+
         var navButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 0, VerticalAlignment = VerticalAlignment.Center };
         navButtons.Children.Add(_backButton);
         navButtons.Children.Add(_forwardButton);
         navButtons.Children.Add(reloadButton);
+        navButtons.Children.Add(homeButton);
 
         var header = _header = new Grid
         {
@@ -607,6 +626,27 @@ public sealed partial class WebFlyoutWindow : Window
         root.Children.Add(chrome);
         root.Children.Add(_contentHost);
         root.Children.Add(_bookmarkBar);
+
+        // Above the content and the bar, below the grips in nothing but z-order: it is collapsed
+        // unless a folder is open, so it cannot intercept anything the rest of the time.
+        _folderOverlay = new Grid { Visibility = Visibility.Collapsed };
+        Grid.SetRow(_folderOverlay, 0);
+        Grid.SetRowSpan(_folderOverlay, 3);
+
+        // A backdrop of our own, because click-outside-to-close came free with a light-dismiss
+        // popup and does not with an overlay. First child, so it sits behind the lists.
+        var folderBackdrop = new Border
+        {
+            Background = new SolidColorBrush(global::Windows.UI.Color.FromArgb(1, 0, 0, 0)),
+        };
+        folderBackdrop.PointerPressed += (_, e) =>
+        {
+            e.Handled = true;
+            CloseFolderPopups(0);
+        };
+        _folderOverlay.Children.Add(folderBackdrop);
+
+        root.Children.Add(_folderOverlay);
         AddResizeGrips(root);
 
         // Escape closes the panel. This only fires while focus is on the XAML tree; once the
@@ -1546,8 +1586,10 @@ public sealed partial class WebFlyoutWindow : Window
         ApplyTaskbarButton(true);
 
         // Kicked off after the window is on screen so the panel (and its loading state) is
-        // visible while the browser starts, rather than the click appearing to do nothing.
-        _ = PrepareContentAsync();
+        // visible while the browser starts, rather than the click appearing to do nothing. Kept
+        // rather than discarded so anything that has to act on the tabs *after* the show settles
+        // has something to wait for - a jump list task opening a bookmark, so far.
+        _contentPreparation = PrepareContentAsync();
     }
 
     private void ShowWithoutAnimation(FlyoutPlacement placement)
@@ -1601,6 +1643,10 @@ public sealed partial class WebFlyoutWindow : Window
         // nothing is written to the profile, so the page is free to ask again on the next open.
         CancelPendingPermissions();
         StopForegroundWatch();
+
+        // Nothing else takes them down: a folder popup owns its own dismissal now that light
+        // dismiss is off, and one left open would outlive the window it hangs off.
+        CloseFolderPopups(0);
 
         _lastDismissed = DateTime.UtcNow;
         _animationVersion++;
@@ -2017,7 +2063,7 @@ public sealed partial class WebFlyoutWindow : Window
         await InstallNotificationBridgeAsync(webView.CoreWebView2);
         if (!_tabs.Contains(tab)) return null;
 
-        await InstallServiceWorkerBridgeAsync(webView.CoreWebView2);
+        await InstallServiceWorkerBridgeAsync(webView.CoreWebView2, tab);
         if (!_tabs.Contains(tab)) return null;
 
         // Keys the host owns rather than Chromium — see WebFlyoutWindow.Shortcuts.cs. Same
@@ -2349,6 +2395,21 @@ public sealed partial class WebFlyoutWindow : Window
             }
 
             string path = GetPageIconPath(_launcher.Id);
+
+            // The browser-tab favicon is the *worst* icon a page offers, and this event fires
+            // whenever the page changes it. Both halves of that matter here, and Discord is the
+            // case that shows why: its declared icon is 16px, which a tray icon and far more a
+            // taskbar pin upscale into a blur, and it swaps that icon for an unread-badge variant
+            // as messages arrive - so the launcher's identity flickered with the message count.
+            // Refusing to shrink fixes both: the high-resolution icon adopted from the manifest
+            // stands, and a status variant of the same small favicon can no longer take its place.
+            if (WouldShrinkIcon(buffer, path))
+            {
+                Logger.Debug("Keeping the larger stored icon for {Name} rather than the page's favicon",
+                    _launcher.Name);
+                return;
+            }
+
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
 
             // Written to a temporary file first: the tray icon pipeline reads this path, and a
@@ -2391,10 +2452,23 @@ public sealed partial class WebFlyoutWindow : Window
     /// chose, not one a page sent them to.
     /// </para>
     /// </remarks>
-    private void AdoptHighResPageIcon(CoreWebView2 core, JsonNode? message)
+    private void AdoptHighResPageIcon(WebTab tab, JsonNode? message)
     {
-        if (IsBarMode || !MayAdoptPageIcon(_launcher)) return;
-        if (TabFor(core) is not { HomeKey: not null }) return;
+        // Several sites, not "the bar is showing" - see Launcher.HoldsSeveralSites. A launcher
+        // holding one page still has a bar now, and adopting its icon is exactly right.
+        if (_launcher.HoldsSeveralSites || !MayAdoptPageIcon(_launcher))
+        {
+            Logger.Info("Declined a page icon for {Name}: severalSites={Several}, mayAdopt={May}",
+                _launcher.Name, _launcher.HoldsSeveralSites, MayAdoptPageIcon(_launcher));
+            return;
+        }
+
+        if (tab.HomeKey == null)
+        {
+            Logger.Info("Declined a page icon for {Name}: this is a link tab, not the launcher's own",
+                _launcher.Name);
+            return;
+        }
 
         string dataUrl = message?["icon"]?.GetValue<string>() ?? "";
         int comma = dataUrl.IndexOf(',', StringComparison.Ordinal);
@@ -2402,10 +2476,25 @@ public sealed partial class WebFlyoutWindow : Window
 
         try
         {
-            byte[] bytes = Convert.FromBase64String(dataUrl[(comma + 1)..]);
-            if (bytes.Length == 0) return;
+            byte[] raw = Convert.FromBase64String(dataUrl[(comma + 1)..]);
+            if (raw.Length == 0) return;
 
-            string path = GetPageIconPath(_launcher.Id);
+            // What the page declared is not necessarily what anything downstream can read. An .ico
+            // has to be unpacked to its largest frame - System.Drawing dispatches on the file
+            // extension, so ICO bytes in a file named .png would be decoded as a bitmap and give
+            // back whichever frame came first, usually the 16px one.
+            byte[]? bytes = NormalizeAdoptedIcon(raw);
+            if (bytes == null) return;
+
+            string iconPath = GetPageIconPath(_launcher.Id);
+            if (WouldShrinkIcon(bytes, iconPath))
+            {
+                Logger.Debug("Keeping the larger stored icon for {Name} rather than the page's",
+                    _launcher.Name);
+                return;
+            }
+
+            string path = iconPath;
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
 
             // Written aside first, as the favicon path does: the tray pipeline reads this file, and
@@ -2430,6 +2519,167 @@ public sealed partial class WebFlyoutWindow : Window
             Logger.Debug(ex, "Adopting a high-resolution page icon failed for {Name}", _launcher.Name);
         }
     }
+
+    /// <summary>
+    /// Re-encodes an adopted icon as a PNG of its largest available image, or null if it cannot be
+    /// read at all.
+    /// </summary>
+    /// <remarks>
+    /// <para>The file this ends up in is named <c>.png</c> and every consumer dispatches on that
+    /// extension, so anything else stored there is a decode waiting to go wrong. An <c>.ico</c> is
+    /// the case that matters: it is a container, <c>System.Drawing.Bitmap</c> hands back an
+    /// arbitrary frame from one, and <c>System.Drawing.Icon</c> asked for 256 hands back the
+    /// largest - which for a site like Discord is the whole point of fetching it.</para>
+    /// <para>Anything already a plain raster is re-encoded too rather than passed through. It costs
+    /// one decode and means the stored file is always what its name says.</para>
+    /// </remarks>
+    private static byte[]? NormalizeAdoptedIcon(byte[] raw)
+    {
+        try
+        {
+            // ICO: 2 reserved bytes, then type 1.
+            bool isIcon = raw.Length > 4 && raw[0] == 0 && raw[1] == 0 && raw[2] == 1 && raw[3] == 0;
+            if (isIcon && LargestIcoFrame(raw) is { } frame) return frame;
+
+            using var source = new MemoryStream(raw);
+            using System.Drawing.Bitmap bitmap = isIcon
+                ? new System.Drawing.Icon(source, 256, 256).ToBitmap()
+                : new System.Drawing.Bitmap(source);
+
+            using var png = new MemoryStream();
+            bitmap.Save(png, System.Drawing.Imaging.ImageFormat.Png);
+            return png.ToArray();
+        }
+        catch (Exception ex)
+        {
+            Logger.Debug(ex, "An adopted page icon could not be read");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// True when <paramref name="candidate"/> is smaller than the icon already stored at
+    /// <paramref name="existingPath"/>, and so should not replace it.
+    /// </summary>
+    /// <remarks>
+    /// <para>Measured in pixels rather than trusted from where it came, because the two icon
+    /// sources cannot be ranked any other way: the manifest one is usually far larger, but a page
+    /// is free to declare a good <c>link rel=icon</c> too, and a site that genuinely changes its
+    /// logo should still be able to. Only <em>shrinking</em> is refused.</para>
+    /// <para>Anything unreadable answers false. A guard that cannot measure one side has no opinion,
+    /// and blocking on that would strand a launcher on an icon nothing can replace - including the
+    /// WebP the fetch path can produce and <c>System.Drawing</c> cannot decode.</para>
+    /// </remarks>
+    private static bool WouldShrinkIcon(byte[] candidate, string existingPath)
+    {
+        try
+        {
+            if (!File.Exists(existingPath)) return false;
+
+            int existing = IconPixelSize(File.ReadAllBytes(existingPath));
+            if (existing <= 0) return false;
+
+            int incoming = IconPixelSize(candidate);
+            if (incoming <= 0) return false;
+
+            return incoming < existing;
+        }
+        catch (Exception ex)
+        {
+            Logger.Debug(ex, "Could not compare icon sizes for {Path}", existingPath);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// The largest frame of an .ico as PNG bytes, or null when it holds none worth taking.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Hand-parsed because <c>System.Drawing.Icon</c> cannot see the frame that matters.</b>
+    /// An .ico is a directory of images, and since Vista the large one is usually stored as an
+    /// embedded PNG while the small ones stay uncompressed. <c>Icon</c> asked for 256 ignores the
+    /// PNG frames and hands back the largest uncompressed one instead - measured on Discord's
+    /// favicon.ico, which holds 16, 32 and 48 uncompressed plus a 256 PNG: it returned the 48.
+    /// Reading the directory ourselves is a dozen fields and gets the 256.</para>
+    /// <para>A PNG frame is returned as it is, since that is already the format this is being
+    /// converted to. Anything else falls through to <c>Icon</c>, which handles uncompressed frames
+    /// perfectly well - it is only the PNG ones it declines to see.</para>
+    /// </remarks>
+    private static byte[]? LargestIcoFrame(byte[] raw)
+    {
+        try
+        {
+            int count = BitConverter.ToUInt16(raw, 4);
+            if (count == 0) return null;
+
+            int bestSize = 0, bestOffset = 0, bestLength = 0;
+
+            for (int i = 0; i < count; i++)
+            {
+                int entry = 6 + (i * 16);
+                if (entry + 16 > raw.Length) break;
+
+                // A zero width or height means 256: the field is one byte and 256 does not fit.
+                int width = raw[entry] == 0 ? 256 : raw[entry];
+                int height = raw[entry + 1] == 0 ? 256 : raw[entry + 1];
+                int size = Math.Max(width, height);
+
+                int length = BitConverter.ToInt32(raw, entry + 8);
+                int offset = BitConverter.ToInt32(raw, entry + 12);
+
+                if (size <= bestSize) continue;
+                if (offset < 0 || length <= 0 || offset + length > raw.Length) continue;
+
+                bestSize = size;
+                bestOffset = offset;
+                bestLength = length;
+            }
+
+            if (bestSize == 0) return null;
+
+            // Only a PNG frame is ours to hand back directly; a device-independent bitmap frame is
+            // a headerless DIB and needs the header Icon would rebuild for it.
+            if (bestLength > 8
+                && raw[bestOffset] == 0x89 && raw[bestOffset + 1] == 0x50
+                && raw[bestOffset + 2] == 0x4E && raw[bestOffset + 3] == 0x47)
+            {
+                return raw[bestOffset..(bestOffset + bestLength)];
+            }
+
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Logger.Debug(ex, "Reading an .ico directory failed");
+            return null;
+        }
+    }
+
+    /// <summary>The longest edge of an encoded image, or 0 when it cannot be read.</summary>
+    private static int IconPixelSize(byte[] bytes)
+    {
+        try
+        {
+            using var stream = new MemoryStream(bytes);
+            using var image = System.Drawing.Image.FromStream(stream, useEmbeddedColorManagement: false,
+                validateImageData: false);
+            return Math.Max(image.Width, image.Height);
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// Opens a web launcher's address in the real browser, with no flyout involved.
+    /// </summary>
+    /// <remarks>
+    /// The launcher's address rather than whatever page is showing, because nothing may be showing:
+    /// this is reached from the taskbar jump list, where the launcher is quite possibly unloaded.
+    /// The header's own button is the one that means "this page" - see <see cref="OpenInBrowser"/>.
+    /// </remarks>
+    internal static void OpenAddressExternally(Launcher launcher) => OpenExternally(launcher.WebAddress);
 
     private void Navigate(string url) => NavigateTab(_activeTab, url);
 
@@ -2679,15 +2929,6 @@ public sealed partial class WebFlyoutWindow : Window
 
         if (visible) SyncAddressBox();
 
-        // The button reports what it will do, not what is on screen: an empty tab forces the bar on
-        // regardless of the setting, and a button that went "checked" because of that would be
-        // claiming the launcher had been changed when it had not.
-        ToolTipService.SetToolTip(_addressBarButton,
-            _launcher.WebShowAddressBar ? "Hide the address bar" : "Show the address bar");
-
-        if (_addressBarButton.Content is FontIcon glyph)
-            glyph.Opacity = _launcher.WebShowAddressBar ? 1.0 : 0.6;
-
         // Unconditional: the star is hidden for a launcher with no bookmark bar to write into, and
         // that is a launcher setting rather than something the address bar's own visibility decides.
         UpdateBookmarkStar();
@@ -2699,6 +2940,13 @@ public sealed partial class WebFlyoutWindow : Window
         get
         {
             if (_activeTab == null) return false;
+
+            // Told to go somewhere counts as not blank, even before it arrives. A tab reports an
+            // empty Source until its first response commits, so reading Source alone called every
+            // loading page a blank tab - and the address bar slid in for the length of the load and
+            // back out again, on launchers that have it switched off. Same test ShowEmptyTabStatus
+            // already makes, for the same reason.
+            if (!string.IsNullOrEmpty(_activeTab.NavigatedUrl)) return false;
 
             try
             {

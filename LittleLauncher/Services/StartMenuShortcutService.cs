@@ -1,4 +1,4 @@
-// Copyright © 2024-2026 The Little Launcher Authors
+﻿// Copyright © 2024-2026 The Little Launcher Authors
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 using LittleLauncher.Classes.Settings;
@@ -181,6 +181,5 @@ internal static class StartMenuShortcutService
     private static string GroupDirectory() =>
         Path.Combine(MainWindow.GetPhysicalStartMenuProgramsDir(), FolderName);
 
-    private static string CompanionPath() =>
-        Path.Combine(MainWindow.GetPhysicalAppDataDir(), "LittleLauncherFlyout.exe");
+    private static string CompanionPath() => MainWindow.GetFlyoutCompanionPath();
 }

@@ -1,7 +1,9 @@
-// Copyright © 2024-2026 The Little Launcher Authors
+﻿// Copyright © 2024-2026 The Little Launcher Authors
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 using CommunityToolkit.Mvvm.ComponentModel;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
 
 namespace LittleLauncher.Models;
 
@@ -48,11 +50,50 @@ public partial class WebBookmark : ObservableObject
     [ObservableProperty]
     public partial bool IconsOnly { get; set; }
 
+    /// <summary>Whether this is a folder holding other bookmarks rather than an address.</summary>
+    /// <remarks>
+    /// <para>The same shape a group takes in an item launcher (<c>LauncherItem.IsGroup</c> and its
+    /// <c>Children</c>), deliberately: two collections of the same idea should not be two designs.
+    /// A folder has no <see cref="Url"/> and nothing should read one from it.</para>
+    /// <para><b>The model nests without limit; the bar does not.</b> Folders hold bookmarks and not
+    /// other folders, because that is what a bookmarks bar is actually used for and it keeps the
+    /// bar one menu deep. That is a rule the UI applies, not one the data enforces, so allowing
+    /// deeper later needs no migration.</para>
+    /// </remarks>
+    [ObservableProperty]
+    public partial bool IsFolder { get; set; }
+
+    /// <summary>The bookmarks inside this folder. Only meaningful when <see cref="IsFolder"/>.</summary>
+    public ObservableCollection<WebBookmark> Children { get; set; } = [];
+
     public WebBookmark() { }
 
     public WebBookmark(string name, string url)
     {
         Name = name;
         Url = url;
+    }
+
+    /// <summary>A new, empty folder.</summary>
+    public static WebBookmark CreateFolder(string name) => new() { Name = name, IsFolder = true };
+
+    /// <summary>This bookmark, or every bookmark inside it when it is a folder.</summary>
+    /// <remarks>
+    /// What a surface with no nesting of its own wants - a taskbar jump list has no submenus, and
+    /// a search for "which bookmark is this page" does not care where it sits.
+    /// </remarks>
+    public IEnumerable<WebBookmark> Flatten()
+    {
+        if (!IsFolder)
+        {
+            yield return this;
+            yield break;
+        }
+
+        foreach (var child in Children)
+        {
+            foreach (var nested in child.Flatten())
+                yield return nested;
+        }
     }
 }

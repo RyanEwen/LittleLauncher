@@ -1,8 +1,9 @@
-// Copyright © 2024-2026 The Little Launcher Authors
+﻿// Copyright © 2024-2026 The Little Launcher Authors
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 using LittleLauncher.Classes.Settings;
 using LittleLauncher.Models;
+using LittleLauncher.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
@@ -10,6 +11,7 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
@@ -101,8 +103,21 @@ public sealed partial class WebFlyoutWindow
     /// bookmarks actually change. Order is part of it, so a drag invalidates it as an edit does.
     /// </summary>
     private string BookmarkBarSignature() =>
-        _launcher.WebBookmarkIconsOnly + "|" +
-        string.Join("", _launcher.WebBookmarks.Select(b => $"{b.Name}{b.Url}{b.IconPath}{b.IconsOnly}"));
+        _launcher.WebBookmarkIconsOnly + "|" + SignatureOf(_launcher.WebBookmarks);
+
+    /// <summary>
+    /// What a run of bookmarks says, including whatever is inside any folders among them.
+    /// </summary>
+    /// <remarks>
+    /// The contents count even though the bar does not draw them: a folder's menu is built from its
+    /// button, so a bookmark added or renamed inside one changes what the bar can show while every
+    /// top-level entry stays identical. Without this the rebuild is skipped and the folder keeps
+    /// opening a menu of what it used to hold.
+    /// </remarks>
+    private static string SignatureOf(IEnumerable<WebBookmark> bookmarks) =>
+        string.Join("", bookmarks.Select(b =>
+            $"{b.Name}{b.Url}{b.IconPath}{b.IconsOnly}{b.IsFolder}" +
+            (b.IsFolder ? "(" + SignatureOf(b.Children) + ")" : "")));
 
     /// <summary>
     /// Rebuilds the bar from the launcher's bookmarks, in the shape a browser uses: a small icon
@@ -191,14 +206,15 @@ public sealed partial class WebFlyoutWindow
     private Button BuildBookmarkButton(WebBookmark bookmark)
     {
         var icon = new Image { Width = 16, Height = 16, VerticalAlignment = VerticalAlignment.Center };
-        if (!string.IsNullOrEmpty(bookmark.IconPath) && File.Exists(bookmark.IconPath))
+        if (!bookmark.IsFolder && !string.IsNullOrEmpty(bookmark.IconPath) && File.Exists(bookmark.IconPath))
             icon.Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(bookmark.IconPath));
 
         // A page with no icon yet gets a globe rather than a hole in the row — U+E774, Segoe
-        // Fluent's Globe.
+        // Fluent's Globe. A folder gets U+E8B7, Segoe Fluent's Folder, and never a favicon: it
+        // stands for a group of pages rather than any one of them.
         var fallback = new FontIcon
         {
-            Glyph = "",
+            Glyph = bookmark.IsFolder ? "\uE8B7" : "",
             FontSize = 14,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
@@ -249,14 +265,29 @@ public sealed partial class WebFlyoutWindow
         };
         // With the labels hidden the name is the only thing identifying the button, so it leads the
         // tooltip; with them shown the name is already on screen and the address is the useful part.
+        // A folder has no address, so the second line of the icons-only form is a blank one
+        // under its name - and the label form is an empty tooltip entirely. Its name is the
+        // whole of what there is to say about it.
         ToolTipService.SetToolTip(button,
-            ShowsIconOnly(bookmark) ? $"{caption}\n{bookmark.Url}" : bookmark.Url);
+            bookmark.IsFolder
+                ? caption
+                : ShowsIconOnly(bookmark) ? $"{caption}\n{bookmark.Url}" : bookmark.Url);
         // Shift/Ctrl-click opens a tab of its own, as it does on any link in any browser, and it is
         // answered in Click rather than on the press: a Button marks the left press handled for its
         // own press/click handling before any instance handler runs, so the plain PointerPressed
         // subscription this used to be never saw a modified click at all and the gesture did
         // nothing.
-        button.Click += (_, _) => OpenBookmark(bookmark, newTab: WantsNewTab());
+        // A folder opens its contents; everything else opens a page.
+        if (bookmark.IsFolder)
+            button.Click += (_, _) => ShowFolderPopup(bookmark, button);
+        else
+        {
+            button.Click += (_, _) =>
+            {
+                CloseFolderPopups(0);
+                OpenBookmark(bookmark, newTab: WantsNewTab());
+            };
+        }
 
         // Middle-click, which raises no Click at all and so has to be taken from the press. The
         // handler needs AddHandler with handledEventsToo for the same reason as above: a plain
@@ -266,7 +297,10 @@ public sealed partial class WebFlyoutWindow
             if (!e.GetCurrentPoint(button).Properties.IsMiddleButtonPressed) return;
 
             e.Handled = true;
-            OpenBookmark(bookmark, newTab: true);
+
+            // A folder has no page to put in a tab. Still handled, so the gesture does not fall
+            // through to the strip's window-move handler.
+            if (!bookmark.IsFolder) OpenBookmark(bookmark, newTab: true);
         }), handledEventsToo: true);
 
         // Right-click carries everything that is not "open this", which is the same idiom the item
@@ -361,12 +395,26 @@ public sealed partial class WebFlyoutWindow
             return;
         }
 
-        // The launcher reopens where it was last sent, and this is one of the two gestures that
-        // says so — see _rememberedUrl. Written here rather than inside Navigate, so that "the
-        // user has not steered this launcher anywhere" stays a state the flyout can recognise.
+        SendFrontTabTo(url);
+    }
+
+    /// <summary>
+    /// Sends the tab in front to an address the user picked, and remembers it as where this
+    /// launcher reopens.
+    /// </summary>
+    /// <remarks>
+    /// <para>Shared by a bookmark click and the Home button, which are the same gesture aimed at
+    /// different addresses. Both are the user saying where this launcher should be, so both write
+    /// <see cref="_rememberedUrl"/> - written here rather than inside <c>Navigate</c>, so that "the
+    /// user has not steered this launcher anywhere" stays a state the flyout can recognise.</para>
+    /// </remarks>
+    private void SendFrontTabTo(string url)
+    {
+        if (string.IsNullOrEmpty(url)) return;
+
         _rememberedUrl = url;
 
-        // No browser at all — the flyout has been unloaded, or was never loaded. Building the
+        // No browser at all - the flyout has been unloaded, or was never loaded. Building the
         // launcher's own tab on this address is the navigation.
         if (_activeTab == null)
         {
@@ -378,6 +426,156 @@ public sealed partial class WebFlyoutWindow
         if (_activeTab.View.CoreWebView2 == null) return;
 
         Navigate(url);
+    }
+
+    /// <summary>
+    /// Sends the launcher back to its home page.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Not <see cref="ShowHomeContentAsync"/>, which is a different question.</b> That one
+    /// asks "what should this launcher be showing right now", and the answer it gives is
+    /// <see cref="CurrentTargetUrl"/> - which is <see cref="_rememberedUrl"/> when the user has
+    /// steered the launcher somewhere. So wiring Home to it navigated to the page already on
+    /// screen: click a bookmark, click Home, and nothing at all happens. It is the right answer for
+    /// a show or an expansion and the wrong one for a button labelled Home.</para>
+    /// <para>Going home is also a steer, so it overwrites the remembered address rather than
+    /// leaving it pointing at wherever the user was: after this the launcher reopens at home, which
+    /// is what "go home" means.</para>
+    /// </remarks>
+    private void GoHome() => SendFrontTabTo(NormalizeUrl(_launcher.WebAddress));
+
+    /// <summary>
+    /// Opens the bookmark a taskbar jump list task names, and reports whether it found one.
+    /// </summary>
+    /// <remarks>
+    /// <para>The position is only a hint - where the bookmark sat when the list was published -
+    /// and the token has the final say, because a published list can outlive an edit. Returning
+    /// false rather than opening whatever now sits at that position is the point: see
+    /// <see cref="LauncherPanels.LaunchFromJumpList"/> for what happens instead.</para>
+    /// <para>Once found it is opened exactly as a click on the bar opens it, in the tab in front,
+    /// because it is the same gesture reached from somewhere else. The remembered URL is written
+    /// before the show so that a launcher with no browser yet builds its first tab straight on the
+    /// bookmark, rather than loading its own page and replacing it a moment later.</para>
+    /// </remarks>
+    internal static bool OpenBookmarkFromJumpList(MainWindow owner, Launcher launcher, int index,
+        int token, int screenX, int screenY)
+    {
+        var target = ResolveJumpListBookmark(launcher, index, token);
+        if (target == null)
+        {
+            Logger.Info("Jump list task no longer matches a bookmark in {Name}; opening the launcher instead",
+                launcher.Name);
+            return false;
+        }
+
+        if (!Instances.TryGetValue(launcher.Id, out var panel) || panel._hwnd == IntPtr.Zero || !IsWindow(panel._hwnd))
+        {
+            panel = new WebFlyoutWindow(owner, launcher);
+            Instances[launcher.Id] = panel;
+        }
+
+        panel._owner = owner;
+
+        _ = panel.ShowAndOpenBookmarkAsync(target, screenX, screenY);
+        return true;
+    }
+
+    /// <summary>
+    /// The bookmark a jump list entry stands for, or null when the launcher no longer has it.
+    /// </summary>
+    /// <remarks>
+    /// The position is only a hint at where it sat when the list was published; the token, hashed
+    /// from the name and URL, has the final say. Opening - or deleting - whatever now sits at that
+    /// position is the one outcome worse than doing nothing.
+    /// </remarks>
+    private static WebBookmark? ResolveJumpListBookmark(Launcher launcher, int index, int token)
+    {
+        var bookmarks = launcher.WebBookmarks;
+
+        if (index >= 0 && index < bookmarks.Count && JumpListService.BookmarkToken(bookmarks[index]) == token)
+            return bookmarks[index];
+
+        return bookmarks.FirstOrDefault(b => JumpListService.BookmarkToken(b) == token);
+    }
+
+    /// <summary>
+    /// Shows the flyout and puts a bookmark in front of the user, for a jump list task.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>A new tab, not the tab in front.</b> This is the one place a bookmark is reached
+    /// without the launcher being on screen, so there is no "tab in front" the user was looking
+    /// at and chose to replace - there is only whatever the launcher happened to be left on, quite
+    /// possibly days ago, and taking it over is how a quick look at one page costs somebody the
+    /// page they were on. In front rather than behind, because unlike a middle-click this gesture
+    /// says nothing except "show me this".</para>
+    /// <para>The exception is a launcher with nothing loaded at all, where the bookmark simply
+    /// becomes its first tab. There is nothing to preserve, and the alternative is loading the
+    /// launcher's own address and covering it over a moment later.</para>
+    /// <para>Awaiting the show is what keeps the two apart. The show may be restoring the tabs the
+    /// launcher had open last time, which builds tabs and picks one to activate, and a tab added
+    /// alongside that would race it for which ends up in front.</para>
+    /// </remarks>
+    private async Task ShowAndOpenBookmarkAsync(WebBookmark bookmark, int screenX, int screenY)
+    {
+        string url = NormalizeUrl(bookmark.Url);
+        bool empty = _tabs.Count == 0 && !HasSessionToRestore;
+
+        if (empty && !string.IsNullOrEmpty(url))
+            _rememberedUrl = url;
+
+        if (!_isOpen)
+            ShowFlyout(screenX, screenY);
+
+        if (empty || string.IsNullOrEmpty(url)) return;
+
+        if (_contentPreparation != null)
+        {
+            try { await _contentPreparation; }
+            catch { /* whatever the show could not load is its own problem to report */ }
+        }
+
+        await OpenLinkTabAsync(url, background: false);
+    }
+
+    /// <summary>The rows for what a folder holds, with any folder among them as a submenu.</summary>
+    private List<MenuFlyoutItemBase> BuildFolderContents(WebBookmark folder)
+    {
+        var rows = new List<MenuFlyoutItemBase>();
+
+        if (folder.Children.Count == 0)
+        {
+            rows.Add(new MenuFlyoutItem { Text = "Empty", IsEnabled = false });
+            return rows;
+        }
+
+        foreach (var child in folder.Children)
+        {
+            var captured = child;
+            string caption = string.IsNullOrWhiteSpace(captured.Name) ? captured.Url : captured.Name;
+
+            if (captured.IsFolder)
+            {
+                var sub = new MenuFlyoutSubItem { Text = caption };
+                foreach (var nested in BuildFolderContents(captured))
+                    sub.Items.Add(nested);
+                rows.Add(sub);
+                continue;
+            }
+
+            var row = new MenuFlyoutItem { Text = caption };
+            if (!string.IsNullOrEmpty(captured.IconPath) && File.Exists(captured.IconPath))
+            {
+                row.Icon = new ImageIcon
+                {
+                    Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(captured.IconPath)),
+                };
+            }
+
+            row.Click += (_, _) => OpenBookmark(captured, newTab: WantsNewTab());
+            rows.Add(row);
+        }
+
+        return rows;
     }
 
     // ── The star ────────────────────────────────────────────────────
@@ -435,7 +633,7 @@ public sealed partial class WebFlyoutWindow
     private WebBookmark? FindBookmark(string url) =>
         string.IsNullOrEmpty(url)
             ? null
-            : _launcher.WebBookmarks.FirstOrDefault(
+            : _launcher.WebBookmarks.SelectMany(b => b.Flatten()).FirstOrDefault(
                 b => string.Equals(NormalizeUrl(b.Url), url, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>True when the address the bar shows is already bookmarked. Read by the More menu.</summary>
@@ -502,9 +700,171 @@ public sealed partial class WebFlyoutWindow
     /// <em>first</em> one does change where the launcher opens next time, because that is what
     /// first means.
     /// </remarks>
+    /// <summary>
+    /// The right-click entries for a folder, which are about the folder rather than about a page.
+    /// </summary>
+    /// <remarks>
+    /// A list of its own rather than the bookmark one with rows disabled: almost nothing on that
+    /// menu means anything here - a folder has no address to copy, to open in a browser, or to make
+    /// the home page - and a menu of greyed-out rows answers worse than a short menu.
+    /// </remarks>
+    private List<MenuFlyoutItemBase> BuildFolderMenuItems(WebBookmark folder,
+        ObservableCollection<WebBookmark> owner, int index, List<MenuFlyoutItemBase> items)
+    {
+        MenuFlyoutItem Item(string text, Action invoke, bool enabled = true)
+        {
+            var item = new MenuFlyoutItem { Text = text, IsEnabled = enabled };
+            item.Click += (_, _) => invoke();
+            return item;
+        }
+
+        items.Add(Item("Rename…", () => _ = RenameFolderAsync(folder)));
+        items.Add(Item("Add bookmark…", () => _ = AddBookmarkToFolderAsync(folder)));
+        items.Add(Item("Add folder…", () => _ = AddFolderAsync(folder)));
+
+        items.Add(new MenuFlyoutSeparator());
+
+        items.Add(Item("Move up", () => MoveBookmark(folder, -1), index > 0));
+        items.Add(Item("Move down", () => MoveBookmark(folder, 1), index < owner.Count - 1));
+
+        items.Add(new MenuFlyoutSeparator());
+
+        items.Add(Item("Remove folder", () => RemoveFolder(folder)));
+
+        return items;
+    }
+
+    /// <summary>Every folder in the bar, each with the path that names it.</summary>
+    /// <remarks>
+    /// The path rather than the bare name, because folders nest and two of them may be called the
+    /// same thing at different depths. "Work / Dashboards" says which one is meant; "Dashboards"
+    /// twice in a menu says nothing.
+    /// </remarks>
+    private IEnumerable<(WebBookmark Folder, string Path)> AllFolders(
+        IEnumerable<WebBookmark>? within = null, string prefix = "")
+    {
+        foreach (var bookmark in within ?? _launcher.WebBookmarks)
+        {
+            if (!bookmark.IsFolder) continue;
+
+            string name = string.IsNullOrWhiteSpace(bookmark.Name) ? "Folder" : bookmark.Name;
+            string path = prefix.Length == 0 ? name : prefix + " / " + name;
+
+            yield return (bookmark, path);
+
+            foreach (var nested in AllFolders(bookmark.Children, path))
+                yield return nested;
+        }
+    }
+
+    /// <summary>Renames a folder. Unlike a bookmark, an empty name has nothing to fall back to.</summary>
+    private async Task RenameFolderAsync(WebBookmark folder)
+    {
+        string? renamed = await RunTextPromptAsync("Rename folder", "Name", folder.Name, "Rename");
+        if (string.IsNullOrWhiteSpace(renamed)) return;
+
+        folder.Name = renamed.Trim();
+        PersistBookmarks();
+    }
+
+    /// <summary>Adds a folder, either to the bar or inside another folder.</summary>
+    private async Task AddFolderAsync(WebBookmark? parent = null)
+    {
+        string? name = await RunTextPromptAsync("Add folder", "Name", "", "Add");
+        if (string.IsNullOrWhiteSpace(name)) return;
+
+        var folder = WebBookmark.CreateFolder(name.Trim());
+
+        if (parent != null) parent.Children.Add(folder);
+        else _launcher.WebBookmarks.Add(folder);
+
+        PersistBookmarks();
+    }
+
+    /// <summary>Adds a bookmark straight into a folder.</summary>
+    private async Task AddBookmarkToFolderAsync(WebBookmark folder)
+    {
+        string? entered = await RunTextPromptAsync("Add bookmark", "https://…", "", "Add");
+        if (string.IsNullOrWhiteSpace(entered)) return;
+
+        string url = NormalizeUrl(entered);
+        if (string.IsNullOrEmpty(url)) return;
+
+        if (FindBookmark(url) != null)
+        {
+            ShowNotice("That page is already in the bookmarks bar.");
+            return;
+        }
+
+        var bookmark = new WebBookmark(HostOf(url), url);
+        folder.Children.Add(bookmark);
+        PersistBookmarks();
+
+        _ = FetchBookmarkIconAsync(_launcher, bookmark);
+    }
+
+    /// <summary>Deletes a folder and returns what was in it to the bar, where the folder was.</summary>
+    /// <remarks>
+    /// The folder goes; its contents do not. Deleting a folder to lose the bookmarks inside it is
+    /// never what was meant by "remove folder", and there is no undo here to lean on.
+    /// </remarks>
+    private void RemoveFolder(WebBookmark folder)
+    {
+        int at = _launcher.WebBookmarks.IndexOf(folder);
+        if (at < 0) return;
+
+        _launcher.WebBookmarks.RemoveAt(at);
+
+        foreach (var child in folder.Children.ToList())
+            _launcher.WebBookmarks.Insert(at++, child);
+
+        folder.Children.Clear();
+        PersistBookmarks();
+    }
+
+    /// <summary>Files a bookmark into a folder, taking it out of wherever it was.</summary>
+    private void MoveIntoFolder(WebBookmark bookmark, WebBookmark folder)
+    {
+        if (!folder.IsFolder || ReferenceEquals(bookmark, folder)) return;
+
+        // A folder cannot be moved into itself or into anything it contains, which would take that
+        // whole branch off the bar with no way back to it.
+        if (bookmark.IsFolder && bookmark.Flatten().Contains(folder)) return;
+        if (bookmark.IsFolder && Contains(bookmark, folder)) return;
+
+        if (!DetachBookmark(bookmark)) return;
+
+        folder.Children.Add(bookmark);
+        PersistBookmarks();
+    }
+
+    /// <summary>True when <paramref name="branch"/> holds <paramref name="wanted"/> at any depth.</summary>
+    private static bool Contains(WebBookmark branch, WebBookmark wanted) =>
+        branch.Children.Any(c => ReferenceEquals(c, wanted) || (c.IsFolder && Contains(c, wanted)));
+
+    /// <summary>Takes a bookmark out of whichever collection holds it, at any depth.</summary>
+    private bool DetachBookmark(WebBookmark bookmark) => OwnerOf(bookmark)?.Remove(bookmark) == true;
+
+    /// <summary>Points the launcher at a new home page.</summary>
+    /// <remarks>
+    /// Takes a URL, deliberately, rather than the bookmark it may have come from - nothing here
+    /// records which bookmark that was, and nothing should. Applied through the same persist path
+    /// as any other bar edit, so the flyout, the settings window and sync all hear about it the
+    /// one way.
+    /// </remarks>
+    private void SetHomeUrl(string url)
+    {
+        _launcher.WebHomeUrl = NormalizeUrl(url);
+        PersistBookmarks();
+    }
+
     private void RemoveBookmark(WebBookmark bookmark)
     {
-        _launcher.WebBookmarks.Remove(bookmark);
+        // At any depth: the bar only shows the top level, but the overflow menu, launcher settings
+        // and a folder's own menu all reach further in, and a remove that silently does nothing is
+        // a failure this window has already been bitten by once.
+        if (!DetachBookmark(bookmark)) return;
+
         PersistBookmarks();
     }
 
@@ -604,10 +964,23 @@ public sealed partial class WebFlyoutWindow
             if (_bookmarkStrip.Children[i] is not Button { Tag: WebBookmark bookmark }) continue;
 
             var captured = bookmark;
+            string caption = string.IsNullOrWhiteSpace(captured.Name) ? captured.Url : captured.Name;
+
+            // A folder that overflowed is still a folder: it becomes a submenu of the same rows its
+            // button would have shown, rather than a row that opens an address it does not have.
+            if (captured.IsFolder)
+            {
+                var sub = new MenuFlyoutSubItem { Text = caption };
+                foreach (var row in BuildFolderContents(captured))
+                    sub.Items.Add(row);
+
+                menu.Items.Add(sub);
+                continue;
+            }
 
             var item = new MenuFlyoutItem
             {
-                Text = string.IsNullOrWhiteSpace(captured.Name) ? captured.Url : captured.Name,
+                Text = caption,
             };
 
             if (!string.IsNullOrEmpty(captured.IconPath) && File.Exists(captured.IconPath))
@@ -724,8 +1097,16 @@ public sealed partial class WebFlyoutWindow
     {
         var items = new List<MenuFlyoutItemBase>();
 
-        int index = _launcher.WebBookmarks.IndexOf(bookmark);
+        // The collection that actually holds it, which for a row inside a folder popup is that
+        // folder's children. Asking the launcher's top level returned -1 for those and handed back
+        // an empty list, so a right-click inside a folder opened nothing at all.
+        var owner = OwnerOf(bookmark);
+        if (owner == null) return items;
+
+        int index = owner.IndexOf(bookmark);
         if (index < 0) return items;
+
+        if (bookmark.IsFolder) return BuildFolderMenuItems(bookmark, owner, index, items);
 
         MenuFlyoutItem Item(string text, Action invoke, bool enabled = true)
         {
@@ -772,12 +1153,42 @@ public sealed partial class WebFlyoutWindow
         // for what it does rather than for the move that implements it. "Open the launcher here"
         // was the move's own description and read as a third way to open the page, next to the two
         // that actually do.
-        items.Add(Item("Set as default page", () => MoveBookmark(bookmark, -index), index > 0));
+        // Sets where the launcher opens, and moves nothing. It used to drag the bookmark to the
+        // front, because the front *was* the address; now that the address is a setting of its own
+        // the bar keeps the order the user gave it.
+        //
+        // The URL is copied, and that is all that happens. The bookmark is not remembered, marked
+        // or linked in any way: renaming it later, re-addressing it or removing it leaves the home
+        // page exactly where it was. This row is a convenient way to type an address the user
+        // already has, not a way to make one bookmark special.
+        items.Add(Item("Set as home page", () => SetHomeUrl(bookmark.Url),
+            !string.Equals(NormalizeUrl(_launcher.WebAddress), NormalizeUrl(bookmark.Url),
+                StringComparison.OrdinalIgnoreCase)));
 
         // Kept beside the drag rather than replaced by it: a bookmark that does not fit on the bar
         // is in the chevron's menu, and there is nothing there to drag.
-        items.Add(Item("Move left", () => MoveBookmark(bookmark, -1), index > 0));
-        items.Add(Item("Move right", () => MoveBookmark(bookmark, 1), index < _launcher.WebBookmarks.Count - 1));
+        // "Up/down" inside a folder, "left/right" along the bar: the same move, and naming it for
+        // the direction it actually travels is the difference between an instruction and a riddle.
+        bool onBar = ReferenceEquals(owner, _launcher.WebBookmarks);
+        items.Add(Item(onBar ? "Move left" : "Move up", () => MoveBookmark(bookmark, -1), index > 0));
+        items.Add(Item(onBar ? "Move right" : "Move down", () => MoveBookmark(bookmark, 1),
+            index < owner.Count - 1));
+
+        var folders = AllFolders().ToList();
+        if (folders.Count > 0)
+        {
+            Divide();
+
+            var into = new MenuFlyoutSubItem { Text = "Move to folder" };
+            foreach (var (folder, path) in folders)
+            {
+                var captured = folder;
+                var row = new MenuFlyoutItem { Text = path };
+                row.Click += (_, _) => MoveIntoFolder(bookmark, captured);
+                into.Items.Add(row);
+            }
+            items.Add(into);
+        }
 
         Divide();
         items.Add(Item("Remove", () => RemoveBookmark(bookmark)));
@@ -819,6 +1230,8 @@ public sealed partial class WebFlyoutWindow
 
         menu.Items.Add(Item("Add bookmark…", () => _ = AddBookmarkByAddressAsync()));
         menu.Items.Add(Item("Add from browser…", () => _ = AddBookmarkFromBrowserAsync()));
+        menu.Items.Add(new MenuFlyoutSeparator());
+        menu.Items.Add(Item("Add folder…", () => _ = AddFolderAsync()));
 
         menu.Opened += (_, _) => _isMenuOpen = true;
         menu.Closed += (_, _) => _isMenuOpen = false;
@@ -937,14 +1350,30 @@ public sealed partial class WebFlyoutWindow
     /// <param name="delta">Places to move it. Negative enough lands it at the front.</param>
     private void MoveBookmark(WebBookmark bookmark, int delta)
     {
-        int from = _launcher.WebBookmarks.IndexOf(bookmark);
+        var owner = OwnerOf(bookmark);
+        if (owner == null) return;
+
+        int from = owner.IndexOf(bookmark);
         if (from < 0) return;
 
-        int to = Math.Clamp(from + delta, 0, _launcher.WebBookmarks.Count - 1);
+        int to = Math.Clamp(from + delta, 0, owner.Count - 1);
         if (to == from) return;
 
-        _launcher.WebBookmarks.Move(from, to);
+        owner.Move(from, to);
         PersistBookmarks();
+    }
+
+    /// <summary>The collection holding a bookmark, at any depth, or null when nothing does.</summary>
+    private ObservableCollection<WebBookmark>? OwnerOf(WebBookmark bookmark)
+    {
+        if (_launcher.WebBookmarks.Contains(bookmark)) return _launcher.WebBookmarks;
+
+        foreach (var (folder, _) in AllFolders())
+        {
+            if (folder.Children.Contains(bookmark)) return folder.Children;
+        }
+
+        return null;
     }
 
     private static void CopyToClipboard(string text)
@@ -1009,7 +1438,11 @@ public sealed partial class WebFlyoutWindow
         // is wired once.
         _bookmarkStrip.AllowDrop = true;
         _bookmarkStrip.DragOver += BookmarkStrip_DragOver;
-        _bookmarkStrip.DragLeave += (_, _) => HideDropCaret();
+        _bookmarkStrip.DragLeave += (_, _) =>
+        {
+            HideDropCaret();
+            ShowFolderDropTarget(null);
+        };
         _bookmarkStrip.Drop += BookmarkStrip_Drop;
 
         // On the bar rather than the strip, and it is the bar that is hit-testable: the strip has
@@ -1034,6 +1467,41 @@ public sealed partial class WebFlyoutWindow
     /// layout untouched — which also means the measurements it is computed from never move under
     /// it, so the caret cannot oscillate between two slots.
     /// </remarks>
+    /// <summary>The folder button currently lit as a drop target, so it can be put back.</summary>
+    private Button? _folderDropTarget;
+
+    /// <summary>
+    /// Lights the folder a drop would land in, and takes the caret down while it is lit.
+    /// </summary>
+    /// <remarks>
+    /// The caret says "between these two", which is the wrong promise entirely when the drop is
+    /// going to file the bookmark away inside something - it worked, and looked like it was about
+    /// to do something else. A drop indicator is a promise, the same rule the flyout's external
+    /// drops follow for the drop cursor.
+    /// </remarks>
+    private void ShowFolderDropTarget(Button? button)
+    {
+        if (ReferenceEquals(_folderDropTarget, button)) return;
+
+        if (_folderDropTarget != null)
+        {
+            _folderDropTarget.Background = (Brush)Application.Current.Resources["SubtleFillColorTransparentBrush"];
+            _folderDropTarget = null;
+        }
+
+        if (button == null) return;
+
+        // Background only, never a border: a border insets the content and reflows the row, which
+        // is the non-reflowing rule the flyout's edit-mode affordances follow for the same reason.
+        button.Background = (Brush)Application.Current.Resources["AccentFillColorSelectedTextBackgroundBrush"];
+        _folderDropTarget = button;
+    }
+
+    /// <summary>The button carrying a bookmark, if it is on the strip.</summary>
+    private Button? ButtonFor(WebBookmark bookmark) =>
+        _bookmarkStrip.Children.OfType<Button>()
+            .FirstOrDefault(b => ReferenceEquals(b.Tag, bookmark));
+
     private void BookmarkStrip_DragOver(object sender, DragEventArgs e)
     {
         if (_draggingBookmark == null) return;
@@ -1049,20 +1517,68 @@ public sealed partial class WebFlyoutWindow
             overrides.IsGlyphVisible = false;
         }
 
-        ShowDropCaretAt(DropIndexFor(e.GetPosition(_bookmarkStrip).X));
+        double overX = e.GetPosition(_bookmarkStrip).X;
+        var overFolder = FolderUnder(overX);
+
+        if (overFolder != null)
+        {
+            HideDropCaret();
+            ShowFolderDropTarget(ButtonFor(overFolder));
+
+            if (e.DragUIOverride != null)
+            {
+                e.DragUIOverride.Caption = $"Move into {overFolder.Name}";
+                e.DragUIOverride.IsCaptionVisible = true;
+            }
+
+            return;
+        }
+
+        ShowFolderDropTarget(null);
+        ShowDropCaretAt(DropIndexFor(overX));
     }
 
     private void BookmarkStrip_Drop(object sender, DragEventArgs e)
     {
         var dragged = _draggingBookmark;
         HideDropCaret();
+        ShowFolderDropTarget(null);
         if (dragged == null) return;
 
         e.Handled = true;
         e.AcceptedOperation = global::Windows.ApplicationModel.DataTransfer.DataPackageOperation.Move;
 
+        // Onto a folder rather than between two entries: the drop lands inside it, which is what a
+        // folder on a bookmarks bar is for and what every browser does with the same gesture.
+        // Checked before the reorder, because a folder occupies a position too and the reorder
+        // would otherwise just shuffle the dragged bookmark past it.
+        double dropX = e.GetPosition(_bookmarkStrip).X;
+        var folder = FolderUnder(dropX);
+
+        Logger.Info("Bar drop at x={X:F0} dragging {Dragged}: folder={Folder}, bands=[{Bands}]",
+            dropX, dragged.Name, folder?.Name ?? "(none)", DescribeFolderBands());
+
+        if (folder != null)
+        {
+            MoveIntoFolder(dragged, folder);
+            return;
+        }
+
         int from = _launcher.WebBookmarks.IndexOf(dragged);
-        if (from < 0) return;
+
+        // Arriving from inside a folder rather than moving along the bar. Taken out of wherever it
+        // was and inserted where it was dropped, which is what dragging one back out of a folder
+        // has to mean - and the case CanReorderItems could never have handled.
+        if (from < 0)
+        {
+            int at = DropIndexFor(e.GetPosition(_bookmarkStrip).X);
+            if (!DetachBookmark(dragged)) return;
+
+            _launcher.WebBookmarks.Insert(Math.Clamp(at, 0, _launcher.WebBookmarks.Count), dragged);
+            PersistBookmarks();
+            CloseFolderPopups(0);
+            return;
+        }
 
         // No adjustment for the gap the dragged item leaves behind: the index already counts only
         // the *others*, which is exactly the list that exists after it is removed — and both Move
@@ -1075,6 +1591,61 @@ public sealed partial class WebFlyoutWindow
 
         _launcher.WebBookmarks.Move(from, to);
         PersistBookmarks();
+    }
+
+    /// <summary>
+    /// The folder button <paramref name="x"/> is over, or null when the drop is between entries.
+    /// </summary>
+    /// <remarks>
+    /// <para>The middle of a folder's button counts as "into it" and its edges do not, so a
+    /// bookmark can still be dropped beside a folder rather than into it. Without the margin a
+    /// folder would swallow every drop anywhere near it, and reordering the bar past one would
+    /// become impossible.</para>
+    /// <para>Skips whatever is being dragged, so dragging a folder does not find itself.</para>
+    /// </remarks>
+    /// <summary>Where each folder button actually is, for diagnosing a drop that missed.</summary>
+    private string DescribeFolderBands()
+    {
+        var parts = new List<string>();
+
+        foreach (var child in _bookmarkStrip.Children)
+        {
+            if (child is not Button { Tag: WebBookmark bookmark } button) continue;
+            if (!bookmark.IsFolder) continue;
+
+            var origin = button.TransformToVisual(_bookmarkStrip)
+                .TransformPoint(new global::Windows.Foundation.Point(0, 0));
+            parts.Add($"{bookmark.Name}@{origin.X:F0}+{button.ActualWidth:F0}");
+        }
+
+        return string.Join(", ", parts);
+    }
+
+    private WebBookmark? FolderUnder(double x)
+    {
+        foreach (var child in _bookmarkStrip.Children)
+        {
+            if (child is not Button { Tag: WebBookmark bookmark } button) continue;
+            if (!bookmark.IsFolder || ReferenceEquals(bookmark, _draggingBookmark)) continue;
+
+            double width = button.ActualWidth;
+            if (width <= 0) continue;
+
+            // The button's own arranged position, exactly as DropIndexFor reads it. Adding widths
+            // up from zero instead was the bug: the row is centred while its bookmarks fit, so
+            // every band was computed to the left of where the button actually sits and the drop
+            // never landed on one.
+            var origin = button.TransformToVisual(_bookmarkStrip)
+                .TransformPoint(new global::Windows.Foundation.Point(0, 0));
+
+            // Proportional, but capped: a quarter of a 32px icon-only folder is 8px, which is a
+            // target the pointer skids across. Capping the inset makes a wide folder nearly all
+            // target while a narrow one keeps just enough edge to drop *beside* it.
+            double inset = Math.Min(width * 0.25, 12);
+            if (x >= origin.X + inset && x <= origin.X + width - inset) return bookmark;
+        }
+
+        return null;
     }
 
     /// <summary>Where in the row, counting only the bookmarks not being dragged, x falls.</summary>
