@@ -410,7 +410,11 @@ public sealed partial class WebFlyoutWindow
             // as the key is an identity comparison across a COM boundary. It does not hold. That
             // lookup failed on every single request, so the wrap was never served and the worker
             // half of the bridge quietly did nothing at all - for every site, since it shipped.
-            core.WebResourceRequested += (_, e) => OnServiceWorkerResourceRequested(core, e);
+            // TEMPORARILY DISABLED. Wrapping a worker changes its bytes, so the browser installs a
+            // new one, and that is a live change to a site's caching and update behaviour. It broke
+            // the PrintStream launcher during a release. The captured-core fix below is correct and
+            // stays in git; serving the wrap is off until it can be brought back deliberately.
+            _ = (Action)(() => core.WebResourceRequested += (_, e) => OnServiceWorkerResourceRequested(core, e));
             await core.AddScriptToExecuteOnDocumentCreatedAsync(ServiceWorkerBridgeScript);
         }
         catch (Exception ex)
