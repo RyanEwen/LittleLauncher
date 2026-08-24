@@ -45,6 +45,7 @@ public sealed partial class WebFlyoutWindow
     /// <summary>Marks the inner request for the original worker script, so it is not wrapped twice.</summary>
     private const string OriginalScriptMarker = "__llsw";
 
+
     /// <summary>
     /// Worker scripts each browser has been told about, and so wraps when they are fetched.
     /// </summary>
@@ -55,6 +56,19 @@ public sealed partial class WebFlyoutWindow
     /// the other silently not.
     /// </remarks>
     private readonly Dictionary<CoreWebView2, HashSet<string>> _serviceWorkerScripts = new();
+
+    /// <summary>Worker scripts registered as ES modules, so the wrap suits the realm it lands in.</summary>
+    /// <remarks>
+    /// <para><b>A module worker has no <c>importScripts</c>.</b> The classic wrap ends in a call to
+    /// it, so serving that body to a module registration throws while the script is being evaluated,
+    /// the install fails, and <c>register()</c> rejects. The origin is then left with no worker at
+    /// all, which looks nothing like a bridge problem and everything like the site being broken.</para>
+    /// <para>A module is wrapped with a static <c>import</c> instead. That runs the original first,
+    /// which is the one ordering difference: a worker calling <c>showNotification</c> during its own
+    /// evaluation would miss the patch. Nothing does that, and the alternative is a dynamic
+    /// <c>import()</c>, which a service worker is not allowed to use.</para>
+    /// </remarks>
+    private readonly HashSet<string> _moduleWorkerScripts = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Action buttons a notification declared, keyed by its tag, waiting for the notification
@@ -175,13 +189,16 @@ public sealed partial class WebFlyoutWindow
             // a promise the registration waits on. It fails open on a timeout, because a lost
             // acknowledgement must never stop a page registering its worker at all.
             var acks = {};
-            function announce(url) {
+            function announce(url, type) {
                 var href;
                 try { href = new URL(url, location.href).href; } catch (e) { return Promise.resolve(); }
 
                 return new Promise(function (resolve) {
                     acks[href] = function () { delete acks[href]; resolve(); };
-                    post({ __ll: 'swScript', url: href });
+                    // The type travels with it, because a module worker cannot run the classic
+                    // wrap: importScripts does not exist there, so the wrapped script throws while
+                    // it is being evaluated and the registration fails outright.
+                    post({ __ll: 'swScript', url: href, type: type === 'module' ? 'module' : 'classic' });
                     setTimeout(function () { if (acks[href]) acks[href](); }, 1500);
                 });
             }
@@ -191,7 +208,7 @@ public sealed partial class WebFlyoutWindow
             if (nativeRegister && !nativeRegister.__littleLauncherShim) {
                 var patched = function (url, opts) {
                     var self_ = this;
-                    return announce(url).then(function () { return nativeRegister.call(self_, url, opts); });
+                    return announce(url, opts && opts.type).then(function () { return nativeRegister.call(self_, url, opts); });
                 };
                 patched.__littleLauncherShim = true;
                 container.register = patched;
@@ -199,12 +216,18 @@ public sealed partial class WebFlyoutWindow
 
             // A worker registered on an earlier visit is already installed, so register() may never
             // be called again. Announce it and ask for an update check, which re-fetches the script
-            // and is the only moment the wrap can be applied.
+            // and is the moment the wrap can be applied.
+            //
+            // Re-pointing the registration at a marked URL was tried here instead and taken back
+            // out: the page registers its own script on load, so the two fought over the same scope
+            // and PrintStream flapped between them once a second, Google Messages' worker failed to
+            // evaluate under it, and Teams refused the register() outright under Trusted Types.
+            // With the interception actually working, the site's own register() is enough.
             navigator.serviceWorker.getRegistrations().then(function (rs) {
                 rs.forEach(function (r) {
                     var w = r.active || r.waiting || r.installing;
                     if (!w) return;
-                    announce(w.scriptURL).then(function () { try { r.update(); } catch (e) { } });
+                    announce(w.scriptURL, w.scriptType).then(function () { try { r.update(); } catch (e) { } });
                 });
             }).catch(function () { });
 
@@ -381,7 +404,13 @@ public sealed partial class WebFlyoutWindow
             // against the one held on the tab, which is an identity comparison across a COM
             // boundary and not one worth betting a feature on.
             core.WebMessageReceived += (_, e) => OnBridgeMessageReceived(core, tab, e);
-            core.WebResourceRequested += OnServiceWorkerResourceRequested;
+            // Captured, not taken from the event's sender, for the same reason as the line above:
+            // the handler has to find this browser's watched-script set in a dictionary keyed by
+            // CoreWebView2, and matching an instance handed back by an event against the one used
+            // as the key is an identity comparison across a COM boundary. It does not hold. That
+            // lookup failed on every single request, so the wrap was never served and the worker
+            // half of the bridge quietly did nothing at all - for every site, since it shipped.
+            core.WebResourceRequested += (_, e) => OnServiceWorkerResourceRequested(core, e);
             await core.AddScriptToExecuteOnDocumentCreatedAsync(ServiceWorkerBridgeScript);
         }
         catch (Exception ex)
@@ -409,7 +438,8 @@ public sealed partial class WebFlyoutWindow
         if (kind == "swScript")
         {
             string? url = message?["url"]?.GetValue<string>();
-            if (!string.IsNullOrEmpty(url)) WatchServiceWorkerScript(sender, url);
+            bool isModule = string.Equals(message?["type"]?.GetValue<string>(), "module", StringComparison.Ordinal);
+            if (!string.IsNullOrEmpty(url)) WatchServiceWorkerScript(sender, url, isModule);
         }
         else if (kind == "pageIcon")
         {
@@ -461,9 +491,11 @@ public sealed partial class WebFlyoutWindow
     /// <c>register()</c> open until this comes back, and a silent return would stall it until the
     /// fail-open timeout.
     /// </remarks>
-    private void WatchServiceWorkerScript(CoreWebView2 core, string url)
+    private void WatchServiceWorkerScript(CoreWebView2 core, string url, bool isModule)
     {
         if (url.Contains(OriginalScriptMarker, StringComparison.Ordinal)) return;
+
+        if (isModule) _moduleWorkerScripts.Add(url);
 
         if (!_serviceWorkerScripts.TryGetValue(core, out var watched))
             _serviceWorkerScripts[core] = watched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -473,6 +505,13 @@ public sealed partial class WebFlyoutWindow
             AcknowledgeServiceWorkerScript(core, url);
             return;
         }
+
+        // Info rather than Debug, and worth the line: this happens once per worker per browser, and
+        // it is the only outward sign that a launcher's notifications are bridged at all. A site
+        // that never appears here never announced a worker, which is a different problem entirely
+        // from one whose wrap failed.
+        Logger.Info("Service worker announced for {Name}: {Url} ({Type})",
+            _launcher.Name, url, isModule ? "module" : "classic");
 
         try
         {
@@ -503,19 +542,19 @@ public sealed partial class WebFlyoutWindow
         }
     }
 
-    private void OnServiceWorkerResourceRequested(CoreWebView2 sender, CoreWebView2WebResourceRequestedEventArgs e)
+    private void OnServiceWorkerResourceRequested(CoreWebView2 core, CoreWebView2WebResourceRequestedEventArgs e)
     {
         string uri = e.Request.Uri;
 
         // The inner request for the real script. Letting it through untouched is the whole point:
         // it is the browser's own fetch, with the profile's cookies on it.
         if (uri.Contains(OriginalScriptMarker, StringComparison.Ordinal)) return;
-        if (!_serviceWorkerScripts.TryGetValue(sender, out var watched) || !watched.Contains(uri)) return;
+        if (!_serviceWorkerScripts.TryGetValue(core, out var watched) || !watched.Contains(uri)) return;
 
         // Building the response body is asynchronous, so the request has to be held open — a
         // handler that returns without either a response or a deferral has declined to interfere.
         var deferral = e.GetDeferral();
-        _ = RespondWithWrappedScriptAsync(sender, e, uri, deferral);
+        _ = RespondWithWrappedScriptAsync(core, e, uri, deferral);
     }
 
     private async Task RespondWithWrappedScriptAsync(
@@ -529,8 +568,18 @@ public sealed partial class WebFlyoutWindow
             string separator = uri.Contains('?', StringComparison.Ordinal) ? "&" : "?";
             string original = $"{uri}{separator}{OriginalScriptMarker}=1";
 
-            string script = ServiceWorkerShimScript +
-                            "\nimportScripts(" + JsonSerializer.Serialize(original) + ");\n";
+            // Classic workers pull the original in with importScripts, which does not exist in a
+            // module worker; a module pulls it in with a static import, which does not exist in a
+            // classic one. Serving the wrong one fails the install and takes the whole registration
+            // with it. See _moduleWorkerScripts.
+            bool isModule = _moduleWorkerScripts.Contains(uri);
+
+            string script = isModule
+                ? "import " + JsonSerializer.Serialize(original) + ";\n" + ServiceWorkerShimScript
+                : ServiceWorkerShimScript + "\nimportScripts(" + JsonSerializer.Serialize(original) + ");\n";
+
+            Logger.Info("Wrapping service worker for {Name}: {Url} ({Type})",
+                _launcher.Name, uri, isModule ? "module" : "classic");
 
             var stream = new global::Windows.Storage.Streams.InMemoryRandomAccessStream();
             var writer = new global::Windows.Storage.Streams.DataWriter(stream);

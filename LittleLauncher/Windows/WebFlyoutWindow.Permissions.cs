@@ -605,21 +605,9 @@ public sealed partial class WebFlyoutWindow
     // ── Notifications ───────────────────────────────────────────────
 
     /// <summary>
-    /// Script that routes <c>registration.showNotification()</c> through <c>new Notification()</c>,
-    /// which is the only notification API WebView2 tells the host about.
-    /// </summary>
-    /// <remarks>
-    /// <para>See <see cref="InstallNotificationBridgeAsync"/> for why this is needed at all. The
-    /// shim keeps the two behaviours a page can actually observe: replacing a notification that
-    /// shares a <c>tag</c>, and <c>getNotifications()</c> returning what is still on screen — chat
-    /// apps use both to collapse an updated conversation into one entry and to clear it once the
-    /// thread is read.</para>
-    /// <para>It never throws away the real call: anything unexpected falls back to the original
-    /// method, so a page on a future WebView2 that does support this is left exactly as it was.</para>
-    /// </remarks>
-    /// <summary>
     /// Replaces the page's <c>Notification</c> with one that reports to the host instead of asking
-    /// the browser for a real one.
+    /// the browser for a real one, and routes a page-scope
+    /// <c>registration.showNotification()</c> through it.
     /// </summary>
     /// <remarks>
     /// <para><b>This exists to keep WebView2 notification objects out of the process entirely.</b>
@@ -640,6 +628,15 @@ public sealed partial class WebFlyoutWindow
     /// reason it can be the right icon: a message notification's icon is the sender's avatar, behind
     /// the same login as the page, so the host fetching it would get a redirect while the page gets
     /// the image.</para>
+    /// <para><b>Replacing <c>Notification</c> is not the whole job</b>, because a page can also
+    /// raise one through its service worker registration without ever touching the constructor.
+    /// <c>registration.showNotification()</c> called from the <em>document</em> is a persistent
+    /// notification, which WebView2 never surfaces to the host, and it reaches neither this shim
+    /// nor the worker-scope one in <c>WebFlyoutWindow.ServiceWorker.cs</c>, which lives in a
+    /// different realm and only sees calls made inside the worker. So the page's own
+    /// <c>ServiceWorkerRegistration.prototype</c> is patched here as well. Teams and Messenger
+    /// notify this way, and were silent for as long as the two halves left this gap between
+    /// them.</para>
     /// </remarks>
     private const string NotificationBridgeScript = """
         (function () {
@@ -744,6 +741,54 @@ public sealed partial class WebFlyoutWindow
             LLNotification.__native = Native;
 
             window.Notification = LLNotification;
+
+            // The other way a page raises one. `registration.showNotification()` called from the
+            // document makes a persistent notification, which WebView2 shows nowhere and never
+            // reports, and the worker-scope patch cannot see a call made out here. Routed through
+            // the shim above, it becomes a toast like any other.
+            var swProto = window.ServiceWorkerRegistration && window.ServiceWorkerRegistration.prototype;
+            if (swProto && swProto.showNotification && !swProto.showNotification.__littleLauncher) {
+                var nativeShow = swProto.showNotification;
+
+                var patchedShow = function (title, options) {
+                    var o = {};
+                    var src = options || {};
+                    for (var k in src) { try { o[k] = src[k]; } catch (e) { } }
+
+                    // Every notification gets a tag, because the tag is how the host pairs a toast
+                    // with the actions it should carry and with the click that comes back. An
+                    // invented one is unique, so it behaves exactly as having none did.
+                    if (!o.tag) o.tag = '__ll-sw-' + (++seq) + '-' + Date.now().toString(36);
+
+                    // The real one is still made, exactly as the worker-scope shim does it: it is
+                    // never displayed, but getNotifications() returns it and a notificationclick
+                    // has to carry a real one for the page's own notification.data to work. Not
+                    // wrapped in a try: a throw here is what the page would have got unpatched.
+                    var p = nativeShow.call(this, title, o);
+
+                    p.then(function () {
+                        // Ahead of the notification, so the host has them when it builds the toast.
+                        if (o.actions && o.actions.length)
+                            post({ __ll: 'actions', tag: o.tag, actions: o.actions });
+
+                        try {
+                            // Note the absent 'actions': the constructor throws on it, because a
+                            // non-persistent notification may not have any. They travel beside it.
+                            new window.Notification(title, {
+                                body: o.body, icon: o.icon, badge: o.badge, image: o.image,
+                                tag: o.tag, data: o.data, dir: o.dir, lang: o.lang,
+                                silent: o.silent, timestamp: o.timestamp,
+                                requireInteraction: o.requireInteraction
+                            });
+                        } catch (e) { }
+                    }).catch(function () { });
+
+                    return p;
+                };
+
+                patchedShow.__littleLauncher = true;
+                swProto.showNotification = patchedShow;
+            }
 
             window.chrome.webview.addEventListener('message', function (ev) {
                 var d = ev.data;
@@ -932,11 +977,17 @@ public sealed partial class WebFlyoutWindow
                     builder.SetAppLogoOverride(new Uri(launcherIcon!));
             }
 
+            // Actions arrive by either of two routes, and which one carries them depends on how
+            // the page raised the notification. A `new Notification(...)` page passes them to the
+            // constructor, so they ride the notify message; a `showNotification` page cannot, since
+            // the constructor throws on them, so both shims post them alongside and ahead of it.
+            // Seeding from the message and then taking whatever is pending covers both.
+            // AddNotificationActions is a no-op when nothing was ever sent for this tag, so the
+            // common case is unaffected.
             if (message["actions"] is JsonArray actions && actions.Count > 0)
-            {
                 _pendingActions[tag] = (JsonArray)actions.DeepClone();
-                AddNotificationActions(builder, tag);
-            }
+
+            AddNotificationActions(builder, tag);
 
             if (silent) builder.MuteAudio();
 

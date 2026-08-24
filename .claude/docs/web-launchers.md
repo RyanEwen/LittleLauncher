@@ -1412,6 +1412,47 @@ subscribed at all.
   mitigation rather than a guarantee — per the interface-reference problem above, the only reliable
   answer for a dangerous type is not to be handed it.
 
+### `showNotification` has to be patched in two realms
+
+A page can raise a notification two ways, and only one of them touches `Notification`:
+
+| Call site | Realm | Patched by |
+|---|---|---|
+| `new Notification(...)` | document | `NotificationBridgeScript` (Permissions.cs) |
+| `registration.showNotification(...)` from the page | document | `NotificationBridgeScript` (Permissions.cs) |
+| `registration.showNotification(...)` from a push handler | worker | `ServiceWorkerShimScript` (ServiceWorker.cs) |
+
+The third row is the one the worker bridge below exists for. **The middle row is easy to lose**, and
+was: it had its own patch until `NotificationReceived` was dropped, and the rewrite replaced
+`window.Notification` without restoring it. A `ServiceWorkerRegistration.prototype` patched inside
+the worker is a different realm's prototype and never sees a call made from the document, so the two
+halves left a gap exactly the width of that middle row. Everything falling into it produced a real
+persistent notification, which WebView2 shows nowhere and never reports, and the launcher went
+silent with nothing logged anywhere. Discord raises its notifications with the constructor and was
+unaffected; Teams and Messenger use the registration and were not.
+
+The tell that it had gone was in the source rather than the behaviour: `NotificationBridgeScript`
+carried **two stacked `<summary>` blocks**, the first still describing a script that no longer
+existed. One member, one summary. A second one is a deletion that left its documentation behind.
+
+Both document-scope patches live in the same shim so they share `post` and the invented-tag rule,
+and the page-scope one still calls the original first, exactly as the worker shim does: the real
+persistent notification is what `getNotifications()` returns and what a `notificationclick` has to
+carry for `event.notification.data` to work.
+
+#### Actions arrive on a different message from the notification
+
+The constructor throws on `actions`, so a `showNotification` page cannot pass them through the
+notification the host is told about. Both shims post them separately, ahead of it, keyed by tag, and
+the host holds them in `_pendingActions`.
+
+`ShowNotificationToast` used to call `AddNotificationActions` **only inside the branch that handles
+actions carried on the notify message**, which is the one case where the separate message was never
+needed. Everything that posted actions the other way stored them and then never had them read, so a
+service worker's toast came up with no buttons and no reply box. Seed from the message when it
+carries them, then call `AddNotificationActions` unconditionally: it is a no-op when nothing is
+pending for that tag.
+
 ### Reaching the service worker
 
 The worker is where `showNotification` is called from a push or background-sync handler, and where
@@ -1433,20 +1474,45 @@ Then, in both directions:
   `notificationclick` carrying `action`, `reply` and the app's own `notification.data`. The app's
   own handler runs, so replying from the toast does what replying in the app does.
 
-Three things this has to get right, each of which broke a working build first:
+Four things this has to get right, each of which broke a working build first:
 
 - **The interception must exist before the script is fetched.** Announcing the URL over
   `postMessage` and registering in the same breath races and loses — the worker installs unwrapped
   and everything downstream silently does nothing. The patched `register()` therefore *waits* for
   the host to acknowledge, and fails open after 1.5s so a lost acknowledgement can never stop a page
   registering its worker.
-- **A worker registered on an earlier visit never re-fetches its script**, so `register()` may never
-  be called again. The bridge enumerates existing registrations and calls `update()`, which is the
-  only moment the wrap can be applied.
+- **A worker registered on an earlier visit** may never see `register()` again, so the bridge
+  enumerates existing registrations and calls `update()`, which is the moment the wrap can be
+  applied. Re-pointing the registration at a marked URL of our own was tried here and taken back
+  out: the page registers its own script on load, so the two fought over the same scope and
+  PrintStream flapped between them once a second, Google Messages' worker failed to evaluate under
+  it, and Teams refused the `register()` outright under Trusted Types.
+- **The handler must use the browser it was wired to, not the event's `sender`.** The watched-script
+  set is keyed by `CoreWebView2`, and matching an instance handed back by an event against the one
+  used as the key is an identity comparison across a COM boundary - the same trap the
+  `WebMessageReceived` wiring above already avoids by capturing. It does not hold, so that lookup
+  failed on **every single request** and the wrap was never served. The worker half of the bridge
+  therefore did nothing at all, for every site, from the day it shipped until this was found; the
+  only outward symptom was launchers that notify from a worker being silent, which is
+  indistinguishable from a site that simply does not notify.
 - **The shim calls `skipWaiting`/`clients.claim`.** Wrapping changes the script's bytes, so the
   browser installs a *new* worker; without these it would sit in "waiting" until every client went
   away, and the bridge would not take effect for the session the user is in. This is a deliberate
   change to the site's behaviour.
+- **The wrap has to suit the realm it lands in.** `importScripts` does not exist in a module worker,
+  so serving the classic wrap to a `register(url, {type: 'module'})` throws while the script is being
+  evaluated, the install fails, and `register()` *rejects*. The origin is then left with **no worker
+  at all**, which looks nothing like a bridge problem and everything like the site being broken, and
+  nothing is logged because the host's own wrap succeeded. The registration type therefore travels
+  with the announcement and a module is wrapped with a static `import` instead. That runs the
+  original first, which is the one ordering difference: a worker calling `showNotification` during
+  its own evaluation would miss the patch. Nothing does that, and the alternative, a dynamic
+  `import()`, is not allowed in a service worker at all.
+
+`WatchServiceWorkerScript` and the wrap both log at **Info**, with the type. This happens once per
+worker per browser and is the only outward sign that a launcher's notifications are bridged, so the
+absence of a site from those lines is itself the finding: it never announced a worker, which is a
+different problem from one whose wrap failed.
 
 ### A click has two audiences, and a page has only one of them
 
