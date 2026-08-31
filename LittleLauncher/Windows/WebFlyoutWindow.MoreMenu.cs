@@ -336,11 +336,14 @@ public sealed partial class WebFlyoutWindow
     /// Everything regular-window mode changes is window state rather than something re-read per
     /// open, so switching it from the menu has to push all of it now: the taskbar button and
     /// switcher eligibility, always-on-top (which the pin's meaning depends on), and whether the
-    /// window may be minimized — without which its taskbar button's click does nothing at all.
+    /// window may be minimized, without which its taskbar button's click does nothing at all. The
+    /// header's minimize button goes with that last one: it is only offered in this mode, because
+    /// it is the only mode with a taskbar button to bring the window back from.
     /// </remarks>
     private void ApplyWindowMode()
     {
         SetMinimizable(_launcher.WebRegularWindow);
+        UpdateMinimizeButton();
         SetTopmost(true);
         UpdatePinButton();
         ApplyTaskbarButton(_isOpen);

@@ -128,7 +128,7 @@ public sealed partial class WebFlyoutWindow
     {
         if (!IsBarMode)
         {
-            _bookmarkBar.Visibility = Visibility.Collapsed;
+            ApplyBookmarkBarVisibility();
             ClearBookmarkButtons();
             _barSignature = "";
             return;
@@ -140,7 +140,7 @@ public sealed partial class WebFlyoutWindow
         if (!force && signature == _barSignature && _bookmarkStrip.Children.Count > 0 && BarHoldsLiveBookmarks())
         {
             // Same bookmarks as last time — the buttons are already built, laid out and decoded.
-            _bookmarkBar.Visibility = Visibility.Visible;
+            ApplyBookmarkBarVisibility();
             return;
         }
 
@@ -150,8 +150,28 @@ public sealed partial class WebFlyoutWindow
         foreach (var bookmark in _launcher.WebBookmarks)
             _bookmarkStrip.Children.Add(BuildBookmarkButton(bookmark));
 
-        _bookmarkBar.Visibility = Visibility.Visible;
+        ApplyBookmarkBarVisibility();
     }
+
+    /// <summary>
+    /// Shows or hides the bar for what the launcher holds and what the page is doing.
+    /// </summary>
+    /// <remarks>
+    /// <para>The header check is the same one the address bar and the tab strip make, and it is
+    /// what the bar was missing: it is chrome, and a page showing something fullscreen means to
+    /// have the chrome out of the way. <c>ApplyFullScreen</c> collapsed the bar directly, which
+    /// held right up until anything called <see cref="RebuildBookmarkBar"/>, and that runs from
+    /// <c>ApplyLauncherChanges</c>, so a background favicon fetch or a periodic sync put a row of
+    /// bookmarks back over a fullscreen video with no user action at all. Both of those reach here
+    /// even when they change nothing, because the early return above is a rebuild that was skipped
+    /// rather than a decision not to show the bar.</para>
+    /// <para>Every path that shows the bar goes through this, so there is one answer to "should the
+    /// bar be visible" rather than one per caller.</para>
+    /// </remarks>
+    private void ApplyBookmarkBarVisibility() =>
+        _bookmarkBar.Visibility = IsBarMode && _header.Visibility == Visibility.Visible
+            ? Visibility.Visible
+            : Visibility.Collapsed;
 
     /// <summary>
     /// True when the buttons on the bar carry the very bookmarks the launcher holds now.

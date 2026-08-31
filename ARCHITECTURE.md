@@ -160,7 +160,16 @@ always-on-top and dismiss-on-focus-loss and puts it in the taskbar and the task 
 pinned button shows the running indicator and closes it when clicked. **The switcher entry cannot be
 declined** — taskbar eligibility is `WS_EX_TOOLWINDOW`, which governs both, and four ways round it
 were measured and failed; see [.claude/docs/web-launchers.md](.claude/docs/web-launchers.md). That
-is why the setting names a window kind rather than offering a taskbar-only toggle.
+is why the setting names a window kind rather than offering a taskbar-only toggle. In that mode the
+header also carries a **minimize** button, and the window stamps the three
+`PKEY_AppUserModel_Relaunch*` properties alongside its AUMID so its taskbar button can be **pinned**
+from its own right-click menu: an AUMID names a group but does not say how to start it again, so
+without them there was nothing for a pin to record.
+
+**Always-on-top is a band, not a place.** Several launchers can sit in it at once, so the one that
+takes focus re-asserts its position at the head of it (`RaiseWithinTopmostBand`), and `SetTopmost`
+refuses to re-apply a value the window already has. Without the second half, `ApplyLauncherChanges`
+firing on a background favicon fetch pushed an idle launcher in front of the one being read.
 
 Per-launcher WebView2 profiles live in `%AppData%\LittleLauncher\WebProfiles\{launcherId}`, which is
 what keeps a dashboard signed in across app restarts.

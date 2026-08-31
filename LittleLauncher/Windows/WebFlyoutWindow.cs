@@ -77,6 +77,12 @@ public sealed partial class WebFlyoutWindow : Window
     private readonly Grid _contentHost;
     private readonly TextBlock _headerTitle;
     private readonly Button _pinButton;
+
+    /// <summary>
+    /// Sends the window to the taskbar. Only shown in regular-window mode, which is the only mode
+    /// that has somewhere to send it to.
+    /// </summary>
+    private readonly Button _minimizeButton;
     private readonly Button _maximizeButton;
     private readonly Button _backButton;
     private readonly Button _forwardButton;
@@ -203,6 +209,25 @@ public sealed partial class WebFlyoutWindow : Window
     /// is a combination neither mode offers on its own.
     /// </remarks>
     private bool StaysOpenAsWindow => _launcher.WebRegularWindow && !_launcher.WebWindowAutoHide;
+
+    /// <summary>True while the window is sitting on its taskbar button rather than on screen.</summary>
+    /// <remarks>
+    /// Minimizing deactivates the window, so without this the header's minimize button was a close
+    /// in disguise for any launcher running with <c>WebWindowAutoHide</c>: the dismissal that
+    /// follows a focus loss parked it off screen and took its taskbar button with it, leaving
+    /// nothing to restore. A minimized window is not one the user clicked away from: it is one
+    /// they put down, and it is meant to still be there when they pick it up.
+    /// </remarks>
+    private bool IsMinimized => _hwnd != IntPtr.Zero && IsWindow(_hwnd) && IsIconic(_hwnd);
+
+    /// <summary>True while the window is in the desktop's always-on-top band.</summary>
+    /// <remarks>
+    /// Read from the window's own extended style rather than from a cached flag or from the
+    /// launcher's settings, because neither of those is the state that matters here: a modal drops
+    /// the band for its duration, and the answer has to follow the window rather than the intent.
+    /// </remarks>
+    private bool IsTopmost =>
+        _hwnd != IntPtr.Zero && IsWindow(_hwnd) && (GetWindowLong(_hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
     private Window? _openModal;
 
     /// <summary>
@@ -350,6 +375,17 @@ public sealed partial class WebFlyoutWindow : Window
         // the cameras up while working in another window.
         _pinButton = BuildHeaderButton(PinGlyph(launcher.WebPinFlyout), PinTooltip(launcher.WebPinFlyout), (_, _) => TogglePin());
 
+        // Only in regular-window mode, and that is not a cosmetic restriction: a flyout has no
+        // taskbar button, so minimizing one would put it somewhere with nothing to bring it back
+        // from. In that mode Close is the button that gets it off the screen. A regular window has
+        // the button, the switcher entry and the presenter's IsMinimizable, so this is the one
+        // window control it was visibly missing.
+        //
+        // U+E921 is Segoe Fluent's ChromeMinimize, the twin of the ChromeMaximize below, and
+        // escaped rather than pasted for the reason recorded on the back button.
+        _minimizeButton = BuildHeaderButton("\uE921", "Minimize", (_, _) => MinimizeWindow());
+        UpdateMinimizeButton();
+
         // Sized for the moment, not for good. A tray flyout is small because that is what it is
         // for, but a dashboard occasionally wants the whole screen — and being able to grow it
         // there and back beats resizing the launcher and putting it back afterwards.
@@ -382,6 +418,12 @@ public sealed partial class WebFlyoutWindow : Window
         // flyout behaves as a window, and the page actions between them made that read as two
         // unrelated buttons.
         headerButtons.Children.Add(_pinButton);
+
+        // Minimize, maximize, close, in that order, because that is the order every window on
+        // this desktop puts them in and the header is standing in for a title bar it does not have.
+        // It is collapsed outside regular-window mode rather than absent, so the strip is built
+        // once and the setting can be flipped while the window is alive.
+        headerButtons.Children.Add(_minimizeButton);
         headerButtons.Children.Add(_maximizeButton);
         headerButtons.Children.Add(BuildHeaderButton("", "Close", (_, _) => HideFlyout(), redOnHover: true));
 
@@ -500,15 +542,6 @@ public sealed partial class WebFlyoutWindow : Window
         // Last in the stack, so it sits directly on top of the page it describes, exactly where a
         // browser puts it.
         chrome.Children.Add(_loadingBar);
-
-        // Everything that hides the header — collapsing to a bookmark bar, a page going
-        // fullscreen — means to hide the chrome, so the address bar and the tab strip follow it
-        // rather than needing a matching line added at each of those call sites.
-        header.RegisterPropertyChangedCallback(UIElement.VisibilityProperty, (_, _) =>
-        {
-            ApplyAddressBarVisibility();
-            ApplyTabBarVisibility();
-        });
 
         // ── Status overlay (loading / error) ────────────────────────
         _statusRing = new ProgressRing
@@ -640,6 +673,24 @@ public sealed partial class WebFlyoutWindow : Window
         root.Children.Add(chrome);
         root.Children.Add(_contentHost);
         root.Children.Add(_bookmarkBar);
+
+        // Everything that hides the header (collapsing to a bookmark bar, a page going fullscreen)
+        // means to hide the chrome, so the address bar, the tab strip and the bookmark bar follow it
+        // rather than needing a matching line added at each of those call sites. The bookmark bar is
+        // not in the header's own stack, being a row of its own below the page, but it is chrome all
+        // the same, and following the header here is what stopped it coming back over a fullscreen
+        // video every time anything touched the launcher.
+        //
+        // Registered here rather than beside the chrome it belongs to, because the callback reaches
+        // three fields and this is the first point at which all three exist. Wired earlier it was
+        // correct only by accident: nothing sets the header's visibility during construction today,
+        // and the first line that did would have run this against a null bookmark bar.
+        header.RegisterPropertyChangedCallback(UIElement.VisibilityProperty, (_, _) =>
+        {
+            ApplyAddressBarVisibility();
+            ApplyTabBarVisibility();
+            ApplyBookmarkBarVisibility();
+        });
 
         // Above the content and the bar, below the grips in nothing but z-order: it is collapsed
         // unless a folder is open, so it cannot intercept anything the rest of the time.
@@ -1000,6 +1051,50 @@ public sealed partial class WebFlyoutWindow : Window
         }
     }
 
+    /// <summary>
+    /// Shows the header's minimize button only while the launcher is a regular window.
+    /// </summary>
+    /// <remarks>
+    /// Every path that can change the mode calls this beside <see cref="SetMinimizable"/>, and the
+    /// two belong together: the presenter flag is what lets the window be minimized at all, and
+    /// this is whether the header offers to. A button that says a window can be minimized while the
+    /// presenter says it cannot is a control that does nothing when pressed.
+    /// </remarks>
+    private void UpdateMinimizeButton() =>
+        _minimizeButton.Visibility = _launcher.WebRegularWindow ? Visibility.Visible : Visibility.Collapsed;
+
+    /// <summary>
+    /// Sends a regular-window launcher to its taskbar button.
+    /// </summary>
+    /// <remarks>
+    /// <para><b><c>ShowWindow</c>, deliberately, and not <c>OverlappedPresenter.Minimize()</c>.</b>
+    /// The presenter route looks tidier (it is how <see cref="SetMinimizable"/> reaches the same
+    /// window), but nothing documents it as bypassing <c>WM_SYSCOMMAND</c>, and
+    /// <see cref="HandleTaskbarMinimize"/> is sitting on that message: under
+    /// <c>WebTaskbarClickCloses</c> it turns <c>SC_MINIMIZE</c> into a dismissal, so a presenter
+    /// call that happened to go that way would make this button close the launcher instead of
+    /// minimizing it. This path cannot reach that handler at all, which is worth more than the
+    /// symmetry. Nothing is lost by skipping the presenter's own minimizable check either: the
+    /// button is shown only in regular-window mode, which is exactly when it is on.</para>
+    /// <para>Nothing else has to be told. The window is not parked, so <c>_isOpen</c> stays true
+    /// and the browser keeps running exactly as it does while the launcher is on screen; the
+    /// <c>IsMinimized</c> guard in <see cref="WebFlyoutWindow_Activated"/> is what stops the
+    /// deactivation this causes from turning the minimize into a close.</para>
+    /// </remarks>
+    private void MinimizeWindow()
+    {
+        if (_hwnd == IntPtr.Zero || !IsWindow(_hwnd)) return;
+
+        try
+        {
+            ShowWindow(_hwnd, SW_MINIMIZE);
+        }
+        catch (Exception ex)
+        {
+            Logger.Debug(ex, "Minimizing failed for launcher {Name}", _launcher.Name);
+        }
+    }
+
     private void SetTopmost(bool topmost)
     {
         try
@@ -1010,6 +1105,15 @@ public sealed partial class WebFlyoutWindow : Window
             // "the default" is exactly what differs between the two window kinds.
             if (_launcher.WebRegularWindow) topmost = topmost && _launcher.WebPinFlyout;
 
+            // Only when it actually changes. Setting the presenter's flag re-applies HWND_TOPMOST,
+            // which lifts the window to the head of the always-on-top band whether or not it was
+            // already in it, and this runs from ApplyLauncherChanges, which fires on any launcher
+            // edit at all, a background favicon fetch included. A second always-on-top launcher
+            // therefore jumped in front of whichever one the user was looking at, with no action of
+            // theirs. The band's order is settled by activation (see RaiseWithinTopmostBand), not
+            // by whichever window last re-stated a flag it already had.
+            if (topmost == IsTopmost) return;
+
             if (GetAppWindow().Presenter is OverlappedPresenter presenter)
                 presenter.IsAlwaysOnTop = topmost;
         }
@@ -1017,6 +1121,33 @@ public sealed partial class WebFlyoutWindow : Window
         {
             Logger.Debug(ex, "Presenter unavailable while setting topmost");
         }
+    }
+
+    /// <summary>
+    /// Puts the launcher the user just moved to above the other always-on-top launchers.
+    /// </summary>
+    /// <remarks>
+    /// <para>Always-on-top is not one place, it is a band, and several launchers can sit in it at
+    /// once: every pinned flyout, and every launcher kept up while the user works beside it. Within
+    /// the band the order is whatever the last <c>HWND_TOPMOST</c> call left, and focus does not
+    /// necessarily change it: the click that activates a launcher lands on the hosted browser's own
+    /// child window rather than on this one, so the raise a top-level click would have brought with
+    /// it does not always arrive. The launcher being looked at was left underneath one that had
+    /// simply been raised more recently, with nothing the user could do about it short of dismissing
+    /// the other launcher.</para>
+    /// <para>Re-asserting the same band position is what raises it: <c>HWND_TOPMOST</c> on a window
+    /// already in the band moves it to the head of the band and nowhere else. Windows further down
+    /// the desktop are unaffected, which is why this is not the same thing as making the window
+    /// topmost: a launcher that is not in the band is left alone rather than promoted into it.</para>
+    /// </remarks>
+    private void RaiseWithinTopmostBand()
+    {
+        // Only for a launcher that is actually on screen. A parked window is topmost too, since the park
+        // is a move off the virtual screen, not a hide, and so is every launcher preloaded under
+        // KeepRunning, none of which the user has looked at.
+        if (!_isOpen || !IsTopmost) return;
+
+        SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
 
     /// <summary>
@@ -1168,6 +1299,15 @@ public sealed partial class WebFlyoutWindow : Window
 
         if (panel._isOpen)
         {
+            // A minimized launcher is open but not on screen, so the tray click is a "bring it
+            // back" rather than a toggle: dismissing it there would answer a click asking to see
+            // the launcher by taking away the taskbar button that was the other way back to it.
+            if (panel.IsMinimized)
+            {
+                panel.BringToFront();
+                return;
+            }
+
             if (!panel._isHiding)
                 panel.HideFlyout();
             return;
@@ -1573,6 +1713,13 @@ public sealed partial class WebFlyoutWindow : Window
 
     private void ShowFlyout(int screenX, int screenY)
     {
+        // A window can be parked while it is minimized, because a page closing its own last tab
+        // takes the launcher down wherever it happens to be. Nothing below clears that: SetWindowPos
+        // moves an iconic window without restoring it, SWP_SHOWWINDOW included, and
+        // SetForegroundWindow brings it to the front still minimized, which is the no-op
+        // BringToFront exists to avoid. Left as it was, the launcher could never be shown again.
+        if (IsMinimized) ShowWindow(_hwnd, SW_RESTORE);
+
         // Rebuilt per open: bookmarks can have been added or renamed since the last one.
         RebuildBookmarkBar();
 
@@ -2847,8 +2994,10 @@ public sealed partial class WebFlyoutWindow : Window
             _isFullScreen = true;
             UpdateResizeGripVisibility();
 
+            // The bookmark bar goes with it: it follows the header's visibility, for the reason
+            // recorded on ApplyBookmarkBarVisibility, because collapsing it here as well was what let a
+            // later rebuild put it back while the page was still fullscreen.
             _header.Visibility = Visibility.Collapsed;
-            _bookmarkBar.Visibility = Visibility.Collapsed;
             _root.ClearValue(FrameworkElement.HeightProperty);
             _root.VerticalAlignment = VerticalAlignment.Stretch;
 
@@ -3192,6 +3341,7 @@ public sealed partial class WebFlyoutWindow : Window
         SetTopmost(true);
         UpdatePinButton();
         SetMinimizable(_launcher.WebRegularWindow);
+        UpdateMinimizeButton();
         if (_isOpen) ApplyTaskbarButton(true);
 
         // CurrentTargetUrl, not WebUrl. This runs whenever the launcher changes — including
@@ -3340,6 +3490,8 @@ public sealed partial class WebFlyoutWindow : Window
             // messages with handles that are already loaded, and a no-op until this launcher has
             // run as a regular window.
             PushWindowIcon();
+
+            RaiseWithinTopmostBand();
             return;
         }
 
@@ -3347,7 +3499,7 @@ public sealed partial class WebFlyoutWindow : Window
         // same rule the item flyout applies to edit mode and its editors.
         // An open question pins the flyout too: a prompt that disappears when the user clicks
         // elsewhere is a request the page never gets an answer to.
-        if (_isShowing || !_isOpen || _launcher.WebPinFlyout || StaysOpenAsWindow || _isModalOpen || _isResizing || _isMovingWindow || _isStripDragging || _isFullScreen || IsPromptOpen || _isMenuOpen) return;
+        if (_isShowing || !_isOpen || _launcher.WebPinFlyout || StaysOpenAsWindow || IsMinimized || _isModalOpen || _isResizing || _isMovingWindow || _isStripDragging || _isFullScreen || IsPromptOpen || _isMenuOpen) return;
 
         // The browser's own HWNDs are children of this window, so clicking into the page
         // deactivates the XAML window without the user having gone anywhere. Read the
@@ -3360,7 +3512,7 @@ public sealed partial class WebFlyoutWindow : Window
             // at one moment and acting on it at another is exactly how a pinned flyout ends up
             // dismissed anyway.
             if (!_isOpen || _isShowing || _isHiding) return;
-            if (_launcher.WebPinFlyout || StaysOpenAsWindow || _isModalOpen || _isResizing || _isMovingWindow || _isStripDragging || _isFullScreen || IsPromptOpen || _isMenuOpen) return;
+            if (_launcher.WebPinFlyout || StaysOpenAsWindow || IsMinimized || _isModalOpen || _isResizing || _isMovingWindow || _isStripDragging || _isFullScreen || IsPromptOpen || _isMenuOpen) return;
 
             if (IsForegroundStillOurs())
             {
@@ -3458,7 +3610,7 @@ public sealed partial class WebFlyoutWindow : Window
     private void ForegroundWatchTimer_Tick(Microsoft.UI.Dispatching.DispatcherQueueTimer sender, object args)
     {
         // Nothing left to watch for: the flyout has gone, or something else is now holding it open.
-        if (!_isOpen || _isHiding || _launcher.WebPinFlyout || _isModalOpen || _isResizing || _isMovingWindow || _isStripDragging || _isFullScreen || IsPromptOpen)
+        if (!_isOpen || _isHiding || _launcher.WebPinFlyout || IsMinimized || _isModalOpen || _isResizing || _isMovingWindow || _isStripDragging || _isFullScreen || IsPromptOpen)
         {
             StopForegroundWatch();
             return;

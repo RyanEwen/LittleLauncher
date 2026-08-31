@@ -20,6 +20,13 @@ public static partial class NativeMethods
     internal const int WS_VISIBLE = 0x10000000;
     internal const int WS_EX_TOOLWINDOW = 0x00000080;
 
+    /// <summary>
+    /// Window sits in the always-on-top band. Read rather than written: the band is entered
+    /// through <c>OverlappedPresenter.IsAlwaysOnTop</c>, and this is how a window asks whether it
+    /// is in it before re-asserting its place within it.
+    /// </summary>
+    internal const int WS_EX_TOPMOST = 0x00000008;
+
     /// <summary>Window does not take foreground focus when clicked — used by floating toolbars.</summary>
     internal const int WS_EX_NOACTIVATE = 0x08000000;
 
@@ -305,6 +312,7 @@ public static partial class NativeMethods
 
     internal const int SW_HIDE = 0;
     internal const int SW_MAXIMIZE = 3;
+    internal const int SW_MINIMIZE = 6;
     internal const int SW_SHOWNOACTIVATE = 4;
 
     [DllImport("user32.dll")]

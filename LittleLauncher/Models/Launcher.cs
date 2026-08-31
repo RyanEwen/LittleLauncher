@@ -597,6 +597,29 @@ public partial class Launcher : ObservableObject
     public partial bool WebAlwaysShowTabs { get; set; }
 
     /// <summary>
+    /// Leave this site's service worker alone, at the cost of any notification it raises from a
+    /// push handler.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>An escape hatch, not a feature switch.</b> Bridging is on by default because it is
+    /// what makes a launcher's notifications work at all, and because <em>nobody can answer the
+    /// question it would otherwise be asking</em>: whether a site notifies from its page or from a
+    /// worker is an implementation detail of that site. Discord and WhatsApp use the page; Teams
+    /// uses a worker. Asking the user to decide per launcher is asking them something they have no
+    /// way to know, and a launcher whose notifications silently depend on a switch nobody found is
+    /// the failure this whole area keeps having.</para>
+    /// <para>Set it when a specific site misbehaves under the wrap. That is a real possibility:
+    /// wrapping changes the worker's bytes, so the browser installs a new one, and the shim calls
+    /// <c>skipWaiting</c>/<c>clients.claim</c> so it takes effect in the session the user is already
+    /// in. A site mid-deploy is where that is most likely to be felt.</para>
+    /// <para>Phrased as "skip" so the default behaviour is <c>false</c>, per the
+    /// <c>WhenWritingDefault</c> rule: a <c>bool</c> defaulting to <c>true</c> could not be turned
+    /// off.</para>
+    /// </remarks>
+    [ObservableProperty]
+    public partial bool WebSkipWorkerBridge { get; set; }
+
+    /// <summary>
     /// Show only icons in the bookmark bar, without their labels.
     /// </summary>
     /// <remarks>

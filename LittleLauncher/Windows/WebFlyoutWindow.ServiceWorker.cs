@@ -150,7 +150,17 @@ public sealed partial class WebFlyoutWindow
 
             self.addEventListener('message', function (ev) {
                 var d = ev.data;
-                if (!d || d.__ll !== 'action') return;
+                if (!d) return;
+
+                // How a page tells whether the worker it has is this one. The page cannot read
+                // worker globals and cannot read the installed script, so asking is the only way,
+                // and it is what stops the re-registration below running on a worker already ours.
+                if (d.__ll === 'ping') {
+                    try { if (ev.source && ev.source.postMessage) ev.source.postMessage({ __ll: 'pong' }); } catch (e) { }
+                    return;
+                }
+
+                if (d.__ll !== 'action') return;
 
                 ev.waitUntil(self.registration.getNotifications({ tag: d.tag }).then(function (list) {
                     var n = list && list[0];
@@ -197,8 +207,10 @@ public sealed partial class WebFlyoutWindow
                     acks[href] = function () { delete acks[href]; resolve(); };
                     // The type travels with it, because a module worker cannot run the classic
                     // wrap: importScripts does not exist there, so the wrapped script throws while
-                    // it is being evaluated and the registration fails outright.
-                    post({ __ll: 'swScript', url: href, type: type === 'module' ? 'module' : 'classic' });
+                    // it is being evaluated and the registration fails outright. Empty means the
+                    // caller does not know, which is a third answer rather than a synonym for
+                    // classic - the host declines to wrap at all rather than guess.
+                    post({ __ll: 'swScript', url: href, type: type || '' });
                     setTimeout(function () { if (acks[href]) acks[href](); }, 1500);
                 });
             }
@@ -208,28 +220,137 @@ public sealed partial class WebFlyoutWindow
             if (nativeRegister && !nativeRegister.__littleLauncherShim) {
                 var patched = function (url, opts) {
                     var self_ = this;
-                    return announce(url, opts && opts.type).then(function () { return nativeRegister.call(self_, url, opts); });
+                    // Same test as below: no permission, no bridge, so no filter and no wrap. The
+                    // registration itself is passed straight through untouched.
+                    var allowed = false;
+                    try { allowed = window.Notification && Notification.permission === 'granted'; } catch (e) { }
+                    if (!allowed) return nativeRegister.call(self_, url, opts);
+
+                    // Stated rather than passed through: a classic registration omits the option
+                    // entirely, so "absent" here means classic and must not reach the host as the
+                    // "unknown" the sweep below sends.
+                    var type = (opts && opts.type) === 'module' ? 'module' : 'classic';
+                    return announce(url, type).then(function () { return nativeRegister.call(self_, url, opts); });
                 };
                 patched.__littleLauncherShim = true;
                 container.register = patched;
             }
 
-            // A worker registered on an earlier visit is already installed, so register() may never
-            // be called again. Announce it and ask for an update check, which re-fetches the script
-            // and is the moment the wrap can be applied.
+            // Substituted by the host: only a launcher that opted in re-registers anything.
+            var bridgeWorker = __LL_BRIDGE_WORKER__;
+
+            // Does the worker we have answer as one of ours? A page cannot read worker globals and
+            // cannot read the installed script, so asking it is the only way to know, and it is
+            // what keeps the re-registration below to once rather than every load.
+            function isBridged(worker) {
+                return new Promise(function (resolve) {
+                    var settled = false;
+                    function onMessage(ev) {
+                        if (!ev.data || ev.data.__ll !== 'pong') return;
+                        settled = true;
+                        navigator.serviceWorker.removeEventListener('message', onMessage);
+                        resolve(true);
+                    }
+                    navigator.serviceWorker.addEventListener('message', onMessage);
+                    try { worker.postMessage({ __ll: 'ping' }); } catch (e) { }
+                    setTimeout(function () {
+                        if (settled) return;
+                        navigator.serviceWorker.removeEventListener('message', onMessage);
+                        resolve(false);
+                    }, 2000);
+                });
+            }
+
+            // A worker installed before the bridge existed runs the site's own script, and only a
+            // genuinely fresh fetch can be intercepted. Measured, three ways: update() and a
+            // register() naming the URL already registered never touch the network, and - the one
+            // that cost a build to learn - neither does unregistering and registering the same URL
+            // again, because that fetch is answered from cache.
             //
-            // Re-pointing the registration at a marked URL was tried here instead and taken back
-            // out: the page registers its own script on load, so the two fought over the same scope
-            // and PrintStream flapped between them once a second, Google Messages' worker failed to
-            // evaluate under it, and Teams refused the register() outright under Trusted Types.
-            // With the interception actually working, the site's own register() is enough.
+            // There was a fourth way and it is gone: unregister the worker and reload, so the site
+            // installs it again against a cold cache. It worked, and it is not something to do to
+            // somebody else's site. Unregistering destroys the registration's push subscription, so
+            // a launcher that had server-pushed notifications stops getting them until the site
+            // subscribes again; and "the site will register it again on the way back up" is an
+            // assumption, not a fact, for anything that registers behind a login or on one route.
+            // Its bounds were weaker than they read, too: the once-per-tab sessionStorage guard
+            // resets on every new tab, and an idle unload builds a new tab on every open.
+            //
+            // So a pre-existing worker is left alone. It is picked up whenever the browser next
+            // re-fetches the script on its own schedule, and every fresh install goes through the
+            // patched register() above.
+
+            // A site that cannot notify has nothing to bridge, and bridging it is not free: the wrap
+            // changes the worker's bytes, so the browser installs a new one, and a frontend that
+            // watches for that tells the user there is an update. Home Assistant does exactly that,
+            // on a launcher that was never granted notification permission in the first place, so
+            // the whole exchange was cost with no possible benefit.
+            //
+            // Read when the sweep runs rather than captured when this script does. Permission is
+            // most often granted *during* the first visit, in the flyout's own prompt bar, and a
+            // value read at document-created time is always the answer from before that.
+            function mayNotify() {
+                try { return !!(window.Notification && Notification.permission === 'granted'); }
+                catch (e) { return false; }
+            }
+
+            function sweep() {
             navigator.serviceWorker.getRegistrations().then(function (rs) {
                 rs.forEach(function (r) {
                     var w = r.active || r.waiting || r.installing;
                     if (!w) return;
-                    announce(w.scriptURL, w.scriptType).then(function () { try { r.update(); } catch (e) { } });
+
+                    // Turning bridging off has to actually undo it. Without this the flag only
+                    // stops *future* wrapping and leaves a wrapped worker installed for good, which
+                    // is the site running a script it never shipped with no way back short of
+                    // clearing storage by hand. An escape hatch that cannot escape is not one.
+                    //
+                    // Released rather than replaced, and deliberately without a reload: the site
+                    // registers its own worker the next time it loads, and a reload is the one part
+                    // of this whose safety is currently in doubt.
+                    if (!bridgeWorker) {
+                        isBridged(w).then(function (ours) {
+                            if (!ours) return;
+                            post({ __ll: 'swReleased', url: w.scriptURL });
+                            try { r.unregister(); } catch (e) { }
+                        });
+                        return;
+                    }
+
+                    // A site that cannot notify has nothing to bridge, and wrapping it is not free:
+                    // the wrap changes the worker's bytes, so a frontend watching for that tells the
+                    // user there is an update. Home Assistant does exactly that, on a launcher never
+                    // granted permission in the first place.
+                    if (!mayNotify()) {
+                        post({ __ll: 'swSkipped', reason: 'the site has no notification permission' });
+                        return;
+                    }
+
+                    // No type, because the ServiceWorker interface does not carry one and guessing
+                    // is not free here: a module worker served the classic wrap throws on
+                    // importScripts while it is being evaluated, which fails the install and leaves
+                    // the origin with no worker at all. The host treats an unknown type as "do not
+                    // wrap" and logs the announcement, so this is a note that the site has a worker
+                    // rather than an instruction to replace it. The type is known where it is
+                    // knowable: the register() above is handed one.
+                    announce(w.scriptURL, '').then(function () {
+                        try { r.update(); } catch (e) { }
+                    });
                 });
             }).catch(function () { });
+            }
+
+            sweep();
+
+            // Again if permission arrives later, which on a first visit it usually does: the page
+            // asks, the user answers in the flyout's prompt bar, and by then the sweep above has
+            // already decided there was nothing here to bridge. Without this the launcher stays
+            // silent for the rest of the session with nothing saying why.
+            try {
+                navigator.permissions.query({ name: 'notifications' }).then(function (status) {
+                    status.onchange = function () { if (status.state === 'granted') sweep(); };
+                }).catch(function () { });
+            } catch (e) { }
 
             // ── The page's best icon ────────────────────────────────
             // Chromium's favicon is whatever the page declared for a browser tab — 32 or 64px, and
@@ -410,12 +531,18 @@ public sealed partial class WebFlyoutWindow
             // as the key is an identity comparison across a COM boundary. It does not hold. That
             // lookup failed on every single request, so the wrap was never served and the worker
             // half of the bridge quietly did nothing at all - for every site, since it shipped.
-            // TEMPORARILY DISABLED. Wrapping a worker changes its bytes, so the browser installs a
-            // new one, and that is a live change to a site's caching and update behaviour. It broke
-            // the PrintStream launcher during a release. The captured-core fix below is correct and
-            // stays in git; serving the wrap is off until it can be brought back deliberately.
-            _ = (Action)(() => core.WebResourceRequested += (_, e) => OnServiceWorkerResourceRequested(core, e));
-            await core.AddScriptToExecuteOnDocumentCreatedAsync(ServiceWorkerBridgeScript);
+            // On unless this launcher has been told to keep out of a site's way. Bridging is the
+            // default because it is what makes a launcher's notifications work, and because whether
+            // a site notifies from its page or from a worker is not something a user can be asked.
+            // See Launcher.WebSkipWorkerBridge.
+            if (!_launcher.WebSkipWorkerBridge)
+                core.WebResourceRequested += (_, e) => OnServiceWorkerResourceRequested(core, e);
+            // The page half has to know whether this launcher opted in, and a document-created
+            // script has no other way to be told before it runs.
+            string bridge = ServiceWorkerBridgeScript.Replace(
+                "__LL_BRIDGE_WORKER__", _launcher.WebSkipWorkerBridge ? "false" : "true", StringComparison.Ordinal);
+
+            await core.AddScriptToExecuteOnDocumentCreatedAsync(bridge);
         }
         catch (Exception ex)
         {
@@ -442,8 +569,18 @@ public sealed partial class WebFlyoutWindow
         if (kind == "swScript")
         {
             string? url = message?["url"]?.GetValue<string>();
-            bool isModule = string.Equals(message?["type"]?.GetValue<string>(), "module", StringComparison.Ordinal);
-            if (!string.IsNullOrEmpty(url)) WatchServiceWorkerScript(sender, url, isModule);
+            string type = message?["type"]?.GetValue<string>() ?? "";
+            if (!string.IsNullOrEmpty(url)) WatchServiceWorkerScript(sender, url, type);
+        }
+        else if (kind == "swReleased")
+        {
+            Logger.Info("Released {Name}'s wrapped service worker; the site will register its own on its next load: {Url}",
+                _launcher.Name, message?["url"]?.GetValue<string>() ?? "");
+        }
+        else if (kind == "swSkipped")
+        {
+            Logger.Info("Not bridging {Name}'s service worker: {Reason}",
+                _launcher.Name, message?["reason"]?.GetValue<string>() ?? "");
         }
         else if (kind == "pageIcon")
         {
@@ -466,6 +603,16 @@ public sealed partial class WebFlyoutWindow
         {
             string? id = message?["id"]?.GetValue<string>();
             if (!string.IsNullOrEmpty(id)) InvokeShortcut(id);
+        }
+        else if (kind == "notifyRaised")
+        {
+            // Deliberately its own line rather than folded into the toast's. A raise with no
+            // "shown" following it means the notification was lost between the page and Windows,
+            // which is ours; no raise at all means the page never notified, which is not.
+            Logger.Info("Notification: {Name}'s page raised one (tag {Tag}, icon {Icon})",
+                _launcher.Name,
+                message?["tag"]?.GetValue<string>() ?? "",
+                message?["hasIcon"]?.GetValue<bool>() == true ? "yes" : "none");
         }
         else if (kind == "notify")
         {
@@ -495,11 +642,31 @@ public sealed partial class WebFlyoutWindow
     /// <c>register()</c> open until this comes back, and a silent return would stall it until the
     /// fail-open timeout.
     /// </remarks>
-    private void WatchServiceWorkerScript(CoreWebView2 core, string url, bool isModule)
+    private void WatchServiceWorkerScript(CoreWebView2 core, string url, string type)
     {
         if (url.Contains(OriginalScriptMarker, StringComparison.Ordinal)) return;
 
+        bool isModule = string.Equals(type, "module", StringComparison.Ordinal);
+        bool isClassic = string.Equals(type, "classic", StringComparison.Ordinal);
+
+        // Kept both ways round, so a site that switches its worker from a module to a classic one
+        // at the same URL is not still served an `import` that a classic worker cannot parse.
         if (isModule) _moduleWorkerScripts.Add(url);
+        else if (isClassic) _moduleWorkerScripts.Remove(url);
+
+        // Neither: the page found an already-installed worker and the ServiceWorker interface does
+        // not say how it was registered. Guessing is what makes this dangerous rather than merely
+        // ineffective - the wrong wrap throws while the worker is being evaluated, which fails the
+        // install and leaves the origin with no worker at all. So it is logged and left alone; no
+        // filter, nothing to serve. Every worker whose type is knowable is announced by the
+        // patched register(), which is handed one.
+        if (!isModule && !isClassic)
+        {
+            Logger.Info("Service worker seen for {Name}, left alone (type unknown): {Url}",
+                _launcher.Name, url);
+            AcknowledgeServiceWorkerScript(core, url);
+            return;
+        }
 
         if (!_serviceWorkerScripts.TryGetValue(core, out var watched))
             _serviceWorkerScripts[core] = watched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -510,12 +677,22 @@ public sealed partial class WebFlyoutWindow
             return;
         }
 
+        // Announced either way, because knowing which sites register a worker is worth having in
+        // the log, but a launcher told to keep out gets no filter and so can never be wrapped.
+        if (_launcher.WebSkipWorkerBridge)
+        {
+            Logger.Info("Service worker announced for {Name}: {Url} ({Type}, bridging skipped)",
+                _launcher.Name, url, type);
+            AcknowledgeServiceWorkerScript(core, url);
+            return;
+        }
+
         // Info rather than Debug, and worth the line: this happens once per worker per browser, and
         // it is the only outward sign that a launcher's notifications are bridged at all. A site
         // that never appears here never announced a worker, which is a different problem entirely
         // from one whose wrap failed.
         Logger.Info("Service worker announced for {Name}: {Url} ({Type})",
-            _launcher.Name, url, isModule ? "module" : "classic");
+            _launcher.Name, url, type);
 
         try
         {

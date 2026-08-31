@@ -179,6 +179,14 @@ model default, which would have flipped it on for every existing launcher.
 - `WebAlwaysShowTabs` (`bool`) — keep the tab strip on screen with only one tab. Defaults `false`,
   which is not "no tabs": the strip appears on its own as soon as there is a second one, so this
   reads as "keep it" and is what a launcher used as a small browser wants
+- `WebSkipWorkerBridge` (`bool`) leaves this site's service worker alone, at the cost of any
+  notification it raises from a push handler. Defaults `false`, so **bridging is on**. It is an
+  escape hatch rather than a feature switch: bridging is what makes a launcher's notifications work
+  at all, and whether a site notifies from its page or from a worker is an implementation detail of
+  that site that no user can be asked about. Set it when a specific site misbehaves under the wrap,
+  which is a real possibility since the wrap replaces the worker and claims its open pages. Phrased
+  as "skip" so `false` is the default behaviour, per the `WhenWritingDefault` rule above. See
+  [web-launchers.md](web-launchers.md).
 - `WebBookmarkIconsOnly` (`bool`) — hide the labels in the bookmark bar, leaving just the
   favicons; names become tooltips rather than being discarded. Only meaningful with a bar, and edited in
   the Bookmarks section rather than Advanced, because Advanced is shown for single-address

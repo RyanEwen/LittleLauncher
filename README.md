@@ -1,4 +1,4 @@
-<p align="center">
+﻿<p align="center">
   <img src="LittleLauncher/Resources/AppIcons/Blue.png" alt="Little Launcher" width="128">
 </p>
 
@@ -76,7 +76,8 @@ Little Launcher lives in the Windows system tray and/or taskbar. Clicking its ic
 - **Set up once, not every morning** — launchers set to keep running are opened quietly in the background when Little Launcher starts, so their notifications work from the moment you sign in, without you clicking each tray icon to wake it up.
 - **Site permissions asked in the flyout** — a page that wants your camera, microphone or location asks in a bar inside the flyout rather than a browser-sized prompt, and the answer is remembered for that launcher alone. A launcher you trust can skip the asking entirely.
 - **Sized and placed how you want it** — drag the edges to resize, pin it open, anchor it to a corner or edge instead of the tray, set a zoom level, or lock a size in so a stray drag cannot change it. The header's maximize fills the screen for as long as the flyout is open, then goes back to its usual size next time.
-- **Or an ordinary window, if you would rather** — turn on **Regular Window** and a web launcher stops behaving like a flyout: it gets a taskbar button that lights up while it is open, an Alt-Tab entry, and it stays put when you click elsewhere. Clicking its taskbar button minimises or closes it, whichever you prefer, and it can still be told to get out of the way on focus loss if you want both.
+- **Whichever one you clicked is the one on top** — several launchers can be kept above everything else at once, and the one you move to comes to the front of them rather than staying buried under a launcher you have not touched in an hour.
+- **Or an ordinary window, if you would rather** — turn on **Regular Window** and a web launcher stops behaving like a flyout: it gets a taskbar button that lights up while it is open, an Alt-Tab entry, and it stays put when you click elsewhere. Clicking its taskbar button minimises or closes it, whichever you prefer, and it can still be told to get out of the way on focus loss if you want both. The header gains a minimise button to match, and the taskbar button can be pinned like any other app's, straight from its own right-click menu.
 - **Open them from Start, or Command Palette** — every web launcher gets a Start Menu entry, so you can reach it the same way you reach any other app: Start search, PowerToys Command Palette, or anything else that reads the Start Menu. They keep themselves in step as you add, rename and remove launchers.
 - **Links open in tabs** — a link that wants a new window opens as another tab of the launcher rather than throwing you out into your browser, and a tab strip appears as soon as there is more than one. Sign-in popups work properly inside the flyout, tabs remember where you were across a dismissal, and if you would rather links just went to your browser, one menu item puts that back.
 - **An address bar when you want one** — a web launcher can show the page address under its header, and type a new one. Off by default, because most launchers open one known page.

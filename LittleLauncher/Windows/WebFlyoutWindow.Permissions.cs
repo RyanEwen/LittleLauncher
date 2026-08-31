@@ -1,4 +1,4 @@
-using LittleLauncher.Classes.Settings;
+﻿using LittleLauncher.Classes.Settings;
 using LittleLauncher.Models;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -654,6 +654,17 @@ public sealed partial class WebFlyoutWindow
             function iconDataUrl(url) {
                 if (!url) return Promise.resolve('');
 
+                // Bounded, because everything below hangs on this promise settling and a fetch is
+                // not guaranteed to. A request that is blocked rather than refused never rejects,
+                // and the notification would be lost with it - silently, since the page believes it
+                // notified. An icon is worth waiting a few seconds for and no longer.
+                return Promise.race([iconDataUrlInner(url), new Promise(function (resolve) {
+                    setTimeout(function () { resolve(''); }, 4000);
+                })]);
+            }
+
+            function iconDataUrlInner(url) {
+
                 // Already inline. Chat apps commonly hand the avatar over as a data URL, and
                 // fetching one of those with credentials rejects outright — which is exactly how
                 // this shipped broken the first time.
@@ -701,6 +712,12 @@ public sealed partial class WebFlyoutWindow
                 var previous = live.get(this.tag);
                 if (previous) { try { previous.__replaced = true; previous.close(); } catch (e) { } }
                 live.set(this.tag, this);
+
+                // Reported before the icon is fetched, and separately from the toast, because the
+                // gap between the two is otherwise invisible: a page that raises a notification we
+                // then lose looks exactly like a page that never raised one. That ambiguity is what
+                // made a silent launcher impossible to tell apart from a quiet one.
+                post({ __ll: 'notifyRaised', tag: this.tag, hasIcon: !!this.icon });
 
                 iconDataUrl(this.icon).then(function (icon) {
                     post({
@@ -1413,7 +1430,7 @@ public sealed partial class WebFlyoutWindow
         // nothing whatsoever.
         if (Instances.TryGetValue(launcherId, out var panel) && panel._isOpen)
         {
-            panel.ActivateForNotification();
+            panel.BringToFront();
             return true;
         }
 

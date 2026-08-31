@@ -67,7 +67,11 @@ public sealed partial class WebFlyoutWindow
         // second taskbar button beside the pin the user just clicked, which is exactly what the
         // mint's own comment in LauncherSettingsWindow warns about. The window outlives the pin,
         // so nothing else is in a position to notice.
-        if (target) RestampAppUserModelId();
+        if (target)
+        {
+            RestampAppUserModelId();
+            ApplyRelaunchProperties();
+        }
 
         if (target == _isRegularWindow) return;
 
@@ -125,11 +129,89 @@ public sealed partial class WebFlyoutWindow
 
             if (hadButton) GetTaskbarList()?.AddTab(_hwnd);
 
+            // Recorded here, where the identity is actually applied, and only when it is the one
+            // this app minted. The window is pinnable from its own taskbar button now
+            // (ApplyRelaunchProperties), so that string becomes a real pin's identity the moment
+            // the user does it, and JumpListService has nothing else to publish under: its own
+            // fallback scan only matches the ticked shape a settings-window pin produces. The
+            // registry guess above is deliberately not recorded, for the reason set out there.
+            //
+            // Saved without notifying sync, because LauncherPayload does not carry PinAumid: a
+            // launcher's pin identity is a fact about this machine's taskbar. Announcing it would
+            // push a payload identical to the server's and block downloads until it landed.
+            if (string.IsNullOrEmpty(_launcher.PinAumid) &&
+                string.Equals(aumid, MintedPinIdentity, StringComparison.Ordinal))
+            {
+                _launcher.PinAumid = aumid;
+                Classes.Settings.SettingsManager.SaveSettings();
+            }
+
             Logger.Info("Taskbar identity for {Name} is now {Aumid}", _launcher.Name, aumid);
         }
         catch (Exception ex)
         {
             Logger.Debug(ex, "Re-stamping the taskbar identity failed for launcher {Name}", _launcher.Name);
+        }
+    }
+
+    /// <summary>What the relaunch properties currently say, so unchanged ones are not rewritten.</summary>
+    private string _appliedRelaunch = "";
+
+    /// <summary>
+    /// Tells the shell what to run, draw and call this window if its button is pinned.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Without this the button cannot be pinned at all.</b> An AUMID alone names a group;
+    /// it does not say how to start it again, so "Pin to taskbar" has nothing to write down and
+    /// either does not appear or produces a pin that opens nothing. The three relaunch properties
+    /// are the answer, and they are the same three the companion exe sets on its own message box
+    /// for the settings window's <b>Pin to taskbar</b> button. That flow exists precisely because
+    /// there was no other pinnable window, and a regular-window launcher now is one.</para>
+    /// <para>The values must match that flow exactly, not merely be equivalent. The command is the
+    /// companion with this launcher's id, which is what the pinned shortcut has always run. The icon
+    /// is an icon <em>resource</em> reference, <c>"path,0"</c>, never a bare path, which Windows
+    /// cannot parse and silently answers with the generic document icon. The display name keeps the
+    /// <c>Little Launcher - {name}</c> format because Windows caches pin display names per AUMID in
+    /// CloudStore, so a second format would show up as the old name on any launcher pinned both
+    /// ways.</para>
+    /// <para>The base <c>.ico</c> is used rather than the timestamped copy the settings flow makes.
+    /// That copy busts Windows' per-path icon cache between pin attempts, which matters when the
+    /// user is re-pinning to fix an icon; here the window is simply advertising itself, and writing
+    /// a new file on every open to serve a pin that may never happen is the wrong trade. A launcher
+    /// whose icon changed after it was pinned is re-pinned from settings, as it always was.</para>
+    /// </remarks>
+    private void ApplyRelaunchProperties()
+    {
+        try
+        {
+            // Cheap values first, and the cache check before any of the disk work below. This runs
+            // from every show and every launcher change, while the properties themselves are
+            // written once, so an unchanged launcher must cost nothing, rather than saving an icon
+            // and stat-ing two paths only to throw the result away at the comparison.
+            string exe = MainWindow.GetFlyoutCompanionPath();
+            string command = $"\"{exe}\" --launcher {_launcher.Id}";
+            string display = $"Little Launcher - {_launcher.Name}";
+
+            // The icon is not part of the key and does not need to be: its path is derived from the
+            // launcher id, so it cannot change while the command stays the same.
+            string applied = command + "|" + display;
+            if (string.Equals(applied, _appliedRelaunch, StringComparison.Ordinal)) return;
+
+            if (!System.IO.File.Exists(exe)) return;
+
+            MainWindow.EnsureLauncherIconSaved(_launcher);
+            string ico = System.IO.Path.Combine(
+                MainWindow.GetPhysicalAppDataDir(), $"app-icon-{_launcher.Id}.ico");
+            string icon = System.IO.File.Exists(ico) ? $"{ico},0" : $"{exe},0";
+
+            SetWindowRelaunchProperties(_hwnd, icon, command, display);
+            _appliedRelaunch = applied;
+
+            Logger.Info("Relaunch identity for {Name} is now {Command}", _launcher.Name, command);
+        }
+        catch (Exception ex)
+        {
+            Logger.Debug(ex, "Setting relaunch properties failed for launcher {Name}", _launcher.Name);
         }
     }
 
@@ -211,17 +293,18 @@ public sealed partial class WebFlyoutWindow
     }
 
     /// <summary>
-    /// Brings an already-open launcher to the front, for a clicked notification.
+    /// Brings an already-open launcher to the front, for a clicked notification or a tray click
+    /// on a launcher that is minimized rather than dismissed.
     /// </summary>
     /// <remarks>
     /// <para>Restore first, then foreground. A minimized window ignores
     /// <c>SetForegroundWindow</c> — it comes to the front still minimized, which is
-    /// indistinguishable from nothing happening, and is the state the taskbar button's click leaves
-    /// a regular-window launcher in.</para>
+    /// indistinguishable from nothing happening, and is the state both the taskbar button's click
+    /// and the header's minimize leave a regular-window launcher in.</para>
     /// <para>Safe in flyout mode too, where it is close to a no-op: the window is already topmost
     /// and never minimized, so this is a foreground call on a window that already has it.</para>
     /// </remarks>
-    internal void ActivateForNotification()
+    internal void BringToFront()
     {
         if (_hwnd == IntPtr.Zero || !IsWindow(_hwnd)) return;
 
@@ -294,6 +377,11 @@ public sealed partial class WebFlyoutWindow
     /// re-pinning did not add them. Windows 11 keeps some pins in a form that never embeds the
     /// string. The failure is loud, not silent: a window whose AUMID does not match its pin raises
     /// a <em>second</em> taskbar button beside it, which is how this was found.</para>
+    /// <para><b>The minted fallback is now recorded too</b>, not just the one the settings window's
+    /// pin flow mints. This window is pinnable from its own taskbar button
+    /// (<see cref="ApplyRelaunchProperties"/>), so the string it is carrying becomes a real pin's
+    /// identity the moment the user does that, and something has to be able to find it afterwards.
+    /// </para>
     /// </remarks>
     private string PinAppUserModelId()
     {
@@ -330,6 +418,17 @@ public sealed partial class WebFlyoutWindow
         // Stable, with no tick: the tick exists on a *pin* to bust Windows' per-AUMID icon cache
         // between pin attempts, and there is nothing to bust here. A stable id also means repeated
         // opens keep landing on one button instead of accumulating.
-        return $"LittleLauncher.Launcher.{_launcher.Id}";
+        return MintedPinIdentity;
     }
+
+    /// <summary>
+    /// The identity this app gives a launcher that has no pin to join.
+    /// </summary>
+    /// <remarks>
+    /// Its own member because two things need to agree on it: <see cref="PinAppUserModelId"/>
+    /// returns it as a last resort, and <see cref="RestampAppUserModelId"/> has to recognise it to
+    /// know whether the string it is about to stamp is one this app minted or one the registry scan
+    /// guessed at. Only the former may be recorded.
+    /// </remarks>
+    private string MintedPinIdentity => $"LittleLauncher.Launcher.{_launcher.Id}";
 }

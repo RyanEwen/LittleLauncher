@@ -1,4 +1,4 @@
-> **Scope:** Use when adding P/Invoke declarations, Win32 interop, or native method signatures. Covers DllImport conventions, struct layouts, and safety patterns for this project.
+﻿> **Scope:** Use when adding P/Invoke declarations, Win32 interop, or native method signatures. Covers DllImport conventions, struct layouts, and safety patterns for this project.
 > **Governs:** `**/NativeMethods.cs` (`LittleLauncher/Classes/NativeMethods.cs`).
 
 # P/Invoke Conventions
@@ -133,7 +133,11 @@ The `#region IPropertyStore (COM)` section provides shell property access via `S
 
 Helpers:
 - `SetWindowAppUserModelId(hwnd, appId)` — sets AUMID on a window (used by SettingsWindow)
-- `SetWindowRelaunchProperties(hwnd, icon, command, displayName)` — sets all three relaunch PKEYs (currently unused — kept for future use)
+- `SetWindowRelaunchProperties(hwnd, icon, command, displayName)` sets all three relaunch PKEYs. Used by
+  `WebFlyoutWindow.ApplyRelaunchProperties` in regular-window mode: an AUMID names a taskbar group but does
+  not say how to start it again, so without these three the button offers no working **Pin to taskbar**. The
+  icon must be a resource reference (`"path,0"`); a bare path is unparseable and the taskbar silently uses
+  the generic document icon.
 - `SetPropertyStoreString(store, key, value)` — low-level VT_LPWSTR setter (private)
 
 ## ITaskbarList COM Section

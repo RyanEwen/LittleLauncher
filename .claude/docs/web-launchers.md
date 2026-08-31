@@ -560,6 +560,34 @@ back to just its bar, anything else dismisses the flyout. Both leave the launche
 all, which the next open rebuilds — so closing a **home** tab is simply "unload this", and the
 bookmark or the tray icon brings it straight back.
 
+## Several launchers on top at once
+
+Always-on-top is a **band**, not a place, and more than one launcher can be in it: every pinned
+flyout, plus every regular-window launcher whose pin is on. Within the band the order is whatever
+the last `HWND_TOPMOST` call left, so "always on top" alone does not say which of them the user is
+actually looking at. Two rules keep the focused one in front, and they are opposite halves of the
+same problem.
+
+- **The focused launcher re-asserts its place in the band** (`RaiseWithinTopmostBand`, from
+  `Activated`). `SetWindowPos(HWND_TOPMOST)` on a window *already* topmost moves it to the head of
+  the band and touches nothing further down the desktop, so this is not the same thing as making a
+  window topmost, and a launcher outside the band is left alone rather than promoted into it. It is
+  needed because the click that activates a launcher usually lands on the hosted browser's own
+  child HWND, so the raise a plain top-level click would have brought with it does not reliably
+  arrive. Gated on `_isOpen`: a parked window is topmost too (the park is a move off the virtual
+  screen, not a hide), as is every launcher preloaded under `KeepRunning`.
+- **`SetTopmost` returns early when the value is unchanged.** Setting `IsAlwaysOnTop` re-applies
+  `HWND_TOPMOST` whether or not the window was already in the band, and `SetTopmost(true)` runs from
+  `ApplyLauncherChanges`, which fires on *any* launcher edit, a background favicon fetch included.
+  A second launcher therefore jumped in front of the one being looked at with no user action at all.
+  Same trap as the maximize and `CurrentTargetUrl` guards above, one field over: **`ApplyLauncherChanges`
+  is not a user gesture and must not behave like one.** `IsTopmost` reads the window's own
+  `WS_EX_TOPMOST` rather than a cached flag or the launcher's settings, because a modal drops the
+  band for its duration and the answer has to follow the window, not the intent.
+
+Item flyouts are not part of this: they are always topmost but dismiss on focus loss, so only one is
+normally on screen.
+
 ## Regular-window mode, and why the taskbar and Alt-Tab are one switch
 
 `Launcher.WebRegularWindow` (Advanced → **Regular Window**, off by default) presents a web launcher
@@ -620,10 +648,59 @@ Four things follow, each a guard rather than a convention:
   meaningless in the other mode, so a second flag would just be a setting that does nothing
   wherever the launcher actually is. `SetTopmost` resolves it centrally — every caller is either
   dropping topmost for a modal or restoring "the default", and the default is exactly what differs.
+- **The header carries a minimize button, and only in this mode.** A flyout has no taskbar button,
+  so minimizing one would put it somewhere with nothing to bring it back from; Close is what gets a
+  flyout off the screen. A regular window has the button, the switcher entry and
+  `presenter.IsMinimizable` already, so this was the one window control the header was visibly
+  missing. It is built once and collapsed outside the mode, so the setting can be flipped while the
+  window is alive (`ApplyLauncherChanges` re-applies it beside `SetMinimizable`).
+
+  Two things had to follow it, both because **minimized is a third state next to open and
+  dismissed** and nothing previously distinguished them:
+
+  - **It minimizes with `ShowWindow`, never `OverlappedPresenter.Minimize()`.** Nothing documents
+    the presenter route as bypassing `WM_SYSCOMMAND`, and `HandleTaskbarMinimize` is sitting on
+    that message: under `WebTaskbarClickCloses` it turns `SC_MINIMIZE` into a dismissal, so a
+    presenter call that happened to go that way would make the minimize button close the launcher.
+  - **`IsMinimized` joins the dismissal guards.** Minimizing deactivates the window, so under
+    `WebWindowAutoHide` the focus-loss dismissal fired and parked the launcher off screen, taking
+    its taskbar button with it. The new button was a close in disguise for exactly the launchers
+    that had opted into being closable. A minimized window is not one the user clicked away from.
+  - **A tray click on a minimized launcher restores it rather than toggling it off.** `_isOpen` is
+    still true, so `Toggle` read it as "on screen, dismiss it" and answered a click asking to *see*
+    the launcher by removing the other way back to it. It goes through `BringToFront` (renamed from
+    `ActivateForNotification`, which now has two callers): restore first, then foreground, because
+    a minimized window ignores `SetForegroundWindow` on its own.
 - **The window needs an icon it never needed as a flyout.** A flyout has no title bar and appears
   nowhere an icon is drawn; a regular window appears in two such places, and without
   `ApplyWindowIcon` both show a blank placeholder. It uses the per-launcher `app-icon-{id}.ico` —
   the same file the pinned shortcut points at, so the button and its pin agree.
+- **The button is pinnable, and that needs more than an AUMID.** An AUMID names a group; it does
+  not say how to start the group again, so `Pin to taskbar` had nothing to write down and the pin
+  either was not offered or opened nothing. `ApplyRelaunchProperties` stamps the same three
+  properties the companion exe sets on its own message box for the settings window's **Pin to
+  taskbar** button: `RelaunchCommand` (the companion with this launcher's id),
+  `RelaunchIconResource` and `RelaunchDisplayNameResource`. That flow only ever existed
+  for want of a pinnable window, and this mode is one.
+
+  The values have to match that flow rather than merely resemble it. The icon must be an icon
+  *resource* reference (`"path,0"`); a bare path is unparseable and the taskbar falls back to the
+  generic document icon. The display name keeps the `Little Launcher - {name}` format, because
+  Windows caches pin display names **per AUMID** in CloudStore and a launcher pinned both ways
+  would otherwise show one name from the cache and one from the window.
+
+  It uses the base `app-icon-{id}.ico`, not the timestamped `-pin{tick}.ico` copy the settings flow
+  makes. That copy exists to bust Windows' per-*path* icon cache across repeated pin attempts, which
+  is what a user re-pinning to fix a wrong icon needs; a window merely advertising itself should not
+  write a file on every open for a pin that may never happen.
+
+  **The minted fallback identity is now recorded on the launcher.** `PinAppUserModelId`'s last
+  resort (`LittleLauncher.Launcher.{guid}`, no tick) becomes a real pin's identity the moment the
+  user pins this button, and `JumpListService.ResolvePinAumid`'s own fallback scan only matches the
+  *ticked* shape a settings-window pin produces. Without the write, a launcher pinned from its
+  window got a working button and a permanently empty jump list. This is not the registry guess
+  being promoted (the warning below still stands): it is a string this app minted and stamped on
+  the window itself, which is exactly what `PinAumid` is defined to mean.
 - **The pin's AUMID is recorded when the pin is made** (`Launcher.PinAumid`), minted by
   `LauncherSettingsWindow.PinToTaskbar_Click` and passed to the companion as `--aumid`. The
   companion used to mint it and then exit, so nothing remembered it.
@@ -767,6 +844,17 @@ An earlier version toggled: clicking the active bookmark collapsed the flyout ba
 the bar tinted whichever bookmark was showing. Both are gone. They made the bar a mode switch that
 happened to navigate, and the tint had to be suppressed whenever a link tab was in front — a rule
 that only existed because the bar was claiming to know something the tab actually knew.
+
+**The bar is chrome, so it follows the header.** `ApplyBookmarkBarVisibility` is the single answer
+to "should the bar be visible": bar mode, and the header not hidden. Nothing else writes
+`_bookmarkBar.Visibility`, and that is the fix for a bug rather than tidiness. `ApplyFullScreen`
+used to collapse the bar itself, which held only until the next `RebuildBookmarkBar`, and that
+runs from `ApplyLauncherChanges`, so a background favicon fetch or a periodic sync put a row of
+bookmarks back over a fullscreen video with no user action at all. **The skip path re-showed it
+too**: "these are the bookmarks the bar already holds" is a rebuild that was not needed, not a
+decision that the bar should be on screen. The address bar and the tab strip were already gated on
+the header for the same reason; the bar is a row of its own below the page, so it had to be gated
+explicitly rather than by sitting in the same `StackPanel`.
 
 **There is no collapsed state.** A launcher used to open as a bare 34px strip and grow when a
 bookmark was clicked; with one mode and an address that always exists, nothing could ever put it
@@ -1453,6 +1541,63 @@ service worker's toast came up with no buttons and no reply box. Seed from the m
 carries them, then call `AddNotificationActions` unconditionally: it is a no-op when nothing is
 pending for that tag.
 
+### Bridging is on by default, and adopts a worker already installed
+
+`Launcher.WebSkipWorkerBridge` gates everything below, and defaults **false**, so bridging is on. A
+launcher told to skip gets no resource filter and can never be wrapped; its announcements are still
+logged, marked `bridging skipped`, because knowing which sites register a worker is worth having.
+
+**It is a default, not a choice put to the user.** Whether a site raises notifications from its page
+or from a push handler is an implementation detail of that site - Discord and WhatsApp use the page,
+Teams uses a worker - so a per-launcher switch would be asking something nobody can answer, and a
+launcher whose notifications silently depend on a setting nobody found is the failure this area
+keeps repeating. The flag exists for the case where a specific site misbehaves under the wrap, which
+is a real possibility: the wrap replaces the site's script and the shim claims its open pages, and
+the one time it ran against a site mid-deploy that launcher stopped loading.
+
+**Only a fresh install against a cold cache can be intercepted.** Measured, three ways, each of
+which cost a build to learn: `registration.update()` never touches the network; a `register()`
+naming the URL already registered never touches the network; and neither does `unregister()`
+followed by registering *the same URL again*, because that fetch is answered from cache. The last
+one is the trap - it resolves, so it looks like it worked, and an earlier version of this reported
+success while wrapping nothing and throwing away two working registrations to do it.
+
+**A fourth way worked, and was removed. Do not bring it back without a better argument than it
+had.** Unregistering the worker and reloading the page does produce a first install against a cold
+cache, which is the one shape the host is handed. It is also a destructive thing to do to somebody
+else's site:
+
+- **Unregistering destroys the registration's push subscription.** A launcher that was receiving
+  server-pushed notifications stops receiving them until the site subscribes again, which it only
+  does if its code happens to run that path on the next load.
+- **"The site will register it again on the way back up" is an assumption, not a fact.** It holds
+  for anything that registers unconditionally on load and fails silently for anything that registers
+  behind a login, on one route, or after a user gesture, leaving that origin with no worker at all.
+- **Its bounds read stronger than they were.** "Never while the page has focus" is satisfied by
+  every preloaded `KeepRunning` launcher; "once per tab" is `sessionStorage`, and an idle unload
+  builds a new tab on every open, so a launcher on the default policy could do it once per open
+  rather than once ever.
+
+So a **pre-existing** worker is left alone. It is picked up the next time the browser re-fetches the
+script on its own schedule, and every fresh install is caught by the patched `register()`, which is
+the common case: a site that registers on load registers on *every* load.
+
+**The type is announced only where it is known, and unknown means "do not wrap".** The patched
+`register()` is handed the registration options, so it states `module` or `classic` outright. The
+sweep over `getRegistrations()` has no such source - the `ServiceWorker` interface exposes
+`scriptURL` and `state` and **no `scriptType`** - so it announces an empty type, and the host logs
+the worker and installs no filter for it. Guessing is what makes this dangerous rather than merely
+ineffective: the wrong wrap throws while the worker is being evaluated, which fails the install and
+leaves the origin with no worker at all. `_moduleWorkerScripts` is maintained in both directions for
+the same reason, so a site that switches a URL from a module worker to a classic one is not still
+served an `import` that a classic worker cannot parse.
+
+**A worker already ours is left completely alone.** A page cannot read worker globals or the
+installed script, so the shim answers a `ping` with a `pong`. That is what stops the sweep doing
+anything on a launcher whose worker is already bridged, and it is also how turning
+`WebSkipWorkerBridge` on **releases** one: a wrapped worker that answers the ping is unregistered so
+the site installs its own again on its next load. An escape hatch that cannot escape is not one.
+
 ### Reaching the service worker
 
 The worker is where `showNotification` is called from a push or background-sync handler, and where
@@ -1504,10 +1649,11 @@ Four things this has to get right, each of which broke a working build first:
   evaluated, the install fails, and `register()` *rejects*. The origin is then left with **no worker
   at all**, which looks nothing like a bridge problem and everything like the site being broken, and
   nothing is logged because the host's own wrap succeeded. The registration type therefore travels
-  with the announcement and a module is wrapped with a static `import` instead. That runs the
-  original first, which is the one ordering difference: a worker calling `showNotification` during
-  its own evaluation would miss the patch. Nothing does that, and the alternative, a dynamic
-  `import()`, is not allowed in a service worker at all.
+  with the announcement, a module is wrapped with a static `import` instead, and a worker whose type
+  is not known is not wrapped at all. The `import` runs the original first, which is the one
+  ordering difference: a worker calling `showNotification` during its own evaluation would miss the
+  patch. Nothing does that, and the alternative, a dynamic `import()`, is not allowed in a service
+  worker at all.
 
 `WatchServiceWorkerScript` and the wrap both log at **Info**, with the type. This happens once per
 worker per browser and is the only outward sign that a launcher's notifications are bridged, so the
