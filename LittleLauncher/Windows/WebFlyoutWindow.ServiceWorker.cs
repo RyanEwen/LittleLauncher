@@ -237,8 +237,6 @@ public sealed partial class WebFlyoutWindow
             }
 
             // Substituted by the host: only a launcher that opted in re-registers anything.
-            var bridgeWorker = __LL_BRIDGE_WORKER__;
-
             // Does the worker we have answer as one of ours? A page cannot read worker globals and
             // cannot read the installed script, so asking it is the only way to know, and it is
             // what keeps the re-registration below to once rather than every load.
@@ -294,28 +292,119 @@ public sealed partial class WebFlyoutWindow
                 catch (e) { return false; }
             }
 
+            var scriptUrlPolicy = null, scriptUrlPolicyTried = false;
+
+            // A script URL this site will accept, or null if it will not accept one from us.
+            //
+            // Trusted Types is two directives and conflating them broke this the first time it ran:
+            // `trusted-types` names which *policies* may exist, while `require-trusted-types-for
+            // 'script'` is what makes a plain string unacceptable at the sink. A site can allow any
+            // policy name and still refuse a string - Google Messages does exactly that - so "can a
+            // policy be created" was never the question, and answering it yes and then passing a
+            // string unregistered a worker that could not be put back.
+            //
+            // So create one and use it. Where nothing is enforced the string is returned untouched;
+            // where a policy cannot be created at all, null, and the caller refuses before touching
+            // the registration. That last case is Teams, whose CSP lists its allowed policies with
+            // no 'allow-duplicates' and includes its own service-worker policies, so even taking a
+            // name would break the thing being bridged.
+            function trustedScriptUrl(url) {
+                if (!window.trustedTypes || !window.trustedTypes.createPolicy) return url;
+
+                if (!scriptUrlPolicyTried) {
+                    scriptUrlPolicyTried = true;
+                    try {
+                        scriptUrlPolicy = window.trustedTypes.createPolicy('littleLauncherWorker', {
+                            createScriptURL: function (u) { return u; }
+                        });
+                    } catch (e) {
+                        scriptUrlPolicy = null;
+                    }
+                }
+
+                if (!scriptUrlPolicy) return null;
+                try { return scriptUrlPolicy.createScriptURL(url); } catch (e) { return null; }
+            }
+
+            var adoptedKey = '__llWorkerAdopted';
+
+            // Take over a worker that was installed before this bridge existed.
+            //
+            // Only one thing has ever reached the host: a register() naming a script URL the
+            // browser has not got. update(), a same-URL register(), and unregister-and-register-
+            // again are all answered from what it already has, and emptying the HTTP cache does not
+            // help because a worker's script is kept somewhere else. All measured, each at the cost
+            // of a build, and one of them at the cost of a site's worker.
+            //
+            // So the registration is walked out to a marked URL and straight back to the site's
+            // own. Both hops name a URL the browser has not got, so both are real fetches and both
+            // are wrapped, and it ends where it started with the marker gone.
+            //
+            // **Nothing is unregistered and nothing is reloaded.** register() on a live
+            // registration replaces it in place, so the origin always has a worker - unlike every
+            // earlier attempt, each of which removed one first and could then fail with nothing to
+            // put back.
+            function adopt(r, w) {
+                // Once per worker script, ever. localStorage rather than sessionStorage: an idle
+                // unload builds a new tab on every open, so a per-tab guard is no guard at all.
+                try {
+                    if (localStorage.getItem(adoptedKey) === w.scriptURL) return;
+                } catch (e) {
+                    post({ __ll: 'swAdopt', url: w.scriptURL, ok: false,
+                           error: 'no localStorage, so this could not be held to one attempt' });
+                    return;
+                }
+
+                var sep = w.scriptURL.indexOf('?') >= 0 ? '&' : '?';
+                var out = trustedScriptUrl(w.scriptURL + sep + 'llbridge=1');
+                var back = trustedScriptUrl(w.scriptURL);
+
+                // Both resolved before anything is registered: a URL we cannot mint means the
+                // registration is left exactly where it is.
+                if (out === null || back === null) {
+                    post({ __ll: 'swAdopt', url: w.scriptURL, ok: false,
+                           error: 'the site enforces Trusted Types and will not let us create a policy' });
+                    return;
+                }
+
+                try { localStorage.setItem(adoptedKey, w.scriptURL); } catch (e) { }
+
+                // Through the patched register, not the native one. The patch is what announces a
+                // script URL to the host and so puts the filter in place before the fetch; going
+                // straight to nativeRegister skips that, and the first run of this walk did exactly
+                // that. It appeared to work only because the page had already registered its own
+                // URL a moment earlier and left a filter behind for the return hop to land on. A
+                // site that does not register on load - WhatsApp - would have got nothing.
+                // Classic first, module if that fails, and the answer carried to the second hop.
+                //
+                // The sweep cannot read a worker's type - the ServiceWorker interface exposes
+                // scriptURL and state and no scriptType - and the wrong wrap throws while the script
+                // is being evaluated. Guessing would be dangerous if anything had been removed
+                // first, but nothing has: a failed register() leaves the existing registration
+                // exactly where it was. So the guess is free to be wrong once.
+                function hop(url, type) {
+                    var opts = { scope: r.scope };
+                    if (type) opts.type = type;
+                    return navigator.serviceWorker.register(url, opts);
+                }
+
+                hop(out).then(
+                    function () { return ''; },
+                    function () { return hop(out, 'module').then(function () { return 'module'; }); }
+                ).then(function (type) {
+                    return hop(back, type);
+                }).then(function (again) {
+                    post({ __ll: 'swAdopt', url: w.scriptURL, ok: true, scope: (again && again.scope) || r.scope });
+                }, function (e) {
+                    post({ __ll: 'swAdopt', url: w.scriptURL, ok: false, error: String((e && e.message) || e) });
+                });
+            }
+
             function sweep() {
             navigator.serviceWorker.getRegistrations().then(function (rs) {
                 rs.forEach(function (r) {
                     var w = r.active || r.waiting || r.installing;
                     if (!w) return;
-
-                    // Turning bridging off has to actually undo it. Without this the flag only
-                    // stops *future* wrapping and leaves a wrapped worker installed for good, which
-                    // is the site running a script it never shipped with no way back short of
-                    // clearing storage by hand. An escape hatch that cannot escape is not one.
-                    //
-                    // Released rather than replaced, and deliberately without a reload: the site
-                    // registers its own worker the next time it loads, and a reload is the one part
-                    // of this whose safety is currently in doubt.
-                    if (!bridgeWorker) {
-                        isBridged(w).then(function (ours) {
-                            if (!ours) return;
-                            post({ __ll: 'swReleased', url: w.scriptURL });
-                            try { r.unregister(); } catch (e) { }
-                        });
-                        return;
-                    }
 
                     // A site that cannot notify has nothing to bridge, and wrapping it is not free:
                     // the wrap changes the worker's bytes, so a frontend watching for that tells the
@@ -335,6 +424,11 @@ public sealed partial class WebFlyoutWindow
                     // knowable: the register() above is handed one.
                     announce(w.scriptURL, '').then(function () {
                         try { r.update(); } catch (e) { }
+
+                        // An unwrapped worker on a site that can notify. update() will not pick it
+                        // up - nothing that reuses what the browser already has will - so it is
+                        // adopted, once, or left alone forever.
+                        isBridged(w).then(function (ours) { if (!ours) adopt(r, w); });
                     });
                 });
             }).catch(function () { });
@@ -495,6 +589,7 @@ public sealed partial class WebFlyoutWindow
                     return;
                 }
 
+
                 if (d.__ll !== 'action') return;
 
                 navigator.serviceWorker.getRegistration().then(function (r) {
@@ -531,18 +626,16 @@ public sealed partial class WebFlyoutWindow
             // as the key is an identity comparison across a COM boundary. It does not hold. That
             // lookup failed on every single request, so the wrap was never served and the worker
             // half of the bridge quietly did nothing at all - for every site, since it shipped.
-            // On unless this launcher has been told to keep out of a site's way. Bridging is the
-            // default because it is what makes a launcher's notifications work, and because whether
-            // a site notifies from its page or from a worker is not something a user can be asked.
-            // See Launcher.WebSkipWorkerBridge.
-            if (!_launcher.WebSkipWorkerBridge)
-                core.WebResourceRequested += (_, e) => OnServiceWorkerResourceRequested(core, e);
-            // The page half has to know whether this launcher opted in, and a document-created
-            // script has no other way to be told before it runs.
-            string bridge = ServiceWorkerBridgeScript.Replace(
-                "__LL_BRIDGE_WORKER__", _launcher.WebSkipWorkerBridge ? "false" : "true", StringComparison.Ordinal);
+            // Wired for every launcher. There is no switch on this and deliberately so: whether a
+            // site notifies from its page or from a worker is an implementation detail of that
+            // site, so a per-launcher toggle asks the user something they cannot answer, and a
+            // launcher whose notifications silently depend on a setting nobody found is the failure
+            // this area kept repeating. The decisions that matter are made from what can actually
+            // be observed - see the sweep in ServiceWorkerBridgeScript, which bridges a site only
+            // where there is something to gain and nothing installed to disturb.
+            core.WebResourceRequested += (_, e) => OnServiceWorkerResourceRequested(core, e);
 
-            await core.AddScriptToExecuteOnDocumentCreatedAsync(bridge);
+            await core.AddScriptToExecuteOnDocumentCreatedAsync(ServiceWorkerBridgeScript);
         }
         catch (Exception ex)
         {
@@ -572,10 +665,19 @@ public sealed partial class WebFlyoutWindow
             string type = message?["type"]?.GetValue<string>() ?? "";
             if (!string.IsNullOrEmpty(url)) WatchServiceWorkerScript(sender, url, type);
         }
-        else if (kind == "swReleased")
+        else if (kind == "swAdopt")
         {
-            Logger.Info("Released {Name}'s wrapped service worker; the site will register its own on its next load: {Url}",
-                _launcher.Name, message?["url"]?.GetValue<string>() ?? "");
+            bool ok = message?["ok"]?.GetValue<bool>() == true;
+            string url = message?["url"]?.GetValue<string>() ?? "";
+
+            if (ok)
+                Logger.Info("Adopted {Name}'s existing service worker; it now runs wrapped: {Url}", _launcher.Name, url);
+            else
+                Logger.Warn("Could not adopt {Name}'s service worker: {Url} ({Error}). {State}",
+                    _launcher.Name, url, message?["error"]?.GetValue<string>() ?? "",
+                    message?["removed"]?.GetValue<bool>() == true
+                        ? "It had already been unregistered, so the site has none until it registers one again."
+                        : "Left as it was.");
         }
         else if (kind == "swSkipped")
         {
@@ -677,16 +779,6 @@ public sealed partial class WebFlyoutWindow
             return;
         }
 
-        // Announced either way, because knowing which sites register a worker is worth having in
-        // the log, but a launcher told to keep out gets no filter and so can never be wrapped.
-        if (_launcher.WebSkipWorkerBridge)
-        {
-            Logger.Info("Service worker announced for {Name}: {Url} ({Type}, bridging skipped)",
-                _launcher.Name, url, type);
-            AcknowledgeServiceWorkerScript(core, url);
-            return;
-        }
-
         // Info rather than Debug, and worth the line: this happens once per worker per browser, and
         // it is the only outward sign that a launcher's notifications are bridged at all. A site
         // that never appears here never announced a worker, which is a different problem entirely
@@ -710,6 +802,7 @@ public sealed partial class WebFlyoutWindow
 
         AcknowledgeServiceWorkerScript(core, url);
     }
+
 
     private void AcknowledgeServiceWorkerScript(CoreWebView2 core, string url)
     {

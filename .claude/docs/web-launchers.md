@@ -1541,46 +1541,83 @@ service worker's toast came up with no buttons and no reply box. Seed from the m
 carries them, then call `AddNotificationActions` unconditionally: it is a no-op when nothing is
 pending for that tag.
 
-### Bridging is on by default, and adopts a worker already installed
+### Bridging decides for itself, and adopts a worker already installed
 
-`Launcher.WebSkipWorkerBridge` gates everything below, and defaults **false**, so bridging is on. A
-launcher told to skip gets no resource filter and can never be wrapped; its announcements are still
-logged, marked `bridging skipped`, because knowing which sites register a worker is worth having.
+**There is no switch on this, and that is the design.** Whether a site raises notifications from its
+page or from a push handler is an implementation detail of that site - Discord and WhatsApp use the
+page, Teams uses a worker - so a per-launcher toggle asks the user something they have no way to
+answer, and a launcher whose notifications silently depend on a setting nobody found is the failure
+this area kept repeating. A `WebSkipWorkerBridge` flag was built and removed for exactly that
+reason. What decides instead is what can be observed:
 
-**It is a default, not a choice put to the user.** Whether a site raises notifications from its page
-or from a push handler is an implementation detail of that site - Discord and WhatsApp use the page,
-Teams uses a worker - so a per-launcher switch would be asking something nobody can answer, and a
-launcher whose notifications silently depend on a setting nobody found is the failure this area
-keeps repeating. The flag exists for the case where a specific site misbehaves under the wrap, which
-is a real possibility: the wrap replaces the site's script and the shim claims its open pages, and
-the one time it ran against a site mid-deploy that launcher stopped loading.
+- **No notification permission, no bridge.** A site that cannot notify has nothing to gain and the
+  wrap is not free: it changes the worker's bytes, so a frontend watching for that tells the user
+  there is an update. Home Assistant did exactly that, on a launcher never granted permission. The
+  test is re-run on `permissions.query` change, because permission is usually granted *during* the
+  first visit, after this script has already run once.
+- **A worker already ours is left completely alone**, which is what keeps adoption to once rather
+  than every load. The page cannot read worker globals or the installed script, so the shim answers
+  a `ping` with a `pong`.
+- **Once per worker script, ever**, in `localStorage`. Not `sessionStorage`: an idle unload builds a
+  new tab on every open, so a per-tab guard is no guard at all.
 
-**Only a fresh install against a cold cache can be intercepted.** Measured, three ways, each of
-which cost a build to learn: `registration.update()` never touches the network; a `register()`
-naming the URL already registered never touches the network; and neither does `unregister()`
-followed by registering *the same URL again*, because that fetch is answered from cache. The last
-one is the trap - it resolves, so it looks like it worked, and an earlier version of this reported
-success while wrapping nothing and throwing away two working registrations to do it.
+#### Only a URL the browser has not got produces a fetch
 
-**A fourth way worked, and was removed. Do not bring it back without a better argument than it
-had.** Unregistering the worker and reloading the page does produce a first install against a cold
-cache, which is the one shape the host is handed. It is also a destructive thing to do to somebody
-else's site:
+Measured, each at the cost of a build:
 
-- **Unregistering destroys the registration's push subscription.** A launcher that was receiving
-  server-pushed notifications stops receiving them until the site subscribes again, which it only
-  does if its code happens to run that path on the next load.
-- **"The site will register it again on the way back up" is an assumption, not a fact.** It holds
-  for anything that registers unconditionally on load and fails silently for anything that registers
-  behind a login, on one route, or after a user gesture, leaving that origin with no worker at all.
-- **Its bounds read stronger than they were.** "Never while the page has focus" is satisfied by
-  every preloaded `KeepRunning` launcher; "once per tab" is `sessionStorage`, and an idle unload
-  builds a new tab on every open, so a launcher on the default policy could do it once per open
-  rather than once ever.
+| | reaches the host |
+|---|---|
+| `registration.update()` | no - never touches the network |
+| `register()` naming the URL already registered | no - never touches the network |
+| `unregister()` then register the same URL again | no - answered from cache |
+| `ClearBrowsingDataAsync(DiskCache)` then the above | no - a worker's script is kept elsewhere |
+| `register()` naming a URL the browser has not got | **yes** |
 
-So a **pre-existing** worker is left alone. It is picked up the next time the browser re-fetches the
-script on its own schedule, and every fresh install is caught by the patched `register()`, which is
-the common case: a site that registers on load registers on *every* load.
+The third is the trap: it resolves, so it looks like it worked. An earlier version reported success
+while wrapping nothing, and a later one unregistered Google Messages' worker and could not put it
+back, because minting the replacement URL was refused *after* the unregister had run.
+
+#### So the registration is walked out and back
+
+`adopt()` registers `sw.js?llbridge=1`, then registers `sw.js` again. Both name a URL the browser has
+not got, so both are real fetches and both are wrapped, and it ends where it started with the marker
+gone.
+
+**Nothing is unregistered and nothing is reloaded.** `register()` on a live registration replaces it
+in place, so the origin has a worker at every instant - including when a hop fails. That is the
+property every earlier attempt lacked: each removed something first and could then fail with nothing
+to put back, and twice it did.
+
+Two things this has to get right:
+
+- **Both hops go through the patched `register()`, not `nativeRegister`.** The patch is what
+  announces a script URL and puts the filter in place before the fetch. The first version called
+  `nativeRegister` and appeared to work on YouTube purely because the page had registered its own URL
+  moments earlier and left a filter for the return hop to land on. On WhatsApp, which does not
+  register on load, it would have done nothing at all.
+- **The worker type is discovered, not guessed.** The sweep cannot read it - `ServiceWorker` exposes
+  `scriptURL` and `state` and no `scriptType` - so classic is tried and module used if that fails,
+  with the answer carried to the second hop. Guessing would be dangerous if anything had been
+  removed first; because nothing has, a failed install leaves the existing registration exactly where
+  it was and the guess is free to be wrong once.
+
+#### Trusted Types decides whether adoption is possible at all
+
+The URL handed to `register()` must be a `TrustedScriptURL` on a site enforcing Trusted Types, and
+**the two directives are not the same question**. `trusted-types` names which *policies* may exist;
+`require-trusted-types-for 'script'` is what makes a plain string unacceptable at the sink. Google
+Messages allows any policy name and still refuses strings, so probing "can a policy be created" said
+yes and meant nothing - which is how its worker came to be unregistered with no way back.
+
+So a policy is created and *used* to mint both URLs. Where nothing is enforced the string passes
+through untouched. Where a policy cannot be created at all, adoption is refused before anything is
+registered: that is Teams, whose CSP lists its allowed policies with no `'allow-duplicates'` and
+includes its own service-worker policies, so even taking a name would break the thing being bridged.
+
+**A guard written before the risky step records failures as successes.** The once-ever marker is set
+before the walk so a failure cannot retry in a loop, which means a site whose adoption failed is
+marked done and will never be retried. Google Messages is in that state from the unregister
+incident. Clearing `localStorage['__llWorkerAdopted']` on the origin is the only way back.
 
 **The type is announced only where it is known, and unknown means "do not wrap".** The patched
 `register()` is handed the registration options, so it states `module` or `classic` outright. The
@@ -1593,10 +1630,8 @@ the same reason, so a site that switches a URL from a module worker to a classic
 served an `import` that a classic worker cannot parse.
 
 **A worker already ours is left completely alone.** A page cannot read worker globals or the
-installed script, so the shim answers a `ping` with a `pong`. That is what stops the sweep doing
-anything on a launcher whose worker is already bridged, and it is also how turning
-`WebSkipWorkerBridge` on **releases** one: a wrapped worker that answers the ping is unregistered so
-the site installs its own again on its next load. An escape hatch that cannot escape is not one.
+installed script, so the shim answers a `ping` with a `pong`. That is what stops adoption running on
+every load rather than once: a worker that answers is already wrapped and there is nothing to do.
 
 ### Reaching the service worker
 
