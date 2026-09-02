@@ -289,7 +289,7 @@ public sealed partial class WebFlyoutWindow
         {
             try
             {
-                await flyout.RebuildNotificationBridgeAsync();
+                await flyout.RebuildNotificationBridgeAsync(resetPermission: false);
             }
             catch (Exception ex)
             {
@@ -299,13 +299,22 @@ public sealed partial class WebFlyoutWindow
         }
     }
 
-    private async Task RebuildNotificationBridgeAsync()
+    /// <param name="resetPermission">
+    /// Whether to put the site's notification permission back to "not asked".
+    /// <para><b>Only for a deliberate, single-launcher repair.</b> It is how a site is made to run
+    /// its permission flow again, which is the only time it re-subscribes to push — and it is
+    /// destructive: the launcher is silent until somebody answers the prompt. Doing it across every
+    /// launcher at once took seven of them quiet in one click, which is why the bulk action and the
+    /// stale-wrap offer both pass false. Neither needs it: replacing a worker with the current wrap
+    /// has nothing to do with permission.</para>
+    /// </param>
+    private async Task RebuildNotificationBridgeAsync(bool resetPermission = true)
     {
         var core = _webView?.CoreWebView2;
         if (core == null) return;
 
-        Logger.Info("Rebuilding {Name}'s notification bridge: resetting notification permission and removing its service worker",
-            _launcher.Name);
+        Logger.Info("Rebuilding {Name}'s notification bridge: removing its service worker{Extra}",
+            _launcher.Name, resetPermission ? " and resetting notification permission" : "");
 
         // The permission goes back to "not asked", and that is the half that makes the rest work.
         // A site sets push up *during* its permission flow - it asks, and on being granted it
@@ -316,19 +325,22 @@ public sealed partial class WebFlyoutWindow
         //
         // The user is asked once on the way back up, in the flyout's own prompt bar, which is the
         // point rather than a cost: it is the site's asking that does the setup.
-        try
+        if (resetPermission)
         {
-            string origin = new Uri(core.Source).GetLeftPart(UriPartial.Authority);
-            await core.Profile.SetPermissionStateAsync(
-                CoreWebView2PermissionKind.Notifications, origin, CoreWebView2PermissionState.Default);
+            try
+            {
+                string origin = new Uri(core.Source).GetLeftPart(UriPartial.Authority);
+                await core.Profile.SetPermissionStateAsync(
+                    CoreWebView2PermissionKind.Notifications, origin, CoreWebView2PermissionState.Default);
 
-            Logger.Info("Reset notification permission for {Origin} so {Name}'s site asks again", origin, _launcher.Name);
-        }
-        catch (Exception ex)
-        {
-            // Worth carrying on: removing the worker is still most of the job, and a site that does
-            // re-register without being asked again is helped by it.
-            Logger.Warn(ex, "Could not reset notification permission for launcher {Name}", _launcher.Name);
+                Logger.Info("Reset notification permission for {Origin} so {Name}'s site asks again", origin, _launcher.Name);
+            }
+            catch (Exception ex)
+            {
+                // Worth carrying on: removing the worker is still most of the job, and a site that
+                // does re-register without being asked again is helped by it.
+                Logger.Warn(ex, "Could not reset notification permission for launcher {Name}", _launcher.Name);
+            }
         }
 
         // A script written off earlier this session is given another chance: rebuilding is exactly

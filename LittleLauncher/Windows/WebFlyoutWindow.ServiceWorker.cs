@@ -541,12 +541,20 @@ public sealed partial class WebFlyoutWindow
                         // the browser already has will pick the wrap up - not update(), not a
                         // reload - so the host is told, and offers to rebuild. Adoption is still
                         // tried first, for the sites it can still help.
-                        isBridged(w).then(function (version) {
+                        // **Only an activated worker is asked, and only when nothing is being
+                        // installed alongside it.** A worker still installing cannot answer a
+                        // postMessage, and one that has just been registered is by definition the
+                        // current wrap - so pinging mid-install reported "stale" on a launcher that
+                        // had been rebuilt seconds earlier, which is the one flow this exists to
+                        // support.
+                        if (!r.active || r.installing || r.waiting) return;
+
+                        isBridged(r.active).then(function (version) {
                             if (version === CURRENT_WRAP) return;
-                            post({ __ll: 'swStale', url: w.scriptURL,
+                            post({ __ll: 'swStale', url: r.active.scriptURL,
                                    version: version === null ? '' : (version || 'unversioned'),
                                    answered: version !== null });
-                            if (version === null) adopt(r, w);
+                            if (version === null) adopt(r, r.active);
                         });
                     });
                 });
@@ -1188,6 +1196,17 @@ public sealed partial class WebFlyoutWindow
     private static readonly HashSet<string> _rebuildOffered = [];
 
     /// <summary>
+    /// Script URLs this session has served the current wrap for, and so must never call stale.
+    /// </summary>
+    /// <remarks>
+    /// The page's sweep and the host's serving race: the sweep can enumerate a registration, find
+    /// the old worker still active, and report it stale while the replacement is already being
+    /// installed. That is exactly what a rebuild looks like from the page's side, so without this
+    /// the offer fired on the launcher the user had just rebuilt.
+    /// </remarks>
+    private readonly HashSet<string> _wrappedThisSession = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Offers to rebuild the bridge on a launcher whose worker is running an older wrap.
     /// </summary>
     /// <remarks>
@@ -1208,6 +1227,10 @@ public sealed partial class WebFlyoutWindow
         // A script this session has already failed to obtain will fail again, and rebuilding would
         // reset the user's site permission to reach the same place. Nothing to offer.
         if (_unwrappableScripts.Contains(url)) return;
+
+        // And nothing to offer for one already replaced with the current wrap this session, whatever
+        // the page saw a moment before that landed.
+        if (_wrappedThisSession.Contains(url)) return;
 
         if (!_rebuildOffered.Add(_launcher.Id)) return;
 
@@ -1233,7 +1256,10 @@ public sealed partial class WebFlyoutWindow
             "Not now",
             accepted =>
             {
-                if (accepted) _ = RebuildNotificationBridgeAsync();
+                // Without the permission reset: this offer is about replacing a worker with the
+                // current wrap, which has nothing to do with permission, and resetting it would
+                // leave the launcher silent until somebody noticed a prompt.
+                if (accepted) _ = RebuildNotificationBridgeAsync(resetPermission: false);
             }));
     }
 
@@ -1454,6 +1480,11 @@ public sealed partial class WebFlyoutWindow
             string script = isModule
                 ? banner + originalBody + "\n;\n" + ServiceWorkerShimScript
                 : banner + ServiceWorkerShimScript + "\n;\n" + originalBody;
+
+            // Noted so a stale-wrap report for it can be ignored: whatever the page's sweep saw,
+            // this launcher's worker is being replaced with the current wrap right now.
+            _wrappedThisSession.Add(uri);
+            _wrappedThisSession.Add(original);
 
             Logger.Info("Wrapping service worker for {Name}: {Url} ({Type})",
                 _launcher.Name, uri, isModule ? "module" : "classic");
