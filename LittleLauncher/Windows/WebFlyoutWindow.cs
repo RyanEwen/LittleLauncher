@@ -1922,19 +1922,35 @@ public sealed partial class WebFlyoutWindow : Window
         int policy = WebHiddenPolicies.Normalize(_launcher.WebHiddenPolicy);
         if (policy == WebHiddenPolicies.KeepRunning)
         {
-            // Collapse and drop the memory target, but never suspend. This used to return
-            // immediately, which left the browser fully *visible* to Chromium on a window parked
-            // off the virtual screen: still compositing, still decoding video, with the page
-            // reporting visibilityState 'visible' and so declining to throttle anything. Collapsing
-            // stops the rendering; script, websockets and notifications carry on exactly as they do
-            // in a background tab, which is what a chat app is already written for.
+            // Collapsed, and that is deliberate: the page has to report visibilityState 'hidden'
+            // or an app decides the user is looking at it and raises no desktop notification.
+            // Messenger and Teams both do that, which is why leaving the view visible turned "no
+            // sound at all" into "sound but no notification" rather than into a fix.
             //
-            // Suspending is the line not to cross here: a suspended page raises no notifications,
+            // What used to break is the other half. Hidden is also what Chromium throttles, and a
+            // client whose delivery rides on a timer simply stops receiving - the launcher then sat
+            // silent until it was opened and played the whole backlog at once. That is fixed where
+            // it belongs, on the environment: see WebViewEnvironments, which turns background
+            // throttling off so a hidden page stays awake without being made visible.
+            //
+            // Page.setWebLifecycleState('active') was tried here first and is not the answer. It
+            // addresses freezing rather than throttling, and a one-shot call does not survive
+            // Chromium re-evaluating the page later; a build with it and nothing else changed
+            // received nothing at all.
+            //
+            // Suspending remains the line not to cross: a suspended page raises no notifications,
+            // and that is the entire reason this policy exists.
+            // The memory target is deliberately left alone. Low is a hint to shed memory for this
+            // WebView, and on a page that is already hidden that means reclaiming the renderer out
+            // from under a client trying to hold a connection: with it set the launcher took no
+            // notice of a message until it was opened, and with it removed the same launcher made
+            // its sound while still hidden. Measured across two builds that differed in this line.
+            //
+            // Suspending remains the line not to cross: a suspended page raises no notifications,
             // and that is the entire reason this policy exists.
             foreach (var view in LiveWebViews())
             {
                 view.Visibility = Visibility.Collapsed;
-                TrySetMemoryTarget(view, CoreWebView2MemoryUsageTargetLevel.Low);
             }
             return;
         }

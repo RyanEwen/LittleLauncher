@@ -1,4 +1,4 @@
-// Copyright © 2024-2026 The Little Launcher Authors
+﻿// Copyright © 2024-2026 The Little Launcher Authors
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 using Microsoft.Web.WebView2.Core;
@@ -76,6 +76,31 @@ internal static class WebViewEnvironments
         return await CoreWebView2Environment.CreateWithOptionsAsync(
             browserExecutableFolder: "",
             userDataFolder: userDataFolder,
-            options: new CoreWebView2EnvironmentOptions { AreBrowserExtensionsEnabled = true });
+            options: new CoreWebView2EnvironmentOptions
+            {
+                AreBrowserExtensionsEnabled = true,
+
+                // What makes a hidden launcher keep receiving.
+                //
+                // A dismissed KeepRunning launcher is collapsed, which is deliberate - the page has
+                // to report visibilityState 'hidden' or an app decides the user is looking at it and
+                // raises no desktop notification. But hidden is also what Chromium throttles:
+                // background timers first, then intensive throttling at a tick a minute. A client
+                // whose delivery rides on a timer stops receiving entirely, which is what left a
+                // launcher silent until it was opened and then played the whole backlog at once.
+                //
+                // These are the switches that turn that off while leaving visibility alone, so the
+                // page stays hidden *and* awake. Page.setWebLifecycleState was tried first and does
+                // not do it: it addresses freezing, not throttling, and a one-shot call does not
+                // survive Chromium re-evaluating the page later.
+                //
+                // Cheaper than it sounds - a collapsed page still is not compositing or decoding
+                // anything. It is timers and script that keep running, which for a chat client is
+                // the point.
+                AdditionalBrowserArguments =
+                    "--disable-background-timer-throttling " +
+                    "--disable-renderer-backgrounding " +
+                    "--disable-backgrounding-occluded-windows",
+            });
     }
 }

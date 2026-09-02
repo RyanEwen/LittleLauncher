@@ -155,6 +155,8 @@ public sealed partial class WebFlyoutWindow
 
         menu.Items.Add(new MenuFlyoutSeparator());
 
+        menu.Items.Add(BuildAdvancedSubmenu());
+
         var shortcuts = new MenuFlyoutItem { Text = "Keyboard shortcuts" };
         shortcuts.Click += (_, _) => _ = ShowShortcutsAsync();
         menu.Items.Add(shortcuts);
@@ -177,6 +179,121 @@ public sealed partial class WebFlyoutWindow
         menu.Closed += (_, _) => _isMenuOpen = false;
 
         menu.ShowAt(_moreButton);
+    }
+
+    /// <summary>
+    /// The "Advanced" submenu: the three things a launcher can do to its own browser that nothing
+    /// else in the app exposes.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Buried on purpose.</b> None of these is part of using a launcher, and two of them
+    /// are only ever wanted when something is already wrong. A submenu keeps them off the path
+    /// somebody walks to change their zoom, while still putting them somewhere findable - which is
+    /// more than they had, because until now every one of them meant opening DevTools by hand or
+    /// pasting script into a console.</para>
+    /// <para>Deliberately not here: anything already reachable. Reload, zoom, open-in-browser and
+    /// the bars are all on the menu above, and browsing data is in launcher settings. A second
+    /// route to the same thing is worth it only where the moment of needing it is the moment of
+    /// looking at the flyout, which is the argument zoom already won and these do not need.</para>
+    /// </remarks>
+    private MenuFlyoutSubItem BuildAdvancedSubmenu()
+    {
+        var submenu = new MenuFlyoutSubItem { Text = "Advanced" };
+
+        // Nothing in the app opened DevTools. A web launcher is a browser with no menu bar, so the
+        // only way in was a right-click on the page hoping the default context menu was still
+        // there - and diagnosing anything inside a launcher started with finding that out.
+        var devTools = new MenuFlyoutItem { Text = "Developer tools" };
+        devTools.Click += (_, _) =>
+        {
+            try { _webView?.CoreWebView2?.OpenDevToolsWindow(); }
+            catch (Exception ex) { Logger.Warn(ex, "Opening developer tools failed for launcher {Name}", _launcher.Name); }
+        };
+        submenu.Items.Add(devTools);
+
+        // The header's reload is the ordinary one, which is answered from cache and so is no help
+        // against the case people actually reload for: a page serving something stale. There is no
+        // WebView2 API for it, but the DevTools protocol has one and the runtime speaks it.
+        var hardReload = new MenuFlyoutItem { Text = "Reload, ignoring cache" };
+        hardReload.Click += (_, _) => _ = ReloadIgnoringCacheAsync();
+        submenu.Items.Add(hardReload);
+
+        submenu.Items.Add(new MenuFlyoutSeparator());
+
+        // See RebuildNotificationBridgeAsync for why this cannot be done for the user.
+        var rebuild = new MenuFlyoutItem { Text = "Rebuild notification bridge" };
+        rebuild.Click += (_, _) => _ = RebuildNotificationBridgeAsync();
+        submenu.Items.Add(rebuild);
+
+        return submenu;
+    }
+
+    /// <summary>Reloads the page with the HTTP cache bypassed.</summary>
+    private async Task ReloadIgnoringCacheAsync()
+    {
+        var core = _webView?.CoreWebView2;
+        if (core == null) return;
+
+        try
+        {
+            await core.CallDevToolsProtocolMethodAsync("Page.reload", "{\"ignoreCache\":true}");
+        }
+        catch (Exception ex)
+        {
+            // Worth falling back rather than doing nothing: an ordinary reload is most of what was
+            // asked for, and the difference only shows on a resource the cache is holding.
+            Logger.Warn(ex, "Cache-bypassing reload failed for launcher {Name}; reloading normally", _launcher.Name);
+            try { core.Reload(); } catch (Exception inner) { Logger.Warn(inner, "Reload failed"); }
+        }
+    }
+
+    /// <summary>
+    /// Removes this site's service worker so the site installs it again, wrapped.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>This is the one thing the bridge cannot do on the user's behalf, and the reason it
+    /// is a menu item rather than automatic.</b> A worker installed before the bridge existed is
+    /// adopted by walking the registration out to a marked URL and back - but that needs a script
+    /// URL, and a site enforcing Trusted Types will only accept one minted by a policy its own CSP
+    /// names. Teams refuses to let us create a policy at all, so it can never be adopted. It will
+    /// mint its own, though, every time it loads and finds nothing registered. Creating that state
+    /// is all this does.</para>
+    /// <para><b>It costs the registration's push subscription.</b> Unregistering throws it away and
+    /// the site has to subscribe again, which every site tested does on its next load - but "does"
+    /// is its behaviour, not a promise this can make. That is exactly why it is a thing somebody
+    /// chooses from a menu called Advanced and not something that happens to them: the same act,
+    /// done automatically to every launcher, was built twice and withdrawn twice.</para>
+    /// <para>It also clears the once-ever adoption marker. A guard written before the risky step
+    /// records failures as successes, so a site whose adoption failed is marked done and would
+    /// never be retried; this is the only way back for one in that state.</para>
+    /// </remarks>
+    private async Task RebuildNotificationBridgeAsync()
+    {
+        var core = _webView?.CoreWebView2;
+        if (core == null) return;
+
+        Logger.Info("Rebuilding {Name}'s notification bridge: removing its service worker so the site registers it again",
+            _launcher.Name);
+
+        const string script = """
+            (async () => {
+                try { localStorage.removeItem('__llWorkerAdopted'); } catch (e) { }
+                try {
+                    var rs = await navigator.serviceWorker.getRegistrations();
+                    for (var i = 0; i < rs.length; i++) { try { await rs[i].unregister(); } catch (e) { } }
+                } catch (e) { }
+                location.reload();
+            })();
+            """;
+
+        try
+        {
+            await core.ExecuteScriptAsync(script);
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn(ex, "Rebuilding the notification bridge failed for launcher {Name}", _launcher.Name);
+        }
     }
 
     /// <summary>

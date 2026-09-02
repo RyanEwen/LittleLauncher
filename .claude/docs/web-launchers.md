@@ -29,21 +29,30 @@ This is the whole point of the feature, so it is the thing not to regress.
 | Never opened since app start | No window, no browser | Nothing |
 | Open | Window + browser, visible | A browser tab's worth |
 | Dismissed | Window parked off screen, browser collapsed + suspended, `MemoryUsageTargetLevel = Low` | Minimal — rendering, video and timers stop |
-| Dismissed under `KeepRunning` | Collapsed, `MemoryUsageTargetLevel = Low`, **not** suspended | A background tab — rendering stops, script and sockets do not |
+| Dismissed under `KeepRunning` | Collapsed only — **not** suspended, memory target left alone | Awake but not drawn — rendering stops, script, timers and sockets do not |
 | Dismissed past `WebIdleUnloadMinutes` (default policy) | Window only | Nothing |
 
 - **Collapsing the control is load-bearing, not cosmetic.** WebView2 refuses to suspend a visible
   browser, and the WinUI `WebView2` control drives `CoreWebView2Controller.IsVisible` from its XAML
   `Visibility`. Collapsing is therefore both what stops the rendering and what makes
   `TrySuspendAsync` legal.
-- **`KeepRunning` still collapses.** It used to return before doing anything, which left the
-  browser *visible* to Chromium on a window parked off the virtual screen — still compositing, still
-  decoding video, and reporting `visibilityState: 'visible'` so the page declined to throttle
-  itself. Collapsing stops the rendering while script, websockets and notifications carry on, which
-  is the background-tab behaviour a chat app is already written for. What it must never do is
-  suspend: a suspended page raises no notifications, and that is the whole reason the policy exists.
-  Measured: with the control collapsed and the memory target `Low`, notifications kept arriving
-  indefinitely with the page reporting `hidden`.
+- **`KeepRunning` still collapses, and that is the half that must not change.** A collapsed page
+  reports `visibilityState: 'hidden'`, and an app that decides whether to raise a desktop
+  notification from visibility concludes the user is looking at it otherwise. Leaving the view
+  visible was tried and turned "no sound at all" into "sound but no notification" - the page received
+  again and then declined to notify. Messenger and Teams both behave that way.
+- **It no longer drops the memory target, and background throttling is off for the whole
+  environment.** Those are the two things that stopped a hidden page receiving at all. `Low` is a
+  hint to shed memory, which on an already-hidden page means reclaiming the renderer out from under
+  a client holding a connection; and hidden is what Chromium throttles - background timers first,
+  then intensive throttling at a tick a minute - so a client whose delivery rides on a timer simply
+  stops. The symptom was a launcher that took no notice of a message until it was opened and then
+  played the whole backlog at once, which reads as "notifications are broken" and is not.
+  `--disable-background-timer-throttling`, `--disable-renderer-backgrounding` and
+  `--disable-backgrounding-occluded-windows` go on the environment; see `WebViewEnvironments`.
+  `Page.setWebLifecycleState('active')` was tried first and is **not** the answer: it addresses
+  freezing rather than throttling, and a one-shot call does not survive Chromium re-evaluating the
+  page. A build carrying only that received nothing at all.
 - **Suspension is best-effort; the unload is the guarantee.** `TrySuspendAsync` declines in cases
   like active media capture or a download in flight. Treat a `false` return as normal (it is logged
   at debug) — the idle timer is what makes the promise true, because after it fires there is no
@@ -212,7 +221,7 @@ per-launcher options whose right value is a **per-moment judgement** — Regular
 focus is lost (window mode only), the pin, add/remove this page from the bookmarks, **Tab bar**,
 **Address bar**, **Zoom**, **Opens at** (a submenu of radio items, being an eleven-way choice rather
 than a toggle — "Where you last dragged it" is one of its values, not a separate toggle), Remember
-size changes — with **Keyboard shortcuts**, **Launcher settings…** and **App settings…** at its
+size changes, an **Advanced** submenu — with **Keyboard shortcuts**, **Launcher settings…** and **App settings…** at its
 foot.
 
 App settings dismisses a flyout on its way, as the item flyout’s context menu does: the flyout is
@@ -271,6 +280,33 @@ Three rules, and the first two are the traps this window has hit before:
 
 The pin item names what it does in the current mode ("Always on top" vs "Stay open when focus is
 lost"), since `WebPinFlyout` is one flag with two readings and the header button only has a glyph.
+
+### Advanced is buried on purpose
+
+Three things a launcher can do to its own browser that nothing else in the app exposes, behind a
+submenu so they sit off the path somebody walks to change their zoom:
+
+- **Developer tools.** Nothing in the app opened them. A web launcher is a browser with no menu bar,
+  so the way in was a right-click hoping the default context menu was still there - and every
+  diagnosis inside a launcher began by finding that out.
+- **Reload, ignoring cache.** The header's reload is the ordinary one, answered from cache, which is
+  no help against the thing people reload for. There is no WebView2 API for it; the DevTools
+  protocol has `Page.reload` with `ignoreCache` and the runtime speaks it. It falls back to an
+  ordinary reload rather than doing nothing.
+- **Rebuild notification bridge.** Unregisters the site's service worker and reloads, so the site
+  installs it again and that fresh install is wrapped. It also clears the once-ever adoption marker.
+
+The last one is **the thing the bridge cannot do on anybody's behalf**, which is why it is a menu
+item rather than automatic. Adoption needs a script URL, and a site enforcing Trusted Types accepts
+only one minted by a policy its own CSP names - Teams refuses to let us create a policy at all, so it
+can never be adopted. Teams mints its own on every load that finds nothing registered, and this
+creates that state. The cost is the registration's push subscription, which unregistering throws
+away; every site tested subscribes again on its next load, but that is its behaviour and not a
+promise this can make. Doing the same act automatically to every launcher was built twice and
+withdrawn twice, and that history is what "Advanced" is carrying.
+
+Nothing already reachable is duplicated in it. Reload, zoom, open-in-browser and the bars are on the
+menu above; browsing data is in launcher settings.
 
 ## The address bar
 
