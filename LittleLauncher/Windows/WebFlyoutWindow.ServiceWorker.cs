@@ -1195,6 +1195,12 @@ public sealed partial class WebFlyoutWindow
     /// <summary>Launchers already offered a rebuild this session, so declining is not re-asked.</summary>
     private static readonly HashSet<string> _rebuildOffered = [];
 
+    /// <summary>When this launcher's notification permission was last answered. 0 if never.</summary>
+    private long _notificationPermissionGrantedAt;
+
+    /// <summary>How long after answering a permission prompt a rebuild offer is held back.</summary>
+    private const long PermissionSettlingMs = 2 * 60 * 1000;
+
     /// <summary>
     /// Script URLs this session has served the current wrap for, and so must never call stale.
     /// </summary>
@@ -1231,6 +1237,23 @@ public sealed partial class WebFlyoutWindow
         // And nothing to offer for one already replaced with the current wrap this session, whatever
         // the page saw a moment before that landed.
         if (_wrappedThisSession.Contains(url)) return;
+
+        // **Not in the same breath as the permission prompt.** A site that registers its worker on
+        // load, before it asks - Google Messages does - passes through the register patch unwrapped,
+        // because a site that cannot notify is deliberately left alone. Granting permission then
+        // re-runs the sweep, which correctly finds an unwrapped worker and says so *immediately
+        // after* the user answered a different question about the same launcher. The finding is
+        // right and the moment is wrong: two prompts in a row about notifications, the second
+        // undoing the sense of the first.
+        //
+        // Deliberately without claiming the once-per-session slot, so it is offered on the next
+        // open instead of being swallowed.
+        if (Environment.TickCount64 - _notificationPermissionGrantedAt < PermissionSettlingMs)
+        {
+            Logger.Info("Not offering {Name} a rebuild yet: its notification permission was answered moments ago",
+                _launcher.Name);
+            return;
+        }
 
         if (!_rebuildOffered.Add(_launcher.Id)) return;
 

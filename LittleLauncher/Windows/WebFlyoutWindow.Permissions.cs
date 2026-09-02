@@ -430,6 +430,10 @@ public sealed partial class WebFlyoutWindow
     private void OnPermissionGranted(CoreWebView2PermissionKind kind)
     {
         if (kind != CoreWebView2PermissionKind.Notifications) return;
+
+        // Noted so nothing else queues a prompt about this launcher's notifications straight after
+        // this one. See OfferBridgeRebuild.
+        _notificationPermissionGrantedAt = Environment.TickCount64;
         if (WebHiddenPolicies.Normalize(_launcher.WebHiddenPolicy) == WebHiddenPolicies.KeepRunning) return;
         if (!_keepRunningOffered.Add(_launcher.Id)) return;
 
