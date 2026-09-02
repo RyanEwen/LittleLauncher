@@ -764,7 +764,7 @@ public sealed partial class WebFlyoutWindow
         {
             string? url = message?["url"]?.GetValue<string>();
             string type = message?["type"]?.GetValue<string>() ?? "";
-            if (!string.IsNullOrEmpty(url)) WatchServiceWorkerScript(sender, url, type);
+            if (!string.IsNullOrEmpty(url)) _ = WatchServiceWorkerScriptAsync(sender, url, type);
         }
         else if (kind == "swBody")
         {
@@ -857,7 +857,7 @@ public sealed partial class WebFlyoutWindow
     /// <c>register()</c> open until this comes back, and a silent return would stall it until the
     /// fail-open timeout.
     /// </remarks>
-    private void WatchServiceWorkerScript(CoreWebView2 core, string url, string type)
+    private async Task WatchServiceWorkerScriptAsync(CoreWebView2 core, string url, string type)
     {
         bool isModule = string.Equals(type, "module", StringComparison.Ordinal);
         bool isClassic = string.Equals(type, "classic", StringComparison.Ordinal);
@@ -880,6 +880,11 @@ public sealed partial class WebFlyoutWindow
             AcknowledgeServiceWorkerScript(core, url);
             return;
         }
+
+        // Armed before the acknowledgement, because the ack is what releases the page to fetch the
+        // script and the interception has to already be running when that request goes out.
+        if (!_unwrappableScripts.Contains(url))
+            await InterceptWorkerScriptFetchAsync(core, url);
 
         if (!_serviceWorkerScripts.TryGetValue(core, out var watched))
             _serviceWorkerScripts[core] = watched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -914,6 +919,106 @@ public sealed partial class WebFlyoutWindow
         AcknowledgeServiceWorkerScript(core, url);
     }
 
+
+    /// <summary>
+    /// Starts pausing requests for <paramref name="url"/> so the page's fetch of it can be given the
+    /// header a page is not allowed to set.
+    /// </summary>
+    private async Task InterceptWorkerScriptFetchAsync(CoreWebView2 core, string url)
+    {
+        try
+        {
+            if (!_fetchInterceptUrls.TryGetValue(core, out var urls))
+                _fetchInterceptUrls[core] = urls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            if (!urls.Add(url)) return;
+
+            if (!_fetchReceivers.ContainsKey(core))
+            {
+                var receiver = core.GetDevToolsProtocolEventReceiver("Fetch.requestPaused");
+                receiver.DevToolsProtocolEventReceived += (_, e) => OnFetchRequestPaused(core, e);
+                _fetchReceivers[core] = receiver;
+            }
+
+            // Re-enabled with the full set each time, because the patterns are given at enable time
+            // and a second enable replaces the first rather than adding to it.
+            var patterns = new JsonArray();
+            foreach (string pattern in urls)
+                patterns.Add(new JsonObject { ["urlPattern"] = pattern, ["requestStage"] = "Request" });
+
+            await core.CallDevToolsProtocolMethodAsync(
+                "Fetch.enable", new JsonObject { ["patterns"] = patterns }.ToJsonString());
+        }
+        catch (Exception ex)
+        {
+            // Not fatal: without it the page's fetch goes out unmarked, which for most sites is
+            // still the real script and for the rest means the launcher is simply not bridged.
+            Logger.Debug(ex, "Could not intercept the worker script fetch for {Name}", _launcher.Name);
+        }
+    }
+
+    private void OnFetchRequestPaused(CoreWebView2 core, CoreWebView2DevToolsProtocolEventReceivedEventArgs e)
+    {
+        string requestId = "";
+        JsonObject? continueWith = null;
+
+        try
+        {
+            var parameters = JsonNode.Parse(e.ParameterObjectAsJson);
+            requestId = parameters?["requestId"]?.GetValue<string>() ?? "";
+            if (string.IsNullOrEmpty(requestId)) return;
+
+            var headers = parameters?["request"]?["headers"] as JsonObject;
+
+            // Only the page's own fetch is marked. Anything else matching the pattern is resumed
+            // exactly as it came in.
+            bool ours = headers?.Any(h =>
+                string.Equals(h.Key, PageFetchMarkerHeader, StringComparison.OrdinalIgnoreCase)) == true;
+
+            if (ours && headers != null)
+            {
+                var rewritten = new JsonArray();
+                foreach (var header in headers)
+                {
+                    if (string.Equals(header.Key, PageFetchMarkerHeader, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    rewritten.Add(new JsonObject
+                    {
+                        ["name"] = header.Key,
+                        ["value"] = header.Value?.GetValue<string>() ?? "",
+                    });
+                }
+
+                rewritten.Add(new JsonObject { ["name"] = "Service-Worker", ["value"] = "script" });
+
+                continueWith = new JsonObject { ["requestId"] = requestId, ["headers"] = rewritten };
+                Logger.Info("Marking {Name}'s page fetch of its worker script as a service-worker request",
+                    _launcher.Name);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Debug(ex, "Reading a paused request failed for {Name}", _launcher.Name);
+        }
+        finally
+        {
+            // Always, on every path. A paused request that is never continued hangs, and this one is
+            // a script a registration is waiting on.
+            if (!string.IsNullOrEmpty(requestId))
+            {
+                try
+                {
+                    _ = core.CallDevToolsProtocolMethodAsync("Fetch.continueRequest",
+                        (continueWith ?? new JsonObject { ["requestId"] = requestId }).ToJsonString());
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warn(ex, "Could not resume a paused worker script request for {Name}", _launcher.Name);
+                }
+            }
+        }
+    }
 
     private void AcknowledgeServiceWorkerScript(CoreWebView2 core, string url)
     {
@@ -1006,6 +1111,25 @@ public sealed partial class WebFlyoutWindow
     /// downloads that on every load, forever, to reach the same conclusion.
     /// </remarks>
     private readonly HashSet<string> _unwrappableScripts = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Browsers with DevTools <c>Fetch</c> interception running, and the URLs it covers.</summary>
+    /// <remarks>
+    /// <para><b>Why the DevTools protocol and not the resource handler.</b> The page's own fetch of
+    /// a worker script has to carry <c>Service-Worker: script</c> or a site like Messenger answers it
+    /// with the app's HTML instead. A page cannot set that header — it is a forbidden header name,
+    /// so <c>fetch()</c> drops it — and putting it on through
+    /// <c>CoreWebView2WebResourceRequestedEventArgs.Request.Headers</c> did not reach the wire
+    /// either: the body came back as HTML regardless. <c>Fetch.continueRequest</c> is under no such
+    /// restriction, because it is the same channel DevTools itself edits requests on.</para>
+    /// <para><b>Scoped to exactly the worker script URLs, and it always continues.</b> An
+    /// intercepted request that is never continued simply hangs, and this one is a script a
+    /// registration is waiting on — so every path out of the handler resumes the request, including
+    /// the ones that failed to parse it.</para>
+    /// </remarks>
+    private readonly Dictionary<CoreWebView2, HashSet<string>> _fetchInterceptUrls = new();
+
+    /// <summary>Kept alive deliberately: dropping the receiver stops the events arriving.</summary>
+    private readonly Dictionary<CoreWebView2, CoreWebView2DevToolsProtocolEventReceiver> _fetchReceivers = new();
 
     /// <summary>Worker scripts as the page fetched them, keyed by script URL.</summary>
     /// <remarks>

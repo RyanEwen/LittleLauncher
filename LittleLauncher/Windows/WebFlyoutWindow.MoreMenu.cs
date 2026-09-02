@@ -331,6 +331,11 @@ public sealed partial class WebFlyoutWindow
             Logger.Warn(ex, "Could not reset notification permission for launcher {Name}", _launcher.Name);
         }
 
+        // A script written off earlier this session is given another chance: rebuilding is exactly
+        // the moment to retry, and the reason it failed may have been the thing just fixed.
+        _unwrappableScripts.Clear();
+        _serviceWorkerBodies.Clear();
+
         // The HTTP cache goes too, and this is not belt-and-braces. The wrap ends in importScripts
         // of the worker's own URL, and that request is never offered to the host - so it is answered
         // from wherever the browser already has that URL. A wrap cached under it means the wrap
