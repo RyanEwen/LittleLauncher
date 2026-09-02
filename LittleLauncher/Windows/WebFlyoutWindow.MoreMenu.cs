@@ -300,6 +300,24 @@ public sealed partial class WebFlyoutWindow
             Logger.Warn(ex, "Could not reset notification permission for launcher {Name}", _launcher.Name);
         }
 
+        // The HTTP cache goes too, and this is not belt-and-braces. The wrap ends in importScripts
+        // of the worker's own URL, and that request is never offered to the host - so it is answered
+        // from wherever the browser already has that URL. A wrap cached under it means the wrap
+        // imports itself, recursing until the stack gives out, and unregistering does not touch the
+        // HTTP cache: the site re-registers, the import is answered from the same poisoned entry,
+        // and the worker dies exactly as before. Serving the wrap `no-store` stops new ones being
+        // stored; this is what clears the ones already there.
+        try
+        {
+            await core.Profile.ClearBrowsingDataAsync(CoreWebView2BrowsingDataKinds.DiskCache);
+            Logger.Info("Cleared {Name}'s HTTP cache so its worker's import cannot be answered from a stale wrap",
+                _launcher.Name);
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn(ex, "Could not clear the disk cache for launcher {Name}", _launcher.Name);
+        }
+
         const string script = """
             (async () => {
                 try { localStorage.removeItem('__llWorkerAdopted'); } catch (e) { }

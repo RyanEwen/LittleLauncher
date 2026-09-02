@@ -83,6 +83,25 @@ public sealed partial class WebFlyoutWindow
     private const int MaxNotificationActions = 2;
 
     /// <summary>
+    /// Stamped into the served wrap, and **bumped whenever the wrap's behaviour changes**.
+    /// </summary>
+    /// <remarks>
+    /// <para>A worker's scripts are kept in the registration's script resource map, and an import is
+    /// fetched once and read from there ever after. An update check re-fetches only the top-level
+    /// script and installs a new worker only if its <b>bytes differ</b> — so a wrap that is textually
+    /// identical to the stored one leaves everything else exactly as it was, imports included.</para>
+    /// <para>That is ordinarily the point: it is what stops a launcher reinstalling a site's worker
+    /// on every load. It becomes a trap when what is stored is <i>broken</i>. The v1 wrap could be
+    /// served to its own <c>importScripts</c>, and both halves were then stored, so the worker
+    /// recursed to a stack overflow on every startup from cache alone, with no fetch for a fixed
+    /// host to intercept and nothing but an unregister to break out of it. Changing this constant
+    /// changes the bytes, so the next update check installs the fixed wrap and re-fetches its
+    /// imports — and a site poisoned by an older one heals without the user being told to go and
+    /// clear anything.</para>
+    /// </remarks>
+    private const string WrapVersion = "2";
+
+    /// <summary>
     /// Which browser raised the notification behind each toast tag, so a clicked button goes back
     /// to the page that will understand it.
     /// </summary>
@@ -843,16 +862,21 @@ public sealed partial class WebFlyoutWindow
         // Anything but the browser fetching the worker's top-level script is left alone — above all
         // the wrap's own importScripts, come back for the real thing. Letting that through untouched
         // is the whole point: it is the browser's own fetch, with the profile's cookies on it.
-        //
-        // Logged rather than silent, because "declined every time" and "wrapped correctly" differ
-        // only by the absence of a line, and the whole bridge rests on these headers reading the way
-        // the spec says they do. A handful of lines per worker, and the normal one is the import.
-        if (!IsWorkerMainScriptRequest(e.Request))
-        {
-            Logger.Info("Not wrapping a fetch of {Url} for {Name}: {Dest}",
-                uri, _launcher.Name, DescribeRequestDestination(e.Request));
-            return;
-        }
+        string marker = ReadHeader(e.Request, "Service-Worker");
+        bool isMainScript = string.Equals(marker, "script", StringComparison.OrdinalIgnoreCase);
+
+        // Both header values, on both branches, on every request. The distinction below is the one
+        // thing standing between the wrap and importing itself, and getting it wrong is not visible
+        // in any other way: an over-eager test recurses until the stack gives out, and an over-shy
+        // one silently bridges nothing. Guessing at it cost two builds; this is a handful of lines
+        // per worker and it settles the question from the log alone.
+        Logger.Info("Worker script fetch for {Name}: {Url} (Service-Worker: {Marker}, Sec-Fetch-Dest: {Dest}) - {Decision}",
+            _launcher.Name, uri,
+            string.IsNullOrEmpty(marker) ? "absent" : marker,
+            ReadHeader(e.Request, "Sec-Fetch-Dest") is { Length: > 0 } dest ? dest : "absent",
+            isMainScript ? "wrapping it" : "left alone");
+
+        if (!isMainScript) return;
 
         // Building the response body is asynchronous, so the request has to be held open — a
         // handler that returns without either a response or a deferral has declined to interfere.
@@ -860,67 +884,50 @@ public sealed partial class WebFlyoutWindow
         _ = RespondWithWrappedScriptAsync(core, e, uri, deferral);
     }
 
-    /// <summary>
-    /// Whether this request is the browser fetching a worker's own top-level script, as opposed to
-    /// the wrap's <c>importScripts</c>/<c>import</c> of the original, or anything else that happens
-    /// to ask for the same URL.
-    /// </summary>
+    /// <summary>One request header, or empty where it is absent or cannot be read.</summary>
     /// <remarks>
-    /// <para><b>This has to be read off the request, not remembered.</b> It used to be a table: the
-    /// wrap's URL was noted when the wrap was served, and the next request for exactly that URL was
-    /// taken to be the inner fetch and passed through. That holds only while one fetch is in flight,
-    /// and a worker script is very often fetched twice at once — a site's own <c>register()</c>
-    /// alongside the <c>update()</c> the page sweep calls, or two tabs on the same origin. The
-    /// second main fetch then consumed the note meant for the first, whose <c>importScripts</c>
-    /// arrived to find nothing armed and <b>was served the wrap again</b>. That recurses until the
-    /// stack gives out: <c>Maximum call stack size exceeded</c>, the worker never evaluates, and the
-    /// registration is torn down — a site left with no worker at all, which reads as the site being
-    /// broken rather than as anything to do with us. Messenger hit it every time; WhatsApp, which
-    /// registers once, never did.</para>
-    /// <para>Both headers are part of the fetch, and only the top-level script fetch carries either:
-    /// <c>Service-Worker: script</c> is specified for that request alone, and Fetch Metadata gives
-    /// it <c>Sec-Fetch-Dest: serviceworker</c> where an imported script gets <c>script</c>. Absence
-    /// is therefore a real answer rather than a gap to guess around: a service worker requires a
-    /// secure context, and a secure context is exactly where Chromium sends Fetch Metadata.</para>
+    /// <para><b>Which header tells the wrap's own fetch apart from a real one.</b> It is
+    /// <c>Service-Worker: script</c>, and only that. The Update algorithm puts it on the request for
+    /// a worker's top-level script and on nothing else - it exists precisely so a server can tell
+    /// that request apart - so its absence is a real answer rather than a gap to guess around.</para>
+    /// <para><b>Not <c>Sec-Fetch-Dest</c>, which was tried on the reasoning that the main script
+    /// would be <c>serviceworker</c> and an imported one <c>script</c>.</b> Measured against
+    /// Messenger, Chromium sends it on <b>neither</b> — a worker script request carries
+    /// <c>Service-Worker: script</c> and no Fetch Metadata at all — so a test that fell back to it
+    /// was reading a header that is never there.</para>
+    /// <para><b>The wrap's own <c>importScripts</c> is never seen here either.</b> Not once, across
+    /// repeated installs, with the filter set to
+    /// <see cref="CoreWebView2WebResourceRequestSourceKinds.All"/>: an imported script is resolved
+    /// through the registration's script resource map rather than as a request the host is offered.
+    /// So this test guards against something that cannot currently reach it, and is kept for exactly
+    /// that reason — the cost of being wrong is not a missed bridge but the recursion below, and
+    /// nothing about that resolution is promised by an API.</para>
+    /// <para><b>What the recursion does, since it is not obvious from the symptom.</b> The wrap ends
+    /// in <c>importScripts</c> of the original; serve the wrap to that and it imports itself,
+    /// forever, until <c>Maximum call stack size exceeded</c>. The worker never evaluates and the
+    /// registration is torn down, so the origin is left with <b>no worker at all</b> and a console
+    /// that blames the site.</para>
+    /// <para><b>And it outlives the bug that caused it</b>, which is the part that cost the most
+    /// time. Both halves are stored in the script resource map, so a poisoned registration recurses
+    /// from there on every startup with no fetch for a corrected host to intercept. Fixing the
+    /// serving rule changed nothing on a machine that already had one; only different bytes do, and
+    /// that is what <see cref="WrapVersion"/> is for.</para>
+    /// <para>The predecessor to this test was a pass-through table, noting the URL when the wrap was
+    /// served and letting the next request for it through. That holds only while one fetch is in
+    /// flight, and a worker script is very often fetched twice at once: a site's own
+    /// <c>register()</c> alongside the <c>update()</c> the page sweep calls, or two tabs on the same
+    /// origin. It is what poisoned Messenger in the first place.</para>
     /// </remarks>
-    private static bool IsWorkerMainScriptRequest(CoreWebView2WebResourceRequest request)
+    private static string ReadHeader(CoreWebView2WebResourceRequest request, string name)
     {
         try
         {
             var headers = request.Headers;
-
-            if (headers.Contains("Service-Worker")
-                && string.Equals(headers.GetHeader("Service-Worker"), "script", StringComparison.OrdinalIgnoreCase))
-                return true;
-
-            return headers.Contains("Sec-Fetch-Dest")
-                && string.Equals(headers.GetHeader("Sec-Fetch-Dest"), "serviceworker", StringComparison.OrdinalIgnoreCase);
+            return headers.Contains(name) ? headers.GetHeader(name) ?? "" : "";
         }
         catch
         {
-            // A header collection that cannot be read is not grounds for serving a wrap that might
-            // import itself. Left alone, the site keeps its own worker and only the bridge is lost.
-            return false;
-        }
-    }
-
-    /// <summary>What a declined request said it was for, for the log line above.</summary>
-    private static string DescribeRequestDestination(CoreWebView2WebResourceRequest request)
-    {
-        try
-        {
-            var headers = request.Headers;
-            string destination = headers.Contains("Sec-Fetch-Dest")
-                ? headers.GetHeader("Sec-Fetch-Dest")
-                : "no Sec-Fetch-Dest";
-
-            return headers.Contains("Service-Worker")
-                ? destination + ", Service-Worker: " + headers.GetHeader("Service-Worker")
-                : destination;
-        }
-        catch
-        {
-            return "its headers could not be read";
+            return "";
         }
     }
 
@@ -958,9 +965,11 @@ public sealed partial class WebFlyoutWindow
             // with it. See _moduleWorkerScripts.
             bool isModule = _moduleWorkerScripts.Contains(uri);
 
+            string banner = "// little-launcher service worker bridge v" + WrapVersion + "\n";
+
             string script = isModule
-                ? "import " + JsonSerializer.Serialize(original) + ";\n" + ServiceWorkerShimScript
-                : ServiceWorkerShimScript + "\nimportScripts(" + JsonSerializer.Serialize(original) + ");\n";
+                ? banner + "import " + JsonSerializer.Serialize(original) + ";\n" + ServiceWorkerShimScript
+                : banner + ServiceWorkerShimScript + "\nimportScripts(" + JsonSerializer.Serialize(original) + ");\n";
 
             Logger.Info("Wrapping service worker for {Name}: {Url} ({Type})",
                 _launcher.Name, uri, isModule ? "module" : "classic");
@@ -978,7 +987,16 @@ public sealed partial class WebFlyoutWindow
                 // Service-Worker-Allowed keeps a broader registration scope working: the header on
                 // the real response is not ours to read, and refusing the scope would fail the
                 // registration outright.
-                "Content-Type: text/javascript\r\nCache-Control: no-cache\r\nService-Worker-Allowed: /");
+                //
+                // **no-store, and it is load-bearing.** The wrap ends in importScripts of this very
+                // URL, and that request is never offered to this handler - not once, measured
+                // across many installs. Left to itself that is fine, because the browser then goes
+                // to the network and gets the site's real script. It stops being fine the moment a
+                // copy of the wrap is sitting in the HTTP cache under the same URL: the import is
+                // answered from there, so the wrap imports itself, recursing until the stack gives
+                // out. `no-cache` was not enough - it means revalidate before reuse, which still
+                // permits storing, and the entry it stored was us.
+                "Content-Type: text/javascript\r\nCache-Control: no-store\r\nService-Worker-Allowed: /");
         }
         catch (Exception ex)
         {

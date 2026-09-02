@@ -1710,32 +1710,53 @@ response is served as the shim followed by `importScripts` of the original. **No
 by the app**: `importScripts` is the browser's own request, carrying the profile's cookies, so a
 dashboard behind a login still loads its real worker.
 
-**What stops that inner request being wrapped in turn is the request itself, and it must stay that
-way.** `IsWorkerMainScriptRequest` reads two headers that only a worker's top-level script fetch
-carries: `Service-Worker: script`, which is specified for that request alone, and Fetch Metadata's
-`Sec-Fetch-Dest: serviceworker`, where an imported script gets `script`. Absence is a real answer
-rather than a gap to guess around, because a service worker requires a secure context and a secure
-context is exactly where Chromium sends Fetch Metadata.
+### The wrap must never be cacheable, and this is the whole ballgame
 
-Two designs were tried before it and both failed, in ways worth not repeating:
+**The `importScripts` request is never offered to the host.** Not once, measured across many
+installs with the filter set to `CoreWebView2WebResourceRequestSourceKinds.All`. That is normally
+harmless - the browser goes to the network and gets the site's real script - and it is why the wrap
+works at all.
 
-- **A marker query on the inner fetch** (`?__llsw=1`) works until a site whose worker URL already
-  means something. Messenger's is `sw?s=push` - no `.js`, and a query that selects behaviour - and
-  it does not serve `sw?s=push&__llsw=1` alike, so the inner fetch returned something that would not
-  run and the worker failed with "ServiceWorker cannot be started".
+It stops being harmless the moment **a copy of the wrap is in the HTTP cache under the worker's own
+URL**. The import is then answered from there, so the wrap imports itself, recursing until
+`Uncaught RangeError: Maximum call stack size exceeded`. The worker never evaluates, the
+registration is torn down, and the origin is left with **no worker at all** and a console that
+blames the site.
+
+So the wrap is served **`Cache-Control: no-store`**. `no-cache` is not enough and was the actual
+bug: it means *revalidate before reuse*, which still permits storing, and the entry it stored was
+us. The tell in a stack trace is frames alternating between the script URL and `VM<n>`, the latter
+being `importScripts` content evaluated as a script of its own:
+
+```
+(anonymous) @ VM47 sw:85
+(anonymous) @ sw?s=push:85
+(anonymous) @ VM45 sw:85
+```
+
+**Clearing this needs the cache, not just the registration.** Unregistering leaves the poisoned
+entry in place, so the site re-registers, the import is answered from it again, and the worker dies
+exactly as before - which is why **Rebuild notification bridge** clears the disk cache first. It is
+also why the wrap carries a `WrapVersion` stamp: a worker only reinstalls when its top-level bytes
+differ, so without it a corrected wrap is byte-identical to a broken stored one and changes nothing.
+
+Two earlier designs for telling the inner fetch apart, both abandoned:
+
+- **A marker query** (`?__llsw=1`) works until a site whose worker URL already means something.
+  Messenger's is `sw?s=push` - no `.js`, and a query that selects behaviour - and it does not serve
+  `sw?s=push&__llsw=1` alike, so the inner fetch returned something that would not run.
 - **A pass-through table**, noting the URL when the wrap was served and letting the next request for
   it through, holds only while **one** fetch is in flight. A worker script is very often fetched
   twice at once: a site's own `register()` alongside the `update()` the page sweep calls, or two tabs
-  on the same origin. The second main fetch then consumed the note meant for the first, whose
-  `importScripts` arrived to find nothing armed and **was served the wrap again**. That recurses
-  until the stack gives out - `Uncaught RangeError: Maximum call stack size exceeded` at the wrap's
-  own `importScripts` line - the worker never evaluates, and the registration is torn down, leaving
-  the origin with **no worker at all** and a page whose console blames the site. Messenger hit it on
-  every load; WhatsApp, which registers once, never did, so the bridge looked like it worked.
+  on the same origin. The second main fetch consumed the note meant for the first. This is what
+  poisoned the cache in the first place.
 
-The decline is logged at Info with what the request said it was for. "Declined every time" and
-"wrapped correctly" otherwise differ only by the absence of a line, and the whole bridge rests on
-those headers reading the way the spec says they do.
+What remains is a positive test, `Service-Worker: script`, which the Update algorithm puts on a
+worker's top-level script request and on nothing else. **Not `Sec-Fetch-Dest`**, which was tried on
+the reasoning that the main script would be `serviceworker` and an import `script`: measured,
+Chromium sends it on *neither*. Every worker-script fetch logs both header values and the decision,
+because an over-eager test recurses and an over-shy one silently bridges nothing, and neither is
+visible any other way.
 
 Then, in both directions:
 
