@@ -21,11 +21,14 @@ namespace LittleLauncher.Windows;
 /// worker, so the shim has to live there too.</para>
 /// <para><b>How the worker is reached.</b> The worker's script is intercepted as it is fetched
 /// (<see cref="CoreWebView2WebResourceRequestSourceKinds"/> makes worker traffic visible to the
-/// host) and served as the shim followed by <c>importScripts</c> of the original. Nothing is
-/// re-fetched by the app: <c>importScripts</c> is the browser's own request, carrying the profile's
-/// cookies, so a dashboard behind a login still loads its real worker. What stops that inner
-/// request being wrapped in turn is the request itself saying what it is for - see
-/// <see cref="IsWorkerMainScriptRequest"/>.</para>
+/// host) and served as the shim followed by the site's own script, <b>inlined</b>.</para>
+/// <para><b>Inlined, and never imported.</b> The wrap used to end in <c>importScripts</c> of the
+/// original, which cannot work when it is served at that same URL: a worker's <c>importScripts</c>
+/// resolves against the registration's script resource map, and the main script is already in that
+/// map under its own URL as the wrap — so the wrap imported itself until the stack gave out, with
+/// no request made and nothing for the host to intercept or fix. It only ever appeared to work
+/// through adoption, which registers a *marked* URL and so imported a different one. See
+/// <see cref="TryFetchOriginalScriptAsync"/>.</para>
 /// <para><b>What the shim does.</b> Two directions:</para>
 /// <list type="bullet">
 /// <item><description><b>Out:</b> <c>showNotification</c> in the worker still makes the real
@@ -56,14 +59,11 @@ public sealed partial class WebFlyoutWindow
 
     /// <summary>Worker scripts registered as ES modules, so the wrap suits the realm it lands in.</summary>
     /// <remarks>
-    /// <para><b>A module worker has no <c>importScripts</c>.</b> The classic wrap ends in a call to
-    /// it, so serving that body to a module registration throws while the script is being evaluated,
-    /// the install fails, and <c>register()</c> rejects. The origin is then left with no worker at
-    /// all, which looks nothing like a bridge problem and everything like the site being broken.</para>
-    /// <para>A module is wrapped with a static <c>import</c> instead. That runs the original first,
-    /// which is the one ordering difference: a worker calling <c>showNotification</c> during its own
-    /// evaluation would miss the patch. Nothing does that, and the alternative is a dynamic
-    /// <c>import()</c>, which a service worker is not allowed to use.</para>
+    /// Both realms now get the original inlined rather than imported, so the difference is only one
+    /// of <b>order</b>: a module's own <c>import</c> declarations are hoisted and its body expects to
+    /// run first, so the shim goes after it, while a classic worker gets the patch in place before
+    /// anything it does. The type still has to be known, because it travels with the announcement
+    /// and a worker whose type is unknown is not wrapped at all.
     /// </remarks>
     private readonly HashSet<string> _moduleWorkerScripts = new(StringComparer.OrdinalIgnoreCase);
 
@@ -86,18 +86,15 @@ public sealed partial class WebFlyoutWindow
     /// Stamped into the served wrap, and **bumped whenever the wrap's behaviour changes**.
     /// </summary>
     /// <remarks>
-    /// <para>A worker's scripts are kept in the registration's script resource map, and an import is
-    /// fetched once and read from there ever after. An update check re-fetches only the top-level
-    /// script and installs a new worker only if its <b>bytes differ</b> — so a wrap that is textually
-    /// identical to the stored one leaves everything else exactly as it was, imports included.</para>
-    /// <para>That is ordinarily the point: it is what stops a launcher reinstalling a site's worker
-    /// on every load. It becomes a trap when what is stored is <i>broken</i>. The v1 wrap could be
-    /// served to its own <c>importScripts</c>, and both halves were then stored, so the worker
-    /// recursed to a stack overflow on every startup from cache alone, with no fetch for a fixed
-    /// host to intercept and nothing but an unregister to break out of it. Changing this constant
-    /// changes the bytes, so the next update check installs the fixed wrap and re-fetches its
-    /// imports — and a site poisoned by an older one heals without the user being told to go and
-    /// clear anything.</para>
+    /// <para>An update check re-fetches a worker's top-level script and installs a new worker only
+    /// if its <b>bytes differ</b>. That is ordinarily the point: it is what stops a launcher
+    /// reinstalling a site's worker on every load. It becomes a trap when what is stored is
+    /// <i>broken</i> — the v1 wrap imported itself and recursed to a stack overflow on every
+    /// startup, and a corrected wrap that was textually identical to it would have changed nothing
+    /// at all.</para>
+    /// <para>Changing this constant changes the bytes, so the next update check installs the current
+    /// wrap and a site poisoned by an older one heals without the user being told to go and clear
+    /// anything.</para>
     /// </remarks>
     private const string WrapVersion = "4";
 

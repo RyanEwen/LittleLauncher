@@ -206,11 +206,6 @@ model default, which would have flipped it on for every existing launcher.
   kind rather than a "show in taskbar" toggle** — the taskbar button and the Alt-Tab entry are the
   same switch and cannot be separated, which was measured four ways; see
   [web-launchers.md](web-launchers.md)
-- `WebAllowAllPermissions` (`bool`) — grant camera, microphone, location and notifications without
-  asking. Defaults `false` (ask), which is both the safe direction and the only one that survives
-  `WhenWritingDefault`. A request answered by this toggle is **not** saved into the WebView2
-  profile, so turning it off returns the launcher to asking — see
-  [web-launchers.md](web-launchers.md)
 - `WebSessionTabs` (`List<string>?`) / `WebSessionActiveTab` (`int`) — the pages this launcher had
   open when it was last used, restored on its next **open** (never at startup, which is what keeps
   the resource contract intact). Plain auto-properties, not `[ObservableProperty]`: nothing binds to

@@ -314,8 +314,8 @@ public sealed partial class WebFlyoutWindow
         // nothing on the way back up, which is exactly the dance this item exists to replace:
         // log out, reset the site permission, clear the workers, hard reload, log back in.
         //
-        // Nobody is prompted twice for it either: a launcher with WebAllowAllPermissions answers
-        // the request silently, so the site asks, is granted, and registers, with nothing on screen.
+        // The user is asked once on the way back up, in the flyout's own prompt bar, which is the
+        // point rather than a cost: it is the site's asking that does the setup.
         try
         {
             string origin = new Uri(core.Source).GetLeftPart(UriPartial.Authority);
