@@ -169,7 +169,14 @@ public sealed partial class WebFlyoutWindow
                 // worker globals and cannot read the installed script, so asking is the only way,
                 // and it is what stops the re-registration below running on a worker already ours.
                 if (d.__ll === 'ping') {
-                    try { if (ev.source && ev.source.postMessage) ev.source.postMessage({ __ll: 'pong' }); } catch (e) { }
+                    // The version travels with the answer, so a page can tell "wrapped, but by an
+                    // older build" from "not wrapped at all". Silence means neither: a wrap old
+                    // enough to predate this reply cannot be distinguished from no wrap, which is
+                    // why what the host says about it is hedged.
+                    try {
+                        if (ev.source && ev.source.postMessage)
+                            ev.source.postMessage({ __ll: 'pong', version: self.__llWrapVersion || '' });
+                    } catch (e) { }
                     return;
                 }
 
@@ -203,6 +210,10 @@ public sealed partial class WebFlyoutWindow
     private const string ServiceWorkerBridgeScript = """
         (function () {
             if (!navigator.serviceWorker || !window.chrome || !window.chrome.webview) return;
+
+            // Substituted by the host with WrapVersion, so the page can tell a worker running the
+            // current wrap from one running an older build of it.
+            var CURRENT_WRAP = '__LL_WRAP_VERSION__';
 
             function post(m) { try { window.chrome.webview.postMessage(JSON.stringify(m)); } catch (e) { } }
 
@@ -323,6 +334,10 @@ public sealed partial class WebFlyoutWindow
             // Does the worker we have answer as one of ours? A page cannot read worker globals and
             // cannot read the installed script, so asking it is the only way to know, and it is
             // what keeps the re-registration below to once rather than every load.
+            // Resolves with the wrap's version, '' for a wrap too old to report one, or null when
+            // nothing answered at all. Five seconds rather than two: a sleeping worker has to be
+            // started before it can receive the message, and calling a working launcher stale
+            // because its worker was slow to wake is worse than waiting.
             function isBridged(worker) {
                 return new Promise(function (resolve) {
                     var settled = false;
@@ -330,15 +345,15 @@ public sealed partial class WebFlyoutWindow
                         if (!ev.data || ev.data.__ll !== 'pong') return;
                         settled = true;
                         navigator.serviceWorker.removeEventListener('message', onMessage);
-                        resolve(true);
+                        resolve(ev.data.version || '');
                     }
                     navigator.serviceWorker.addEventListener('message', onMessage);
                     try { worker.postMessage({ __ll: 'ping' }); } catch (e) { }
                     setTimeout(function () {
                         if (settled) return;
                         navigator.serviceWorker.removeEventListener('message', onMessage);
-                        resolve(false);
-                    }, 2000);
+                        resolve(null);
+                    }, 5000);
                 });
             }
 
@@ -522,10 +537,17 @@ public sealed partial class WebFlyoutWindow
                     announce(w.scriptURL, '').then(function () {
                         try { r.update(); } catch (e) { }
 
-                        // An unwrapped worker on a site that can notify. update() will not pick it
-                        // up - nothing that reuses what the browser already has will - so it is
-                        // adopted, once, or left alone forever.
-                        isBridged(w).then(function (ours) { if (!ours) adopt(r, w); });
+                        // An unwrapped worker on a site that can notify. Nothing that reuses what
+                        // the browser already has will pick the wrap up - not update(), not a
+                        // reload - so the host is told, and offers to rebuild. Adoption is still
+                        // tried first, for the sites it can still help.
+                        isBridged(w).then(function (version) {
+                            if (version === CURRENT_WRAP) return;
+                            post({ __ll: 'swStale', url: w.scriptURL,
+                                   version: version === null ? '' : (version || 'unversioned'),
+                                   answered: version !== null });
+                            if (version === null) adopt(r, w);
+                        });
                     });
                 });
             }).catch(function () { });
@@ -733,7 +755,8 @@ public sealed partial class WebFlyoutWindow
             // where there is something to gain and nothing installed to disturb.
             core.WebResourceRequested += (_, e) => OnServiceWorkerResourceRequested(core, e);
 
-            await core.AddScriptToExecuteOnDocumentCreatedAsync(ServiceWorkerBridgeScript);
+            await core.AddScriptToExecuteOnDocumentCreatedAsync(
+                ServiceWorkerBridgeScript.Replace("__LL_WRAP_VERSION__", WrapVersion, StringComparison.Ordinal));
         }
         catch (Exception ex)
         {
@@ -788,6 +811,13 @@ public sealed partial class WebFlyoutWindow
                     message?["removed"]?.GetValue<bool>() == true
                         ? "It had already been unregistered, so the site has none until it registers one again."
                         : "Left as it was.");
+        }
+        else if (kind == "swStale")
+        {
+            OfferBridgeRebuild(
+                message?["url"]?.GetValue<string>() ?? "",
+                message?["version"]?.GetValue<string>() ?? "",
+                message?["answered"]?.GetValue<bool>() == true);
         }
         else if (kind == "swSkipped")
         {
@@ -1152,6 +1182,59 @@ public sealed partial class WebFlyoutWindow
 
         string start = body.TrimStart('﻿', ' ', '\t', '\r', '\n');
         return start.Length > 0 && start[0] != '<';
+    }
+
+    /// <summary>Launchers already offered a rebuild this session, so declining is not re-asked.</summary>
+    private static readonly HashSet<string> _rebuildOffered = [];
+
+    /// <summary>
+    /// Offers to rebuild the bridge on a launcher whose worker is running an older wrap.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Why this cannot just be done.</b> Chromium re-fetches a worker's top-level script on
+    /// its own schedule and installs a new one only if the bytes differ, so a worker installed under
+    /// an older wrap keeps running it - a reload will not replace it and neither will
+    /// <c>update()</c>. The only thing that will is unregistering, and <b>unregistering destroys the
+    /// registration's push subscription</b>. A site re-subscribes during its permission flow, and a
+    /// site that already holds notification permission never runs that flow again, so doing this
+    /// silently would leave a launcher permanently quiet - which is precisely the bug that made
+    /// Messenger silent for weeks. Rebuild resets the permission for exactly that reason, and
+    /// resetting somebody's site permission is not something to do to them unasked.</para>
+    /// <para>So it is offered, once per launcher per session, in the flyout's own bar. Declining is
+    /// remembered, and the launcher goes on working - it simply carries the older wrap.</para>
+    /// </remarks>
+    private void OfferBridgeRebuild(string url, string version, bool answered)
+    {
+        // A script this session has already failed to obtain will fail again, and rebuilding would
+        // reset the user's site permission to reach the same place. Nothing to offer.
+        if (_unwrappableScripts.Contains(url)) return;
+
+        if (!_rebuildOffered.Add(_launcher.Id)) return;
+
+        Logger.Info("{Name}'s service worker is not the current wrap ({State}), offering a rebuild: {Url}",
+            _launcher.Name,
+            answered ? "running " + (version == "unversioned" ? "a build too old to say" : "v" + version) : "did not answer",
+            url);
+
+        // **The wording is hedged where the evidence is, and says what accepting costs.** A worker
+        // that does not answer is either unwrapped or wrapped by a build older than the reply
+        // itself, and those are indistinguishable — WhatsApp is the second, and it delivers
+        // notifications perfectly well. Telling the user it is broken would be false, and acting on
+        // it is not free: rebuilding resets the site's notification permission and drops its push
+        // subscription, so a confident-sounding prompt could talk somebody into breaking a launcher
+        // that works.
+        string text = answered
+            ? $"{_launcher.Name}'s notification bridge is an older version. Rebuilding updates it, and asks the site for notification permission again."
+            : $"{_launcher.Name}'s notification bridge may be an older version. Rebuilding updates it, and asks the site for notification permission again.";
+
+        EnqueuePrompt(new PromptRequest(
+            text,
+            "Rebuild",
+            "Not now",
+            accepted =>
+            {
+                if (accepted) _ = RebuildNotificationBridgeAsync();
+            }));
     }
 
     /// <summary>The first line or so of a body, flattened onto one log line.</summary>
