@@ -514,6 +514,14 @@ public sealed partial class WebFlyoutWindow
 
             function sweep() {
             navigator.serviceWorker.getRegistrations().then(function (rs) {
+                // Said once per load, whatever else follows. "Is this launcher silent because the
+                // site never notified, or because we lost it?" was the question behind almost every
+                // dead end in this area, and answering it meant opening developer tools and typing
+                // Notification.permission by hand. It costs one line and settles it from the log.
+                var perm = 'unavailable';
+                try { if (window.Notification) perm = Notification.permission; } catch (e) { }
+                post({ __ll: 'notifyState', permission: perm, workers: rs.length });
+
                 rs.forEach(function (r) {
                     var w = r.active || r.waiting || r.installing;
                     if (!w) return;
@@ -819,6 +827,13 @@ public sealed partial class WebFlyoutWindow
                     message?["removed"]?.GetValue<bool>() == true
                         ? "It had already been unregistered, so the site has none until it registers one again."
                         : "Left as it was.");
+        }
+        else if (kind == "notifyState")
+        {
+            Logger.Info("Notifications for {Name}: permission {Permission}, {Workers} service worker(s) registered",
+                _launcher.Name,
+                message?["permission"]?.GetValue<string>() ?? "",
+                message?["workers"]?.GetValue<int>() ?? 0);
         }
         else if (kind == "swStale")
         {

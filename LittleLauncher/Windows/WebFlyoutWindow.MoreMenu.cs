@@ -221,6 +221,15 @@ public sealed partial class WebFlyoutWindow
 
         submenu.Items.Add(new MenuFlyoutSeparator());
 
+        // For the site that will not ask. Discord is the case: its own "Enable Desktop
+        // Notifications" is a setting of its account, so with that on it believes it is done and
+        // shows no banner - while the browser permission sits at "not asked" and every notification
+        // it tries to raise goes nowhere. There is no browser UI to reach in a flyout, so without
+        // this the launcher is simply stuck, which is what happened after a bulk rebuild reset them.
+        var askNotifications = new MenuFlyoutItem { Text = "Turn on notifications" };
+        askNotifications.Click += (_, _) => _ = RequestNotificationPermissionAsync();
+        submenu.Items.Add(askNotifications);
+
         // See RebuildNotificationBridgeAsync for why this cannot be done for the user.
         var rebuild = new MenuFlyoutItem { Text = "Rebuild notification bridge" };
         rebuild.Click += (_, _) => _ = RebuildNotificationBridgeAsync();
@@ -276,6 +285,37 @@ public sealed partial class WebFlyoutWindow
     /// records failures as successes, so a site whose adoption failed is marked done and would
     /// never be retried; this is the only way back for one in that state.</para>
     /// </remarks>
+    /// <summary>
+    /// Makes the page ask for notification permission, so the flyout's own prompt bar can answer it.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>The page asks; the permission is not written behind its back.</b> Setting it
+    /// directly with <c>SetPermissionStateAsync</c> would be one line and is the trap this area
+    /// already fell into once: a site that is handed a grant never runs the flow that grant implies,
+    /// and for notifications that flow is what registers and subscribes the push worker. Calling
+    /// <c>requestPermission()</c> instead goes through the real path - the site's own promise
+    /// resolves, and anything it does on being granted still runs.</para>
+    /// <para>It is on the menu rather than automatic because a site that has not asked has not asked
+    /// for a reason, and the user choosing it from a menu called Advanced is the consent.</para>
+    /// </remarks>
+    private async Task RequestNotificationPermissionAsync()
+    {
+        var core = _webView?.CoreWebView2;
+        if (core == null) return;
+
+        Logger.Info("Asking {Name}'s page to request notification permission", _launcher.Name);
+
+        try
+        {
+            await core.ExecuteScriptAsync(
+                "(function () { try { if (window.Notification) Notification.requestPermission(); } catch (e) { } })();");
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn(ex, "Could not ask for notification permission for launcher {Name}", _launcher.Name);
+        }
+    }
+
     /// <summary>Rebuilds the bridge on every web launcher that currently has a browser.</summary>
     /// <remarks>
     /// Only the loaded ones, and deliberately so: the reset needs a live <c>CoreWebView2Profile</c>,
