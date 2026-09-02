@@ -1289,10 +1289,13 @@ occurred yet.
 Before digging into the bridge, rule the site out. Three of them ate a lot of time looking like
 launcher faults:
 
-- **Messenger does not raise desktop notifications at all.** Its page never constructs a
-  `Notification`, never calls `showNotification`, and never registers a service worker, so there is
-  nothing to bridge. Confirmed outside the app: it does not notify in Edge either, with the browser
-  focused on another tab. Meta appears to have dropped web desktop notifications.
+- **Messenger notifies from a push handler, and has no service worker here.** Its page never
+  constructs a `Notification` and never calls `showNotification`, so nothing the document-scope
+  bridges do can reach it - but it *does* notify in Edge, as a generic "New notification" with no
+  sender or body, which is what a push handler shows. In this app it registers no worker at all, so
+  there is no push subscription and nothing arrives. Why it registers in Edge and not here is open;
+  the first thing to rule out is that pre-granting notification permission
+  (`Launcher.WebAllowAllPermissions`) lets it skip the flow that also registers the worker.
 - **Discord was an account setting.** "Enable Desktop Notifications" off makes its own code play the
   sound and return before constructing anything, so the launcher sees nothing.
 - **An app that thinks you are looking at it will not notify.** Both Messenger and Teams decide from
