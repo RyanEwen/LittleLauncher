@@ -99,7 +99,7 @@ public sealed partial class WebFlyoutWindow
     /// imports — and a site poisoned by an older one heals without the user being told to go and
     /// clear anything.</para>
     /// </remarks>
-    private const string WrapVersion = "2";
+    private const string WrapVersion = "4";
 
     /// <summary>
     /// Which browser raised the notification behind each toast tag, so a clicked button goes back
@@ -215,10 +215,72 @@ public sealed partial class WebFlyoutWindow
             // a promise the registration waits on. It fails open on a timeout, because a lost
             // acknowledgement must never stop a page registering its worker at all.
             var acks = {};
+            var skipBody = {};
+
+            // The site's own worker script, fetched *by the page*, and the reason the wrap no longer
+            // pulls it in itself. A worker cannot importScripts its own URL - that resolves out of
+            // the registration's script resource map, which already holds the wrap - and the host
+            // fetching it instead gets a login page from anything that guards on more than cookies:
+            // Messenger answered the app's request with HTML, and the worker died on `Unexpected
+            // token '<'`. Here it is an ordinary same-origin credentialed fetch from the page that
+            // is about to register it, which is as close to the browser's own request as it gets.
+            // The marker header is how the host recognises this request on its way out and puts
+            // `Service-Worker: script` on it. That header is what a site keys on to serve the worker
+            // script rather than the app, and **a page cannot set it**: it is a forbidden header
+            // name, so fetch() silently drops it. Without it Messenger answers this URL with 580KB
+            // of its own HTML, and the app's own HttpClient — which can set it, but is not the
+            // browser — gets an interstitial instead.
+            //
+            // **Bounded, because register() is waiting on it.** Without the race this holds the
+            // site's own registration open for as long as the request takes, and a request that
+            // never settles holds it forever — which looks exactly like the launcher hanging on
+            // load. Failing here costs the bridge, never the worker.
+            function fetchScript(href) {
+                try {
+                    var fetched = fetch(href, {
+                        credentials: 'include',
+                        cache: 'no-store',
+                        headers: { 'X-LittleLauncher-Worker-Script': '1' }
+                    })
+                        .then(function (r) { return r.ok ? r.text() : ''; })
+                        .catch(function () { return ''; });
+
+                    var timedOut = new Promise(function (resolve) {
+                        setTimeout(function () { resolve(''); }, 5000);
+                    });
+
+                    return Promise.race([fetched, timedOut]);
+                } catch (e) {
+                    return Promise.resolve('');
+                }
+            }
+
+            // **Announce first, fetch second, and the order is the whole point.** The host puts its
+            // resource filter in place when it is told about a script URL, and that filter is what
+            // adds the header below. Fetching before announcing means the request goes out before
+            // anything can touch it, which is exactly how the first version of this failed: the
+            // fetch came back as the site's HTML every time and the injection never ran at all.
             function announce(url, type) {
                 var href;
                 try { href = new URL(url, location.href).href; } catch (e) { return Promise.resolve(); }
 
+                return announceWith(href, type).then(function () {
+                    // Only for a script that will actually be wrapped. The sweep announces with no
+                    // type to say "there is a worker here", and the host does not wrap those.
+                    if (!type) return;
+
+                    // And not for one already known not to come back as a script. Messenger answers
+                    // this URL with 580KB of its own HTML, and without this that download is repeated
+                    // on every single load of a launcher that cannot be bridged anyway.
+                    if (skipBody[href]) return;
+
+                    return fetchScript(href).then(function (body) {
+                        if (body) post({ __ll: 'swBody', url: href, body: body });
+                    });
+                });
+            }
+
+            function announceWith(href, type) {
                 return new Promise(function (resolve) {
                     acks[href] = function () { delete acks[href]; resolve(); };
                     // The type travels with it, because a module worker cannot run the classic
@@ -623,6 +685,7 @@ public sealed partial class WebFlyoutWindow
                 if (!d) return;
 
                 if (d.__ll === 'swReady') {
+                    if (d.skipBody) skipBody[d.url] = true;
                     if (acks[d.url]) acks[d.url]();
                     return;
                 }
@@ -702,6 +765,18 @@ public sealed partial class WebFlyoutWindow
             string? url = message?["url"]?.GetValue<string>();
             string type = message?["type"]?.GetValue<string>() ?? "";
             if (!string.IsNullOrEmpty(url)) WatchServiceWorkerScript(sender, url, type);
+        }
+        else if (kind == "swBody")
+        {
+            // The script the page fetched, arriving after its announcement rather than with it -
+            // the filter that lets the host mark that request has to exist before it is made.
+            string url = message?["url"]?.GetValue<string>() ?? "";
+            string body = message?["body"]?.GetValue<string>() ?? "";
+
+            Logger.Info("The page fetched {Name}'s worker script {Url}: {Length} chars, starts {Start}",
+                _launcher.Name, url, body.Length, Describe(body));
+
+            if (!string.IsNullOrEmpty(url) && LooksLikeScript(body)) _serviceWorkerBodies[url] = body;
         }
         else if (kind == "swAdopt")
         {
@@ -784,7 +859,6 @@ public sealed partial class WebFlyoutWindow
     /// </remarks>
     private void WatchServiceWorkerScript(CoreWebView2 core, string url, string type)
     {
-
         bool isModule = string.Equals(type, "module", StringComparison.Ordinal);
         bool isClassic = string.Equals(type, "classic", StringComparison.Ordinal);
 
@@ -845,7 +919,12 @@ public sealed partial class WebFlyoutWindow
     {
         try
         {
-            core.PostWebMessageAsJson(new JsonObject { ["__ll"] = "swReady", ["url"] = url }.ToJsonString());
+            core.PostWebMessageAsJson(new JsonObject
+            {
+                ["__ll"] = "swReady",
+                ["url"] = url,
+                ["skipBody"] = _unwrappableScripts.Contains(url),
+            }.ToJsonString());
         }
         catch (Exception ex)
         {
@@ -858,6 +937,26 @@ public sealed partial class WebFlyoutWindow
         string uri = e.Request.Uri;
 
         if (!_serviceWorkerScripts.TryGetValue(core, out var watched) || !watched.Contains(uri)) return;
+
+        // The page's own fetch of the script, on its way out. It is given the one header a page is
+        // not allowed to set for itself and then left to go to the network as it is: what comes back
+        // is the site's real worker script, fetched by the browser with everything the browser has.
+        // See the note in fetchScript.
+        if (ReadHeader(e.Request, PageFetchMarkerHeader).Length > 0)
+        {
+            try
+            {
+                e.Request.Headers.RemoveHeader(PageFetchMarkerHeader);
+                e.Request.Headers.SetHeader("Service-Worker", "script");
+            }
+            catch (Exception ex)
+            {
+                Logger.Debug(ex, "Could not mark the page's worker-script fetch for {Name}", _launcher.Name);
+            }
+
+            // No response set, so the request continues to the site with the header added.
+            return;
+        }
 
         // Anything but the browser fetching the worker's top-level script is left alone — above all
         // the wrap's own importScripts, come back for the real thing. Letting that through untouched
@@ -883,6 +982,148 @@ public sealed partial class WebFlyoutWindow
         var deferral = e.GetDeferral();
         _ = RespondWithWrappedScriptAsync(core, e, uri, deferral);
     }
+
+    /// <summary>
+    /// How the page's own fetch of a worker script announces itself, so the host can add the one
+    /// header the page is forbidden from setting.
+    /// </summary>
+    /// <remarks>
+    /// <c>Service-Worker: script</c> is a forbidden header name, so <c>fetch()</c> drops it
+    /// silently, and it is exactly what a site keys on to serve the worker script instead of the
+    /// app. Messenger answers <c>/sw?s=push</c> without it with 580KB of its own HTML. The app's own
+    /// <c>HttpClient</c> can set it and still gets an interstitial, because it is not the browser -
+    /// so the request has to be the browser's, with the header put on as it passes.
+    /// </remarks>
+    private const string PageFetchMarkerHeader = "X-LittleLauncher-Worker-Script";
+
+    /// <summary>
+    /// Script URLs that have already come back as something other than a script, so neither the page
+    /// nor the host asks for them again this session.
+    /// </summary>
+    /// <remarks>
+    /// Messenger serves <c>/sw?s=push</c> as 580KB of its own HTML to anything but the browser's
+    /// genuine service-worker request, which cannot be reproduced. Without this the launcher
+    /// downloads that on every load, forever, to reach the same conclusion.
+    /// </remarks>
+    private readonly HashSet<string> _unwrappableScripts = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Worker scripts as the page fetched them, keyed by script URL.</summary>
+    /// <remarks>
+    /// The page's fetch is preferred over the host's because it is the browser's own credentialed,
+    /// same-origin request. Messenger answers an <c>HttpClient</c> asking for <c>sw?s=push</c> with
+    /// an HTML login page, which inlined into the wrap gave the worker
+    /// <c>Uncaught SyntaxError: Unexpected token '&lt;'</c>.
+    /// </remarks>
+    private readonly Dictionary<string, string> _serviceWorkerBodies = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Whether this is plausibly a script rather than a page telling us to sign in.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately crude and deliberately present. Anything that guards its worker script can
+    /// answer a request the browser did not make with a 200 and an HTML body, and inlining that
+    /// leaves the site with a worker that cannot parse — strictly worse than not bridging it at all.
+    /// A leading <c>&lt;</c> is what that always looks like.
+    /// </remarks>
+    private static bool LooksLikeScript(string? body)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return false;
+
+        string start = body.TrimStart('﻿', ' ', '\t', '\r', '\n');
+        return start.Length > 0 && start[0] != '<';
+    }
+
+    /// <summary>The first line or so of a body, flattened onto one log line.</summary>
+    private static string Describe(string? body)
+    {
+        if (string.IsNullOrEmpty(body)) return "(nothing)";
+
+        string start = body.TrimStart('﻿', ' ', '\t', '\r', '\n');
+        if (start.Length > 120) start = start[..120];
+        return "\"" + start.Replace('\r', ' ').Replace('\n', ' ') + "\"";
+    }
+
+    /// <summary>Fetches the site's own worker script, or null if it could not be had.</summary>
+    /// <remarks>
+    /// <para><b>Why the wrap no longer pulls the original in itself.</b> It used to end in
+    /// <c>importScripts</c> of the script's own URL, and <b>that can never work</b>: a worker's
+    /// <c>importScripts</c> resolves against the registration's script resource map, and the main
+    /// script is already in that map under its own URL — as the wrap. So the wrap imported itself,
+    /// every time, until <c>Maximum call stack size exceeded</c>. No request was ever made, which is
+    /// why nothing on the host side could see or fix it: not a header rule, not <c>no-store</c>, not
+    /// clearing the HTTP cache, not unregistering.</para>
+    /// <para>It only ever appeared to work because of adoption. That walk registers a *marked* URL,
+    /// so the wrap sat at <c>sw.js?llbridge=1</c> and imported <c>sw.js</c> — two different URLs, no
+    /// self-reference. Every site that registered its own worker plainly, at a URL adoption declines
+    /// to mark, was silently broken by the bridge: WhatsApp worked, Messenger never could.</para>
+    /// <para><b>So the original is fetched here and inlined.</b> No import, no second URL, nothing
+    /// for a script map to resolve back onto the wrap. The cost is that this request is the app's,
+    /// not the browser's, so the profile's cookies are read and sent with it — a worker script
+    /// behind a login is common and losing it would be worse than the bug this replaces.</para>
+    /// <para><b>Failure declines the wrap rather than guessing.</b> Returning null leaves the
+    /// response unset, so the request goes to the site untouched and it gets its own worker. A
+    /// launcher with no bridge misses worker-scope notifications; a launcher served half a wrap has
+    /// no working worker at all.</para>
+    /// </remarks>
+    private async Task<string?> TryFetchOriginalScriptAsync(CoreWebView2 core, string url)
+    {
+        try
+        {
+            string cookieHeader = "";
+            try
+            {
+                var cookies = await core.CookieManager.GetCookiesAsync(url);
+                cookieHeader = string.Join("; ", cookies.Select(c => c.Name + "=" + c.Value));
+            }
+            catch (Exception ex)
+            {
+                // Worth trying anyway: plenty of worker scripts are served to anyone who asks.
+                Logger.Debug(ex, "Could not read cookies for {Url}", url);
+            }
+
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.TryAddWithoutValidation("Accept", "*/*");
+            // The header that tells the site this is a worker's top-level script request. Some
+            // servers vary on it, and the browser would have sent it.
+            request.Headers.TryAddWithoutValidation("Service-Worker", "script");
+            if (!string.IsNullOrEmpty(cookieHeader))
+                request.Headers.TryAddWithoutValidation("Cookie", cookieHeader);
+
+            try
+            {
+                if (!string.IsNullOrEmpty(core.Settings.UserAgent))
+                    request.Headers.TryAddWithoutValidation("User-Agent", core.Settings.UserAgent);
+            }
+            catch { }
+
+            using var response = await WorkerScriptClient.SendAsync(request);
+            string body = await response.Content.ReadAsStringAsync();
+
+            Logger.Info("Fetched {Name}'s worker script {Url} for inlining: {Status} {Type}, {Length} chars, cookies {Cookies}",
+                _launcher.Name, url, (int)response.StatusCode,
+                response.Content.Headers.ContentType?.MediaType ?? "no content-type",
+                body.Length,
+                string.IsNullOrEmpty(cookieHeader) ? "none" : "sent");
+
+            return response.IsSuccessStatusCode ? body : null;
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn(ex, "Not wrapping {Name}'s service worker: {Url} could not be fetched. The site keeps its own worker.",
+                _launcher.Name, url);
+            return null;
+        }
+    }
+
+    /// <summary>Shared client for the fetch above. Redirects followed; cookies supplied by hand.</summary>
+    private static readonly HttpClient WorkerScriptClient = new(new HttpClientHandler
+    {
+        UseCookies = false,
+        AllowAutoRedirect = true,
+    })
+    {
+        Timeout = TimeSpan.FromSeconds(15),
+    };
 
     /// <summary>One request header, or empty where it is absent or cannot be read.</summary>
     /// <remarks>
@@ -965,11 +1206,50 @@ public sealed partial class WebFlyoutWindow
             // with it. See _moduleWorkerScripts.
             bool isModule = _moduleWorkerScripts.Contains(uri);
 
+            // The site's own script, inlined rather than pulled in by the wrap. Preferably the copy
+            // the *page* fetched, because that is the browser's own credentialed request; the host's
+            // own fetch is the fallback for a script announced before a page could get it. If
+            // neither yields something that is actually a script, nothing is served at all: the
+            // request goes to the site untouched and the launcher simply has no worker bridge, which
+            // is a great deal better than a worker that will not run.
+            // Already established that this one cannot be had. Nothing about that changes within a
+            // session, so the request goes straight to the site rather than being asked for twice.
+            if (_unwrappableScripts.Contains(original) || _unwrappableScripts.Contains(uri)) return;
+
+            string? originalBody = null;
+            if (_serviceWorkerBodies.TryGetValue(original, out string? fromPage) && LooksLikeScript(fromPage))
+                originalBody = fromPage;
+            else if (_serviceWorkerBodies.TryGetValue(uri, out string? fromPageAtUri) && LooksLikeScript(fromPageAtUri))
+                originalBody = fromPageAtUri;
+
+            originalBody ??= await TryFetchOriginalScriptAsync(core, original);
+
+            if (!LooksLikeScript(originalBody))
+            {
+                // The opening of whatever did come back, because "not a script" has several very
+                // different causes and they are indistinguishable without it: an HTML login page, an
+                // error page, an empty body from a fetch that was blocked. Bounded and one line.
+                // Remembered, so the page is told not to fetch it again. Messenger's answer to this
+                // URL is 580KB of HTML, and repeating that on every load of a launcher that cannot
+                // be bridged is a cost with no possible benefit.
+                _unwrappableScripts.Add(original);
+                _unwrappableScripts.Add(uri);
+
+                Logger.Warn("Not wrapping {Name}'s service worker: {Url} did not come back as a script ({Length} chars, starts {Start}). The site keeps its own worker.",
+                    _launcher.Name, original,
+                    originalBody?.Length ?? 0,
+                    Describe(originalBody));
+                return;
+            }
+
             string banner = "// little-launcher service worker bridge v" + WrapVersion + "\n";
 
+            // Order differs by realm for the same reason it always did: a module's own imports are
+            // hoisted and its body expects to run first, while a classic worker wants the patch in
+            // place before anything it does.
             string script = isModule
-                ? banner + "import " + JsonSerializer.Serialize(original) + ";\n" + ServiceWorkerShimScript
-                : banner + ServiceWorkerShimScript + "\nimportScripts(" + JsonSerializer.Serialize(original) + ");\n";
+                ? banner + originalBody + "\n;\n" + ServiceWorkerShimScript
+                : banner + ServiceWorkerShimScript + "\n;\n" + originalBody;
 
             Logger.Info("Wrapping service worker for {Name}: {Url} ({Type})",
                 _launcher.Name, uri, isModule ? "module" : "classic");

@@ -2467,10 +2467,6 @@ public sealed partial class WebFlyoutWindow : Window
         // NotificationBridgeScript. The page reports its notifications over the bridge instead.
 
         ApplyPendingPermissionReset(core);
-
-        // Before the page loads, so its first read of Notification.permission already says granted
-        // rather than prompting for something the launcher has already decided.
-        _ = SeedTrustedPermissionsAsync(core);
     }
 
     /// <summary>

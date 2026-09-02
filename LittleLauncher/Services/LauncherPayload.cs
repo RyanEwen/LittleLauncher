@@ -304,7 +304,6 @@ internal static class LauncherPayload
         existing.WebRegularWindow = downloaded.WebRegularWindow;
         existing.WebWindowAutoHide = downloaded.WebWindowAutoHide;
         existing.WebTaskbarClickCloses = downloaded.WebTaskbarClickCloses;
-        existing.WebAllowAllPermissions = downloaded.WebAllowAllPermissions;
         // Legacy, and synced for the same reason WebUrl is: a launcher edited on a machine running
         // an older build arrives saying it remembered its position, and MigrateWebModel at the foot
         // of this method turns that into the WebAnchors.LastPosition it now means.

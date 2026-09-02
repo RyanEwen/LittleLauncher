@@ -1424,26 +1424,6 @@ public sealed class LauncherSettingsWindow : Window
         UpdateProfileText();
         var clearRow = BuildRow("Browsing Data", clearSubtitle, clearButton);
 
-        // ── Site permissions ────────────────────────────────────
-        // The flyout asks by default, the same as a browser. This is for the launcher whose page
-        // asks constantly and is trusted anyway — a dashboard that wants the camera on every load.
-        var trustToggle = new ToggleSwitch { IsOn = launcher.WebAllowAllPermissions, OnContent = "", OffContent = "", MinWidth = 0 };
-        trustToggle.Toggled += (_, _) =>
-        {
-            launcher.WebAllowAllPermissions = trustToggle.IsOn;
-            SettingsManager.SaveSettings();
-            Services.AutoSyncService.NotifyLaunchersChanged();
-
-            // Trusting the site writes its grants into the profile so the page can actually see
-            // them, so untrusting it has to take them back out — otherwise the launcher would keep
-            // silently allowing everything with the toggle off. See WebFlyoutWindow.Permissions.
-            if (!trustToggle.IsOn)
-                _ = WebFlyoutWindow.ClearOnTrustDisabledAsync(launcher.Id);
-        };
-        var trustRow = BuildRow("Trust This Site",
-            "Give this launcher's pages the camera, microphone, location and notifications without asking",
-            trustToggle);
-
         // ── Reset stored answers ────────────────────────────────
         // Without this, an accidental Block could only be undone by clearing the whole profile,
         // which also signs the launcher out.
@@ -1483,7 +1463,7 @@ public sealed class LauncherSettingsWindow : Window
         // does this open?"), they are the ones a user reaches for after dragging a flyout and
         // finding the change did not stick, and Opens At's subtitle describes its interaction with
         // Remember Position, which would read oddly with the two separated by the Advanced fold.
-        foreach (var row in new[] { zoomRow, policyRow, idleRow, reloadRow, linksRow, pinRow, regularRow, autoHideRow, clickRow, trustRow, resetPermissionsRow, profileRow, passwordRow, forgetLoginsRow, clearRow })
+        foreach (var row in new[] { zoomRow, policyRow, idleRow, reloadRow, linksRow, pinRow, regularRow, autoHideRow, clickRow, resetPermissionsRow, profileRow, passwordRow, forgetLoginsRow, clearRow })
             advancedPanel.Children.Add(row);
 
         var advanced = new Expander

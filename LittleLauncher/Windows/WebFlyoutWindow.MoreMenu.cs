@@ -226,6 +226,14 @@ public sealed partial class WebFlyoutWindow
         rebuild.Click += (_, _) => _ = RebuildNotificationBridgeAsync();
         submenu.Items.Add(rebuild);
 
+        // The same thing for every web launcher at once. Worth its own item because the reason to
+        // reach for it is rarely one launcher: a bridge changes for all of them together, and
+        // finding out which launchers are stale by opening each one and rebuilding it is the sort
+        // of errand this menu exists to remove.
+        var rebuildAll = new MenuFlyoutItem { Text = "Rebuild every launcher's bridge" };
+        rebuildAll.Click += (_, _) => _ = RebuildAllNotificationBridgesAsync();
+        submenu.Items.Add(rebuildAll);
+
         return submenu;
     }
 
@@ -268,6 +276,29 @@ public sealed partial class WebFlyoutWindow
     /// records failures as successes, so a site whose adoption failed is marked done and would
     /// never be retried; this is the only way back for one in that state.</para>
     /// </remarks>
+    /// <summary>Rebuilds the bridge on every web launcher that currently has a browser.</summary>
+    /// <remarks>
+    /// Only the loaded ones, and deliberately so: the reset needs a live <c>CoreWebView2Profile</c>,
+    /// and building a browser for an unloaded launcher purely to tear its worker down would undo the
+    /// whole point of unloading it. An unloaded launcher has no stale worker running anyway — it
+    /// picks the current wrap up the next time it opens.
+    /// </remarks>
+    private static async Task RebuildAllNotificationBridgesAsync()
+    {
+        foreach (var flyout in Instances.Values.ToList())
+        {
+            try
+            {
+                await flyout.RebuildNotificationBridgeAsync();
+            }
+            catch (Exception ex)
+            {
+                NLog.LogManager.GetCurrentClassLogger()
+                    .Warn(ex, "Rebuilding the notification bridge failed for launcher {Name}", flyout._launcher.Name);
+            }
+        }
+    }
+
     private async Task RebuildNotificationBridgeAsync()
     {
         var core = _webView?.CoreWebView2;

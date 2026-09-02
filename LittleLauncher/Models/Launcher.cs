@@ -481,20 +481,6 @@ public partial class Launcher : ObservableObject
     public partial string PinAumid { get; set; } = "";
 
     /// <summary>
-    /// Grant camera, microphone, location, notifications and the rest to this launcher's pages
-    /// without asking.
-    /// </summary>
-    /// <remarks>
-    /// Phrased so <c>false</c> — ask — is the default, both because that is the safe direction and
-    /// because <c>WhenWritingDefault</c> would otherwise make it impossible to turn off. The
-    /// decision is the toggle itself, so a request answered by it is deliberately **not** saved
-    /// into the WebView2 profile: turning it back off must return the launcher to asking rather
-    /// than leave a profile full of silent grants behind.
-    /// </remarks>
-    [ObservableProperty]
-    public partial bool WebAllowAllPermissions { get; set; }
-
-    /// <summary>
     /// Put this launcher's cookies, logins and cache in one profile shared with every other
     /// launcher that sets it, instead of its own private one.
     /// </summary>

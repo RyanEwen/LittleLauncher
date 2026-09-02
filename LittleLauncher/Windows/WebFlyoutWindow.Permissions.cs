@@ -340,22 +340,14 @@ public sealed partial class WebFlyoutWindow
         // prompt, which is drawn for a browser window rather than a tray flyout.
         e.Handled = true;
 
-        if (_launcher.WebAllowAllPermissions)
-        {
-            e.State = CoreWebView2PermissionState.Allow;
-
-            // Saved, like any other answer. Granting without recording looks equivalent — the page
-            // asked, the page was allowed — but it is not: navigator.permissions.query() and
-            // Notification.permission read the stored setting and never see the grant, so an app
-            // that checks before asking believes it has nothing. Teams then shows "we can't access
-            // your microphone" over a working microphone, and offers to turn on notifications that
-            // are already on, every time the browser restarts. Turning the toggle off clears these
-            // again (ClearOnTrustDisabledAsync), which is what keeps "the toggle is the decision"
-            // true without lying to the page.
-            e.SavesInProfile = true;
-            OnPermissionGranted(e.PermissionKind);
-            return;
-        }
+        // There is deliberately no "trust this site" shortcut here any more. It existed to spare
+        // the user a prompt and it cost more than it saved: a launcher holding a permission it was
+        // handed rather than asked for never runs the flow that sets the permission *up*, which for
+        // notifications is the flow that registers the push worker — so the launcher went quiet,
+        // and the setting that was meant to make it work was what stopped it. WhatsApp behaved as
+        // though it had no notification permission while the toggle was on.
+        //
+        // Every request is now answered in the prompt bar below, once, and remembered per profile.
 
         // The deferral is what keeps the request open while the bar is on screen; without it the
         // handler returning *is* the answer.
@@ -506,17 +498,6 @@ public sealed partial class WebFlyoutWindow
         return true;
     }
 
-    /// <summary>
-    /// Clears the grants "Trust This Site" made, for a launcher that has just stopped trusting it.
-    /// </summary>
-    /// <remarks>
-    /// The toggle is still the decision — this is what makes that true now that the grants are
-    /// written into the profile. Without it, switching Trust off would leave a profile full of
-    /// silent allows behind and the launcher would never ask about anything again.
-    /// </remarks>
-    internal static Task<bool> ClearOnTrustDisabledAsync(string launcherId) =>
-        ResetSitePermissionsAsync(launcherId);
-
     private static async Task ClearPermissionsAsync(CoreWebView2 core)
     {
         try
@@ -531,79 +512,6 @@ public sealed partial class WebFlyoutWindow
         catch (Exception ex)
         {
             NLog.LogManager.GetCurrentClassLogger().Warn(ex, "Resetting site permissions failed");
-        }
-    }
-
-    /// <summary>
-    /// Writes the grants "Trust This Site" implies into the profile before the page asks for them.
-    /// </summary>
-    /// <remarks>
-    /// <para>Saving a grant when the page asks (see <see cref="OnPermissionRequested"/>) is not
-    /// enough on its own, because a well-built app <b>checks before it asks</b>. Teams reads
-    /// <c>Notification.permission</c> on load, finds <c>default</c>, and shows "Stay in the know.
-    /// Turn on desktop notifications." — then renders its own in-page banners instead of real ones,
-    /// because as far as it can tell the desktop cannot show them. Nothing is ever requested, so
-    /// nothing is ever saved, and the prompt returns on every load forever.</para>
-    /// <para>Seeding breaks that loop: the answers the toggle already implies are written for the
-    /// launcher's own origins, so the very first read reports <c>granted</c> and the app goes
-    /// straight to real notifications. Only the four the toggle names, and only for this launcher's
-    /// own addresses — a trusted launcher is a statement about *its* site, not about every site its
-    /// pages happen to link to.</para>
-    /// </remarks>
-    private async Task SeedTrustedPermissionsAsync(CoreWebView2 core)
-    {
-        if (!_launcher.WebAllowAllPermissions) return;
-
-        // Notifications are deliberately absent, and this is the one kind where seeding does harm.
-        //
-        // A site sets up push *during* its own permission flow: it asks, and on being granted it
-        // registers the service worker that push is delivered to. Handing it the grant before it
-        // asks means that flow never runs, so the site ends up holding a permission it never uses
-        // with no worker to deliver through, and goes silent. Messenger is exactly that - it
-        // registered `sw?s=push` within seconds of being made to ask, having registered nothing at
-        // all for weeks while the permission sat pre-granted.
-        //
-        // Nothing is lost by leaving it out. The request handler above already answers Allow
-        // silently for a launcher with WebAllowAllPermissions, so the user still sees no prompt;
-        // the site simply gets to run its own code first. The other three have no such side effect:
-        // nothing registers a worker on being handed a camera.
-        CoreWebView2PermissionKind[] kinds =
-        [
-            CoreWebView2PermissionKind.Microphone,
-            CoreWebView2PermissionKind.Camera,
-            CoreWebView2PermissionKind.Geolocation,
-        ];
-
-        foreach (string origin in TrustedOrigins())
-        {
-            foreach (var kind in kinds)
-            {
-                try
-                {
-                    await core.Profile.SetPermissionStateAsync(kind, origin, CoreWebView2PermissionState.Allow);
-                }
-                catch (Exception ex)
-                {
-                    Logger.Debug(ex, "Seeding {Kind} for {Origin} failed", kind, origin);
-                }
-            }
-        }
-    }
-
-    /// <summary>The origins this launcher is actually pointed at — its address, or its bookmarks.</summary>
-    private IEnumerable<string> TrustedOrigins()
-    {
-        var urls = _launcher.WebBookmarks.Select(b => b.Url);
-
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (string url in urls)
-        {
-            if (string.IsNullOrWhiteSpace(url)) continue;
-            if (!Uri.TryCreate(NormalizeUrl(url), UriKind.Absolute, out var uri)) continue;
-
-            // The form WebView2 stores and reports: scheme, host, port, trailing slash.
-            string origin = uri.GetLeftPart(UriPartial.Authority) + "/";
-            if (seen.Add(origin)) yield return origin;
         }
     }
 
