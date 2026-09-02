@@ -1284,6 +1284,25 @@ launcher is unloaded is queued (`_pendingPermissionResets`) and applied by `Conf
 next create. The button says which of the two happened rather than reporting a success that has not
 occurred yet.
 
+### Some sites simply do not notify, and that is not a bug here
+
+Before digging into the bridge, rule the site out. Three of them ate a lot of time looking like
+launcher faults:
+
+- **Messenger does not raise desktop notifications at all.** Its page never constructs a
+  `Notification`, never calls `showNotification`, and never registers a service worker, so there is
+  nothing to bridge. Confirmed outside the app: it does not notify in Edge either, with the browser
+  focused on another tab. Meta appears to have dropped web desktop notifications.
+- **Discord was an account setting.** "Enable Desktop Notifications" off makes its own code play the
+  sound and return before constructing anything, so the launcher sees nothing.
+- **An app that thinks you are looking at it will not notify.** Both Messenger and Teams decide from
+  `visibilityState`, which is why a dismissed launcher has to stay collapsed.
+
+The log tells these apart in one line. `<launcher>'s page raised one` with no `shown for <launcher>`
+after it means the notification was lost between the page and Windows, which is ours. **No raise at
+all means the page never asked**, which is not - and until that line existed the two were
+indistinguishable, which is why Discord took hours and Messenger took days.
+
 ### Notifications
 
 `NotificationReceived` is marked handled and the notification is shown as a Windows toast through
