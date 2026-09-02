@@ -822,7 +822,7 @@ public sealed partial class WebFlyoutWindow
         }
         else if (kind == "swStale")
         {
-            OfferBridgeRebuild(
+            NoteStaleWrap(
                 message?["url"]?.GetValue<string>() ?? "",
                 message?["version"]?.GetValue<string>() ?? "",
                 message?["answered"]?.GetValue<bool>() == true);
@@ -1166,6 +1166,12 @@ public sealed partial class WebFlyoutWindow
     /// <summary>Kept alive deliberately: dropping the receiver stops the events arriving.</summary>
     private readonly Dictionary<CoreWebView2, CoreWebView2DevToolsProtocolEventReceiver> _fetchReceivers = new();
 
+    /// <summary>
+    /// Script URLs this session has served the current wrap for, so a stale report for one is
+    /// already out of date by the time it is read.
+    /// </summary>
+    private readonly HashSet<string> _wrappedThisSession = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>Worker scripts as the page fetched them, keyed by script URL.</summary>
     /// <remarks>
     /// The page's fetch is preferred over the host's because it is the browser's own credentialed,
@@ -1192,98 +1198,33 @@ public sealed partial class WebFlyoutWindow
         return start.Length > 0 && start[0] != '<';
     }
 
-    /// <summary>Launchers already offered a rebuild this session, so declining is not re-asked.</summary>
-    private static readonly HashSet<string> _rebuildOffered = [];
-
-    /// <summary>When this launcher's notification permission was last answered. 0 if never.</summary>
-    private long _notificationPermissionGrantedAt;
-
-    /// <summary>How long after answering a permission prompt a rebuild offer is held back.</summary>
-    private const long PermissionSettlingMs = 2 * 60 * 1000;
-
     /// <summary>
-    /// Script URLs this session has served the current wrap for, and so must never call stale.
+    /// Records that a launcher's worker is not the current wrap. **Deliberately only a log line.**
     /// </summary>
     /// <remarks>
-    /// The page's sweep and the host's serving race: the sweep can enumerate a registration, find
-    /// the old worker still active, and report it stale while the replacement is already being
-    /// installed. That is exactly what a rebuild looks like from the page's side, so without this
-    /// the offer fired on the launcher the user had just rebuilt.
+    /// <para>This offered a rebuild in the prompt bar, and it was removed after firing wrongly four
+    /// times in a row: on a launcher rebuilt seconds earlier (it pinged a worker still installing,
+    /// which cannot answer), on one that had just been granted permission (two notification prompts
+    /// back to back), and twice on launchers whose workers the sweep went on to wrap by itself
+    /// moments later.</para>
+    /// <para>That last one is the reason it cannot be repaired by tightening the check. **The sweep
+    /// reports and then repairs, in that order**: it announces, pings, and where the worker is not
+    /// ours it adopts — and adoption re-registers, which is what produces the wrap. Measured at 38
+    /// seconds between the report and the wrap on Messages, and four minutes on Teams. Anything that
+    /// prompts on the report is racing the repair it is recommending, so it is right only when
+    /// adoption fails and there is no way to know that at the moment of asking.</para>
+    /// <para>The finding is still worth having, and the log is where it belongs: it says which
+    /// launchers are running an older wrap, and <b>Rebuild notification bridge</b> is on the menu
+    /// for anyone who wants to act on it.</para>
     /// </remarks>
-    private readonly HashSet<string> _wrappedThisSession = new(StringComparer.OrdinalIgnoreCase);
-
-    /// <summary>
-    /// Offers to rebuild the bridge on a launcher whose worker is running an older wrap.
-    /// </summary>
-    /// <remarks>
-    /// <para><b>Why this cannot just be done.</b> Chromium re-fetches a worker's top-level script on
-    /// its own schedule and installs a new one only if the bytes differ, so a worker installed under
-    /// an older wrap keeps running it - a reload will not replace it and neither will
-    /// <c>update()</c>. The only thing that will is unregistering, and <b>unregistering destroys the
-    /// registration's push subscription</b>. A site re-subscribes during its permission flow, and a
-    /// site that already holds notification permission never runs that flow again, so doing this
-    /// silently would leave a launcher permanently quiet - which is precisely the bug that made
-    /// Messenger silent for weeks. Rebuild resets the permission for exactly that reason, and
-    /// resetting somebody's site permission is not something to do to them unasked.</para>
-    /// <para>So it is offered, once per launcher per session, in the flyout's own bar. Declining is
-    /// remembered, and the launcher goes on working - it simply carries the older wrap.</para>
-    /// </remarks>
-    private void OfferBridgeRebuild(string url, string version, bool answered)
+    private void NoteStaleWrap(string url, string version, bool answered)
     {
-        // A script this session has already failed to obtain will fail again, and rebuilding would
-        // reset the user's site permission to reach the same place. Nothing to offer.
-        if (_unwrappableScripts.Contains(url)) return;
+        if (_unwrappableScripts.Contains(url) || _wrappedThisSession.Contains(url)) return;
 
-        // And nothing to offer for one already replaced with the current wrap this session, whatever
-        // the page saw a moment before that landed.
-        if (_wrappedThisSession.Contains(url)) return;
-
-        // **Not in the same breath as the permission prompt.** A site that registers its worker on
-        // load, before it asks - Google Messages does - passes through the register patch unwrapped,
-        // because a site that cannot notify is deliberately left alone. Granting permission then
-        // re-runs the sweep, which correctly finds an unwrapped worker and says so *immediately
-        // after* the user answered a different question about the same launcher. The finding is
-        // right and the moment is wrong: two prompts in a row about notifications, the second
-        // undoing the sense of the first.
-        //
-        // Deliberately without claiming the once-per-session slot, so it is offered on the next
-        // open instead of being swallowed.
-        if (Environment.TickCount64 - _notificationPermissionGrantedAt < PermissionSettlingMs)
-        {
-            Logger.Info("Not offering {Name} a rebuild yet: its notification permission was answered moments ago",
-                _launcher.Name);
-            return;
-        }
-
-        if (!_rebuildOffered.Add(_launcher.Id)) return;
-
-        Logger.Info("{Name}'s service worker is not the current wrap ({State}), offering a rebuild: {Url}",
+        Logger.Info("{Name}'s service worker is not the current wrap ({State}): {Url}",
             _launcher.Name,
             answered ? "running " + (version == "unversioned" ? "a build too old to say" : "v" + version) : "did not answer",
             url);
-
-        // **The wording is hedged where the evidence is, and says what accepting costs.** A worker
-        // that does not answer is either unwrapped or wrapped by a build older than the reply
-        // itself, and those are indistinguishable — WhatsApp is the second, and it delivers
-        // notifications perfectly well. Telling the user it is broken would be false, and acting on
-        // it is not free: rebuilding resets the site's notification permission and drops its push
-        // subscription, so a confident-sounding prompt could talk somebody into breaking a launcher
-        // that works.
-        string text = answered
-            ? $"{_launcher.Name}'s notification bridge is an older version. Rebuilding updates it, and asks the site for notification permission again."
-            : $"{_launcher.Name}'s notification bridge may be an older version. Rebuilding updates it, and asks the site for notification permission again.";
-
-        EnqueuePrompt(new PromptRequest(
-            text,
-            "Rebuild",
-            "Not now",
-            accepted =>
-            {
-                // Without the permission reset: this offer is about replacing a worker with the
-                // current wrap, which has nothing to do with permission, and resetting it would
-                // leave the launcher silent until somebody noticed a prompt.
-                if (accepted) _ = RebuildNotificationBridgeAsync(resetPermission: false);
-            }));
     }
 
     /// <summary>The first line or so of a body, flattened onto one log line.</summary>
