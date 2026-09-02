@@ -4,6 +4,7 @@
 using LittleLauncher.Classes.Settings;
 using LittleLauncher.Models;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.Web.WebView2.Core;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using System;
 using Launcher = LittleLauncher.Models.Launcher;
@@ -272,8 +273,32 @@ public sealed partial class WebFlyoutWindow
         var core = _webView?.CoreWebView2;
         if (core == null) return;
 
-        Logger.Info("Rebuilding {Name}'s notification bridge: removing its service worker so the site registers it again",
+        Logger.Info("Rebuilding {Name}'s notification bridge: resetting notification permission and removing its service worker",
             _launcher.Name);
+
+        // The permission goes back to "not asked", and that is the half that makes the rest work.
+        // A site sets push up *during* its permission flow - it asks, and on being granted it
+        // registers the worker push is delivered to - so one that already holds the grant simply
+        // never runs that code again. Unregistering alone therefore gets a site that quietly does
+        // nothing on the way back up, which is exactly the dance this item exists to replace:
+        // log out, reset the site permission, clear the workers, hard reload, log back in.
+        //
+        // Nobody is prompted twice for it either: a launcher with WebAllowAllPermissions answers
+        // the request silently, so the site asks, is granted, and registers, with nothing on screen.
+        try
+        {
+            string origin = new Uri(core.Source).GetLeftPart(UriPartial.Authority);
+            await core.Profile.SetPermissionStateAsync(
+                CoreWebView2PermissionKind.Notifications, origin, CoreWebView2PermissionState.Default);
+
+            Logger.Info("Reset notification permission for {Origin} so {Name}'s site asks again", origin, _launcher.Name);
+        }
+        catch (Exception ex)
+        {
+            // Worth carrying on: removing the worker is still most of the job, and a site that does
+            // re-register without being asked again is helped by it.
+            Logger.Warn(ex, "Could not reset notification permission for launcher {Name}", _launcher.Name);
+        }
 
         const string script = """
             (async () => {

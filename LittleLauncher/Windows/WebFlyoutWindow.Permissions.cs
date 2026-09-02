@@ -554,9 +554,21 @@ public sealed partial class WebFlyoutWindow
     {
         if (!_launcher.WebAllowAllPermissions) return;
 
+        // Notifications are deliberately absent, and this is the one kind where seeding does harm.
+        //
+        // A site sets up push *during* its own permission flow: it asks, and on being granted it
+        // registers the service worker that push is delivered to. Handing it the grant before it
+        // asks means that flow never runs, so the site ends up holding a permission it never uses
+        // with no worker to deliver through, and goes silent. Messenger is exactly that - it
+        // registered `sw?s=push` within seconds of being made to ask, having registered nothing at
+        // all for weeks while the permission sat pre-granted.
+        //
+        // Nothing is lost by leaving it out. The request handler above already answers Allow
+        // silently for a launcher with WebAllowAllPermissions, so the user still sees no prompt;
+        // the site simply gets to run its own code first. The other three have no such side effect:
+        // nothing registers a worker on being handed a camera.
         CoreWebView2PermissionKind[] kinds =
         [
-            CoreWebView2PermissionKind.Notifications,
             CoreWebView2PermissionKind.Microphone,
             CoreWebView2PermissionKind.Camera,
             CoreWebView2PermissionKind.Geolocation,
@@ -741,7 +753,15 @@ public sealed partial class WebFlyoutWindow
             };
 
             // Permission is the real thing's business, not ours.
-            LLNotification.requestPermission = function () { return Native.requestPermission.apply(Native, arguments); };
+            // Delegated untouched, but the *moment* of asking is recorded, because that is the one
+            // signal that says a site is about to set notifications up. A push site registers its
+            // worker as part of this flow, while permission is still 'default', and the worker
+            // bridge needs to know that a registration arriving now is worth intercepting. See the
+            // register patch in WebFlyoutWindow.ServiceWorker.cs.
+            LLNotification.requestPermission = function () {
+                try { window.__llPermissionAskedAt = Date.now(); } catch (e) { }
+                return Native.requestPermission.apply(Native, arguments);
+            };
             Object.defineProperty(LLNotification, 'permission', { get: function () { return Native.permission; } });
             Object.defineProperty(LLNotification, 'maxActions', { get: function () { return Native.maxActions || 2; } });
             // How the worker half of the bridge withdraws a notification it closed. The worker

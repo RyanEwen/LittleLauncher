@@ -293,8 +293,14 @@ submenu so they sit off the path somebody walks to change their zoom:
   no help against the thing people reload for. There is no WebView2 API for it; the DevTools
   protocol has `Page.reload` with `ignoreCache` and the runtime speaks it. It falls back to an
   ordinary reload rather than doing nothing.
-- **Rebuild notification bridge.** Unregisters the site's service worker and reloads, so the site
-  installs it again and that fresh install is wrapped. It also clears the once-ever adoption marker.
+- **Rebuild notification bridge.** Resets the launcher's notification permission to "not asked",
+  unregisters the site's service worker and reloads, so the site asks again, registers again, and
+  that fresh install is wrapped. It also clears the once-ever adoption marker. The permission half
+  is what makes the rest work: a site sets push up *during* its permission flow, so one already
+  holding the grant never runs that code again and comes back up with no worker. Nobody is prompted
+  twice for it either - a launcher with `WebAllowAllPermissions` answers the request silently. This
+  replaces the manual dance of logging out, resetting site permissions, clearing workers in
+  DevTools, hard-reloading and logging back in.
 
 The last one is **the thing the bridge cannot do on anybody's behalf**, which is why it is a menu
 item rather than automatic. Adoption needs a script URL, and a site enforcing Trusted Types accepts
@@ -1289,13 +1295,15 @@ occurred yet.
 Before digging into the bridge, rule the site out. Three of them ate a lot of time looking like
 launcher faults:
 
-- **Messenger notifies from a push handler, and has no service worker here.** Its page never
-  constructs a `Notification` and never calls `showNotification`, so nothing the document-scope
-  bridges do can reach it - but it *does* notify in Edge, as a generic "New notification" with no
-  sender or body, which is what a push handler shows. In this app it registers no worker at all, so
-  there is no push subscription and nothing arrives. Why it registers in Edge and not here is open;
-  the first thing to rule out is that pre-granting notification permission
-  (`Launcher.WebAllowAllPermissions`) lets it skip the flow that also registers the worker.
+- **Messenger notifies from a push handler**, so its page never constructs a `Notification` and
+  never calls `showNotification`, and nothing the document-scope bridges do can reach it. It looked
+  for a long time like a site that simply does not notify - it *does* notify in Edge, but as a
+  generic "New notification" with no sender or body, which is what an unhandled push shows. It was
+  ours, twice over, and both faults are fixed: pre-granting notification permission meant it never
+  ran the flow that registers its push worker, and once it did register, the pass-through table
+  served the wrap to its own `importScripts` and the worker died in a stack overflow. Left here
+  because the *shape* of the diagnosis was sound even where the conclusion was not - a site with no
+  push subscription cannot be made to notify by anything on this side.
 - **Discord was an account setting.** "Enable Desktop Notifications" off makes its own code play the
   sound and return before constructing anything, so the launcher sees nothing.
 - **An app that thinks you are looking at it will not notify.** Both Messenger and Teams decide from
@@ -1700,8 +1708,34 @@ document script, so the worker's **script is wrapped as it is fetched**.
 `CoreWebView2WebResourceRequestSourceKinds` makes worker traffic visible to the host, so the
 response is served as the shim followed by `importScripts` of the original. **Nothing is re-fetched
 by the app**: `importScripts` is the browser's own request, carrying the profile's cookies, so a
-dashboard behind a login still loads its real worker. A marker query stops that inner request being
-wrapped again.
+dashboard behind a login still loads its real worker.
+
+**What stops that inner request being wrapped in turn is the request itself, and it must stay that
+way.** `IsWorkerMainScriptRequest` reads two headers that only a worker's top-level script fetch
+carries: `Service-Worker: script`, which is specified for that request alone, and Fetch Metadata's
+`Sec-Fetch-Dest: serviceworker`, where an imported script gets `script`. Absence is a real answer
+rather than a gap to guess around, because a service worker requires a secure context and a secure
+context is exactly where Chromium sends Fetch Metadata.
+
+Two designs were tried before it and both failed, in ways worth not repeating:
+
+- **A marker query on the inner fetch** (`?__llsw=1`) works until a site whose worker URL already
+  means something. Messenger's is `sw?s=push` - no `.js`, and a query that selects behaviour - and
+  it does not serve `sw?s=push&__llsw=1` alike, so the inner fetch returned something that would not
+  run and the worker failed with "ServiceWorker cannot be started".
+- **A pass-through table**, noting the URL when the wrap was served and letting the next request for
+  it through, holds only while **one** fetch is in flight. A worker script is very often fetched
+  twice at once: a site's own `register()` alongside the `update()` the page sweep calls, or two tabs
+  on the same origin. The second main fetch then consumed the note meant for the first, whose
+  `importScripts` arrived to find nothing armed and **was served the wrap again**. That recurses
+  until the stack gives out - `Uncaught RangeError: Maximum call stack size exceeded` at the wrap's
+  own `importScripts` line - the worker never evaluates, and the registration is torn down, leaving
+  the origin with **no worker at all** and a page whose console blames the site. Messenger hit it on
+  every load; WhatsApp, which registers once, never did, so the bridge looked like it worked.
+
+The decline is logged at Info with what the request said it was for. "Declined every time" and
+"wrapped correctly" otherwise differ only by the absence of a line, and the whole bridge rests on
+those headers reading the way the spec says they do.
 
 Then, in both directions:
 

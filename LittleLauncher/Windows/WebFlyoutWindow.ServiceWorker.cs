@@ -23,8 +23,9 @@ namespace LittleLauncher.Windows;
 /// (<see cref="CoreWebView2WebResourceRequestSourceKinds"/> makes worker traffic visible to the
 /// host) and served as the shim followed by <c>importScripts</c> of the original. Nothing is
 /// re-fetched by the app: <c>importScripts</c> is the browser's own request, carrying the profile's
-/// cookies, so a dashboard behind a login still loads its real worker. The marker query is what
-/// stops that inner request being wrapped again.</para>
+/// cookies, so a dashboard behind a login still loads its real worker. What stops that inner
+/// request being wrapped in turn is the request itself saying what it is for - see
+/// <see cref="IsWorkerMainScriptRequest"/>.</para>
 /// <para><b>What the shim does.</b> Two directions:</para>
 /// <list type="bullet">
 /// <item><description><b>Out:</b> <c>showNotification</c> in the worker still makes the real
@@ -42,10 +43,6 @@ namespace LittleLauncher.Windows;
 /// </remarks>
 public sealed partial class WebFlyoutWindow
 {
-    /// <summary>Marks the inner request for the original worker script, so it is not wrapped twice.</summary>
-    private const string OriginalScriptMarker = "__llsw";
-
-
     /// <summary>
     /// Worker scripts each browser has been told about, and so wraps when they are fetched.
     /// </summary>
@@ -220,10 +217,18 @@ public sealed partial class WebFlyoutWindow
             if (nativeRegister && !nativeRegister.__littleLauncherShim) {
                 var patched = function (url, opts) {
                     var self_ = this;
-                    // Same test as below: no permission, no bridge, so no filter and no wrap. The
-                    // registration itself is passed straight through untouched.
+                    // Worth intercepting if the site can notify, **or has just asked whether it
+                    // may**. That second half is the whole reason a push site was never bridged at
+                    // its install: it registers its worker as part of the permission flow, while
+                    // the answer is still 'default', so a test for 'granted' alone skips the one
+                    // fetch that ever happens and leaves adoption to force another later - which is
+                    // where every URL problem lives. Messenger registers `sw?s=push` seconds after
+                    // asking, and a site that never asks (Home Assistant) is still not bridged.
                     var allowed = false;
-                    try { allowed = window.Notification && Notification.permission === 'granted'; } catch (e) { }
+                    try {
+                        allowed = (window.Notification && Notification.permission === 'granted')
+                            || (Date.now() - (window.__llPermissionAskedAt || 0) < 60000);
+                    } catch (e) { }
                     if (!allowed) return nativeRegister.call(self_, url, opts);
 
                     // Stated rather than passed through: a classic registration omits the option
@@ -355,7 +360,21 @@ public sealed partial class WebFlyoutWindow
                     return;
                 }
 
-                var sep = w.scriptURL.indexOf('?') >= 0 ? '&' : '?';
+                // A worker URL whose query already means something cannot be walked. Adoption marks
+                // a URL by appending to the query to force a fetch, and a site that serves
+                // `sw?s=push` does not serve `sw?s=push&llbridge=1` alike - Messenger answers the
+                // marked URL with something that will not run, and the registration ends up alive
+                // with a dead worker. Twice, before this guard existed.
+                //
+                // Nothing is lost by declining: a site like that is bridged at its install instead,
+                // which is where it should have been caught in the first place.
+                if (w.scriptURL.indexOf('?') >= 0) {
+                    post({ __ll: 'swAdopt', url: w.scriptURL, ok: false,
+                           error: 'its URL carries a query, which cannot be marked without changing what the site serves' });
+                    return;
+                }
+
+                var sep = '?';
                 var out = trustedScriptUrl(w.scriptURL + sep + 'llbridge=1');
                 var back = trustedScriptUrl(w.scriptURL);
 
@@ -746,7 +765,6 @@ public sealed partial class WebFlyoutWindow
     /// </remarks>
     private void WatchServiceWorkerScript(CoreWebView2 core, string url, string type)
     {
-        if (url.Contains(OriginalScriptMarker, StringComparison.Ordinal)) return;
 
         bool isModule = string.Equals(type, "module", StringComparison.Ordinal);
         bool isClassic = string.Equals(type, "classic", StringComparison.Ordinal);
@@ -820,16 +838,105 @@ public sealed partial class WebFlyoutWindow
     {
         string uri = e.Request.Uri;
 
-        // The inner request for the real script. Letting it through untouched is the whole point:
-        // it is the browser's own fetch, with the profile's cookies on it.
-        if (uri.Contains(OriginalScriptMarker, StringComparison.Ordinal)) return;
         if (!_serviceWorkerScripts.TryGetValue(core, out var watched) || !watched.Contains(uri)) return;
+
+        // Anything but the browser fetching the worker's top-level script is left alone — above all
+        // the wrap's own importScripts, come back for the real thing. Letting that through untouched
+        // is the whole point: it is the browser's own fetch, with the profile's cookies on it.
+        //
+        // Logged rather than silent, because "declined every time" and "wrapped correctly" differ
+        // only by the absence of a line, and the whole bridge rests on these headers reading the way
+        // the spec says they do. A handful of lines per worker, and the normal one is the import.
+        if (!IsWorkerMainScriptRequest(e.Request))
+        {
+            Logger.Info("Not wrapping a fetch of {Url} for {Name}: {Dest}",
+                uri, _launcher.Name, DescribeRequestDestination(e.Request));
+            return;
+        }
 
         // Building the response body is asynchronous, so the request has to be held open — a
         // handler that returns without either a response or a deferral has declined to interfere.
         var deferral = e.GetDeferral();
         _ = RespondWithWrappedScriptAsync(core, e, uri, deferral);
     }
+
+    /// <summary>
+    /// Whether this request is the browser fetching a worker's own top-level script, as opposed to
+    /// the wrap's <c>importScripts</c>/<c>import</c> of the original, or anything else that happens
+    /// to ask for the same URL.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>This has to be read off the request, not remembered.</b> It used to be a table: the
+    /// wrap's URL was noted when the wrap was served, and the next request for exactly that URL was
+    /// taken to be the inner fetch and passed through. That holds only while one fetch is in flight,
+    /// and a worker script is very often fetched twice at once — a site's own <c>register()</c>
+    /// alongside the <c>update()</c> the page sweep calls, or two tabs on the same origin. The
+    /// second main fetch then consumed the note meant for the first, whose <c>importScripts</c>
+    /// arrived to find nothing armed and <b>was served the wrap again</b>. That recurses until the
+    /// stack gives out: <c>Maximum call stack size exceeded</c>, the worker never evaluates, and the
+    /// registration is torn down — a site left with no worker at all, which reads as the site being
+    /// broken rather than as anything to do with us. Messenger hit it every time; WhatsApp, which
+    /// registers once, never did.</para>
+    /// <para>Both headers are part of the fetch, and only the top-level script fetch carries either:
+    /// <c>Service-Worker: script</c> is specified for that request alone, and Fetch Metadata gives
+    /// it <c>Sec-Fetch-Dest: serviceworker</c> where an imported script gets <c>script</c>. Absence
+    /// is therefore a real answer rather than a gap to guess around: a service worker requires a
+    /// secure context, and a secure context is exactly where Chromium sends Fetch Metadata.</para>
+    /// </remarks>
+    private static bool IsWorkerMainScriptRequest(CoreWebView2WebResourceRequest request)
+    {
+        try
+        {
+            var headers = request.Headers;
+
+            if (headers.Contains("Service-Worker")
+                && string.Equals(headers.GetHeader("Service-Worker"), "script", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            return headers.Contains("Sec-Fetch-Dest")
+                && string.Equals(headers.GetHeader("Sec-Fetch-Dest"), "serviceworker", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            // A header collection that cannot be read is not grounds for serving a wrap that might
+            // import itself. Left alone, the site keeps its own worker and only the bridge is lost.
+            return false;
+        }
+    }
+
+    /// <summary>What a declined request said it was for, for the log line above.</summary>
+    private static string DescribeRequestDestination(CoreWebView2WebResourceRequest request)
+    {
+        try
+        {
+            var headers = request.Headers;
+            string destination = headers.Contains("Sec-Fetch-Dest")
+                ? headers.GetHeader("Sec-Fetch-Dest")
+                : "no Sec-Fetch-Dest";
+
+            return headers.Contains("Service-Worker")
+                ? destination + ", Service-Worker: " + headers.GetHeader("Service-Worker")
+                : destination;
+        }
+        catch
+        {
+            return "its headers could not be read";
+        }
+    }
+
+    /// <summary>The site's own script URL, with the adoption walk's marker removed.</summary>
+    /// <remarks>
+    /// Adoption registers the script once under a marked URL so the browser treats it as one it has
+    /// not got and actually fetches it. The wrap served for that URL still has to pull in the
+    /// *real* script, so the marker comes off here rather than being passed back to the site.
+    /// </remarks>
+    private static string WithoutAdoptionMarker(string uri) => uri
+        .Replace("?" + AdoptionMarker + "&", "?", StringComparison.Ordinal)
+        .Replace("&" + AdoptionMarker, "", StringComparison.Ordinal)
+        .Replace("?" + AdoptionMarker, "", StringComparison.Ordinal);
+
+    /// <summary>The query the adoption walk adds to force a fetch. Kept in one place.</summary>
+    private const string AdoptionMarker = "llbridge=1";
 
     private async Task RespondWithWrappedScriptAsync(
         CoreWebView2 core,
@@ -839,8 +946,11 @@ public sealed partial class WebFlyoutWindow
     {
         try
         {
-            string separator = uri.Contains('?', StringComparison.Ordinal) ? "&" : "?";
-            string original = $"{uri}{separator}{OriginalScriptMarker}=1";
+            // What the wrap should pull in is the site's own script, which is this URL with the
+            // adoption marker taken back off - the outward hop of the walk registers
+            // "<script>?llbridge=1", and asking the site for *that* is what broke Messenger, whose
+            // server does not serve `sw?s=push` and `sw?s=push&llbridge=1` alike.
+            string original = WithoutAdoptionMarker(uri);
 
             // Classic workers pull the original in with importScripts, which does not exist in a
             // module worker; a module pulls it in with a static import, which does not exist in a
