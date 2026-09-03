@@ -303,6 +303,18 @@ submenu so they sit off the path somebody walks to change their zoom:
   picks up a changed wrap**, since an already-registered worker will not on its own.
 - **Rebuild every launcher's bridge.** The same across every loaded web launcher, because the reason
   to reach for it is rarely one launcher: the wrap changes for all of them together.
+- **Turn on notifications.** Makes the page call `requestPermission()`, so the flyout's prompt bar
+  can answer it. **For the site that will not ask.** Discord is the case: its own "Enable Desktop
+  Notifications" is a setting of its *account*, so with that on it believes it is set up and shows
+  no banner - while the browser permission sits at "not asked" and everything it raises goes
+  nowhere. A flyout has no browser UI to reach for, so without this the launcher is stuck, which is
+  exactly where a bulk rebuild left Discord and Messenger.
+
+  **The page asks; the permission is not written behind its back.** `SetPermissionStateAsync` would
+  be one line and is the trap this area already fell into: a site handed a grant never runs the flow
+  that grant implies, and for notifications that flow is what registers and subscribes the push
+  worker. Going through `requestPermission()` means the site's own promise resolves and whatever it
+  does on being granted still runs.
 
 The last one is **the thing the bridge cannot do on anybody's behalf**, which is why it is a menu
 item rather than automatic. Adoption needs a script URL, and a site enforcing Trusted Types accepts
@@ -1841,6 +1853,12 @@ Four things this has to get right, each of which broke a working build first:
 
   The ping waits five seconds, not two: a sleeping worker has to be started before it can receive
   the message, and calling a working launcher stale because it was slow to wake is the worse error.
+
+**Every launcher says its notification state on load** - `permission <state>, N service worker(s)
+registered`. "Is this launcher quiet because the site never notified, or because we lost it?" was the
+question behind almost every dead end in this area, and answering it used to mean opening developer
+tools and typing `Notification.permission` by hand. It cost one line and immediately found two
+launchers sitting at "not asked" after a bulk rebuild had reset them.
 
 `WatchServiceWorkerScript` and the wrap both log at **Info**, with the type. This happens once per
 worker per browser and is the only outward sign that a launcher's notifications are bridged, so the
