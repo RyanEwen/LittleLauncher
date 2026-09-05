@@ -293,14 +293,18 @@ submenu so they sit off the path somebody walks to change their zoom:
   no help against the thing people reload for. There is no WebView2 API for it; the DevTools
   protocol has `Page.reload` with `ignoreCache` and the runtime speaks it. It falls back to an
   ordinary reload rather than doing nothing.
-- **Rebuild notification bridge.** Resets the launcher's notification permission to "not asked",
-  unregisters the site's service worker and reloads, so the site asks again, registers again, and
-  that fresh install is wrapped. It also clears the once-ever adoption marker. The permission half
-  is what makes the rest work: a site sets push up *during* its permission flow, so one already
-  holding the grant never runs that code again and comes back up with no worker. Nobody is prompted
-  twice for it either. This replaces the manual dance of logging out, resetting site permissions,
-  clearing workers in DevTools, hard-reloading and logging back in, and it is also **how a launcher
-  picks up a changed wrap**, since an already-registered worker will not on its own.
+- **Rebuild notification bridge.** Clears the disk cache, unregisters the site's service worker and
+  reloads, so the site registers again and that fresh install is wrapped. It also clears the
+  once-ever adoption marker. This is **how a launcher picks up a changed wrap**, since an
+  already-registered worker will not on its own.
+
+  **It deliberately does not touch the notification permission.** It used to, on the reasoning that
+  a site sets push up during its permission flow and one already holding the grant never runs that
+  code again. True, and still the reason **Turn on notifications** exists - but as a side effect of
+  the obvious repair it was destructive: the launcher goes silent until somebody notices a prompt
+  and answers it. It was taken off the bulk action first and left on the single one, which just
+  meant the trap was still there for whoever reached for the item they were meant to reach for. It
+  caught WhatsApp and Discord in turn.
 - **Rebuild every launcher's bridge.** The same across every loaded web launcher, because the reason
   to reach for it is rarely one launcher: the wrap changes for all of them together.
 - **Turn on notifications.** Makes the page call `requestPermission()`, so the flyout's prompt bar
@@ -315,6 +319,17 @@ submenu so they sit off the path somebody walks to change their zoom:
   that grant implies, and for notifications that flow is what registers and subscribes the push
   worker. Going through `requestPermission()` means the site's own promise resolves and whatever it
   does on being granted still runs.
+
+  **An already-granted permission is cleared first, and put back if nobody answers.** Clearing is
+  what makes the site actually ask, since `requestPermission()` resolves at once for a site that
+  already holds the grant. Leaving it cleared is strictly worse than doing nothing, so only a
+  permission this action itself cleared is restored, after ninety seconds with no answer, and an
+  answer of `Deny` is the user's and is left alone. The flyout says when it puts one back.
+
+  **It gets the permission, not necessarily the subscription.** Measured on Messenger: the grant
+  lands and no worker is registered, because Meta registers `sw?s=push` inside its own permission
+  flow rather than on being granted from outside it. For a push site, the site's own
+  enable-notifications control is still the only thing that runs that path.
 
 The last one is **the thing the bridge cannot do on anybody's behalf**, which is why it is a menu
 item rather than automatic. Adoption needs a script URL, and a site enforcing Trusted Types accepts
