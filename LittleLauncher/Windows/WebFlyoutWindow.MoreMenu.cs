@@ -7,6 +7,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using System;
+using System.Threading.Tasks;
 using Launcher = LittleLauncher.Models.Launcher;
 
 namespace LittleLauncher.Windows;
@@ -303,23 +304,41 @@ public sealed partial class WebFlyoutWindow
         var core = _webView?.CoreWebView2;
         if (core == null) return;
 
-        // **An already-granted permission is put back to "not asked" first.** requestPermission()
-        // on a site that already holds the grant resolves at once without asking, and without
-        // running whatever the site does on being granted - which for notifications is the part that
-        // registers and subscribes the push worker. A user reaching for this on a launcher that is
-        // not notifying wants the site to set itself up again, and that only happens if it is asked.
+        string origin;
         try
         {
-            string origin = new Uri(core.Source).GetLeftPart(UriPartial.Authority);
-            await core.Profile.SetPermissionStateAsync(
-                CoreWebView2PermissionKind.Notifications, origin, CoreWebView2PermissionState.Default);
+            origin = new Uri(core.Source).GetLeftPart(UriPartial.Authority);
         }
         catch (Exception ex)
         {
-            Logger.Debug(ex, "Could not clear the notification permission before asking for launcher {Name}", _launcher.Name);
+            Logger.Warn(ex, "Could not read the origin for launcher {Name}", _launcher.Name);
+            return;
         }
 
-        Logger.Info("Asking {Name}'s page to request notification permission", _launcher.Name);
+        // **An already-granted permission is put back to "not asked" first.** requestPermission() on
+        // a site that already holds the grant resolves at once without asking, and without running
+        // whatever the site does on being granted - which for notifications is the part that
+        // registers and subscribes the push worker. Somebody reaching for this on a launcher that is
+        // not notifying wants the site to set itself up again, and that only happens if it is asked.
+        var previous = await ReadNotificationPermissionAsync(core, origin);
+        bool cleared = previous == CoreWebView2PermissionState.Allow;
+
+        if (cleared)
+        {
+            try
+            {
+                await core.Profile.SetPermissionStateAsync(
+                    CoreWebView2PermissionKind.Notifications, origin, CoreWebView2PermissionState.Default);
+            }
+            catch (Exception ex)
+            {
+                Logger.Debug(ex, "Could not clear the notification permission before asking for launcher {Name}", _launcher.Name);
+                cleared = false;
+            }
+        }
+
+        Logger.Info("Asking {Name}'s page to request notification permission (was {Previous})",
+            _launcher.Name, previous);
 
         try
         {
@@ -330,6 +349,65 @@ public sealed partial class WebFlyoutWindow
         {
             Logger.Warn(ex, "Could not ask for notification permission for launcher {Name}", _launcher.Name);
         }
+
+        // **Put it back if nobody answers.** Clearing a working permission and then leaving it
+        // cleared is strictly worse than doing nothing: the site had a grant, and a prompt that is
+        // dismissed, or never drawn because the page declined to ask, would leave the launcher
+        // silent with nothing to say why. Only a permission this action itself cleared is restored,
+        // and only while it is still unanswered - an answer of Deny is the user's and is left alone.
+        if (cleared) _ = RestoreNotificationPermissionIfUnansweredAsync(core, origin);
+    }
+
+    /// <summary>How long an unanswered prompt is waited for before the old permission is put back.</summary>
+    private const int PermissionAnswerGraceSeconds = 90;
+
+    private async Task RestoreNotificationPermissionIfUnansweredAsync(CoreWebView2 core, string origin)
+    {
+        for (int elapsed = 0; elapsed < PermissionAnswerGraceSeconds; elapsed += 3)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(3));
+
+            if (await ReadNotificationPermissionAsync(core, origin) != CoreWebView2PermissionState.Default)
+                return;   // answered, either way round
+        }
+
+        try
+        {
+            await core.Profile.SetPermissionStateAsync(
+                CoreWebView2PermissionKind.Notifications, origin, CoreWebView2PermissionState.Allow);
+
+            Logger.Info("Nobody answered {Name}'s notification prompt, so its permission was put back to allowed",
+                _launcher.Name);
+
+            ShowNotice($"{_launcher.Name}'s notification permission was left as it was, because the prompt went unanswered.");
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn(ex, "Could not restore the notification permission for launcher {Name}", _launcher.Name);
+        }
+    }
+
+    /// <summary>What the profile currently stores for this origin's notification permission.</summary>
+    private async Task<CoreWebView2PermissionState> ReadNotificationPermissionAsync(CoreWebView2 core, string origin)
+    {
+        try
+        {
+            foreach (var setting in await core.Profile.GetNonDefaultPermissionSettingsAsync())
+            {
+                if (setting.PermissionKind != CoreWebView2PermissionKind.Notifications) continue;
+
+                // Stored with a trailing slash; the origin built from Source has none.
+                if (string.Equals(setting.PermissionOrigin.TrimEnd('/'), origin.TrimEnd('/'),
+                        StringComparison.OrdinalIgnoreCase))
+                    return setting.PermissionState;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Debug(ex, "Could not read the notification permission for launcher {Name}", _launcher.Name);
+        }
+
+        return CoreWebView2PermissionState.Default;
     }
 
     /// <summary>Rebuilds the bridge on every web launcher that currently has a browser.</summary>
