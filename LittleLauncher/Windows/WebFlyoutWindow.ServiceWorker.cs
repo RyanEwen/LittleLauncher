@@ -512,7 +512,26 @@ public sealed partial class WebFlyoutWindow
                 });
             }
 
+            // **Only the launcher's own top-level page.** A document-created script runs in every
+            // document the browser makes, which includes about:blank, every intermediate navigation
+            // and every cross-origin iframe a page embeds. In those, Notification.permission reads
+            // 'default' and getRegistrations() returns nothing, whatever the real page holds.
+            //
+            // That is not a cosmetic problem. It made the sweep decide a site "has no notification
+            // permission" and skip bridging it, and it made the state line below report a launcher
+            // as unpermissioned seconds after reporting it granted - which was read as the
+            // permission having been reset, and sent a whole diagnosis down the wrong path.
+            function isLauncherPage() {
+                try {
+                    if (window.top !== window) return false;
+                    return location.protocol === 'https:' || location.protocol === 'http:';
+                } catch (e) {
+                    return false;   // cross-origin access to window.top throws; that means a frame
+                }
+            }
+
             function sweep() {
+            if (!isLauncherPage()) return;
             navigator.serviceWorker.getRegistrations().then(function (rs) {
                 // Said once per load, whatever else follows. "Is this launcher silent because the
                 // site never notified, or because we lost it?" was the question behind almost every
@@ -520,7 +539,7 @@ public sealed partial class WebFlyoutWindow
                 // Notification.permission by hand. It costs one line and settles it from the log.
                 var perm = 'unavailable';
                 try { if (window.Notification) perm = Notification.permission; } catch (e) { }
-                post({ __ll: 'notifyState', permission: perm, workers: rs.length });
+                post({ __ll: 'notifyState', permission: perm, workers: rs.length, origin: location.origin });
 
                 rs.forEach(function (r) {
                     var w = r.active || r.waiting || r.installing;
@@ -830,8 +849,12 @@ public sealed partial class WebFlyoutWindow
         }
         else if (kind == "notifyState")
         {
-            Logger.Info("Notifications for {Name}: permission {Permission}, {Workers} service worker(s) registered",
+            // The origin is on the line because without it a reading cannot be trusted: the same
+            // launcher reports different answers for its own page and for anything else its browser
+            // happens to load.
+            Logger.Info("Notifications for {Name} on {Origin}: permission {Permission}, {Workers} service worker(s) registered",
                 _launcher.Name,
+                message?["origin"]?.GetValue<string>() ?? "?",
                 message?["permission"]?.GetValue<string>() ?? "",
                 message?["workers"]?.GetValue<int>() ?? 0);
         }
