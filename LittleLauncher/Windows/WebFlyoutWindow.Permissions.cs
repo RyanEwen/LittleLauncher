@@ -940,6 +940,10 @@ public sealed partial class WebFlyoutWindow
             // still attributed to it rather than being missed by a few milliseconds.
             _lastToastAt = Environment.TickCount64;
 
+            // **Whether Windows is already holding a toast under this tag**, which decides whether
+            // it will draw a banner at all. See ShowToastAsync.
+            bool replacing = _liveToastTags.Any(t => t.Tag == identifier);
+
             // Held to a share of the app's Action Center budget rather than being allowed to
             // spend the lot. Immediately before the Show, so the eviction and the arrival are as
             // close together as they can be.
@@ -953,11 +957,7 @@ public sealed partial class WebFlyoutWindow
             // one is stale by definition.
             notification.ExpiresOnReboot = true;
 
-            Microsoft.Windows.AppNotifications.AppNotificationManager.Default.Show(notification);
-            _hasOutstandingToasts = true;
-            Logger.Info("Notification: shown for {Name} (tag {Tag}, {Live} live)",
-                _launcher.Name, identifier, _liveToastTags.Count);
-            PostNotificationEvent("notifyShown", tag);
+            _ = ShowToastAsync(notification, identifier, tag, replacing);
         }
         catch (Exception ex)
         {
@@ -1122,6 +1122,52 @@ public sealed partial class WebFlyoutWindow
     /// single tag <c>"m"</c> with <c>renotify</c>, so it holds exactly one at a time. Five is the
     /// gentler version of the same idea: enough that a burst of messages is still legible.</para>
     /// </remarks>
+    /// <summary>
+    /// Shows a toast, withdrawing the one it replaces first so Windows treats it as new.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>A toast shown under a tag Windows already holds updates that toast in place.</b> It
+    /// lands in Notification Center and no banner is drawn - the notification sound still plays, so
+    /// the symptom is hearing a message arrive and never seeing it. That is not an edge case for a
+    /// chat launcher: a page tags its notification with the conversation, so the first message from
+    /// a chat banners and every one after it is silent-updated into the same entry.</para>
+    /// <para>It only bites because the page's own <c>close()</c> is deliberately disregarded inside
+    /// <see cref="PageCloseGraceMs"/> - sites emulate a banner timeout by closing after a few
+    /// seconds, and honouring that would withdraw a toast the user is still reading. So the toast
+    /// stays in Notification Center, and the next one with that tag has something to merge with.</para>
+    /// <para>The withdrawal is therefore <b>awaited</b> before the Show. Firing both and hoping is
+    /// the obvious shape and it is wrong: the removal is asynchronous and would just as easily land
+    /// after the arrival, taking the new toast straight back off.</para>
+    /// </remarks>
+    private async Task ShowToastAsync(
+        Microsoft.Windows.AppNotifications.AppNotification notification,
+        string identifier,
+        string? tag,
+        bool replacing)
+    {
+        try
+        {
+            if (replacing)
+            {
+                await Microsoft.Windows.AppNotifications.AppNotificationManager.Default
+                    .RemoveByTagAndGroupAsync(identifier, ToastGroup);
+            }
+
+            Microsoft.Windows.AppNotifications.AppNotificationManager.Default.Show(notification);
+            _hasOutstandingToasts = true;
+
+            Logger.Info("Notification: shown for {Name} (tag {Tag}, {Live} live{Replaced})",
+                _launcher.Name, identifier, _liveToastTags.Count,
+                replacing ? ", replacing an earlier one" : "");
+
+            PostNotificationEvent("notifyShown", tag);
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn(ex, "Showing a page notification failed for launcher {Name}", _launcher.Name);
+        }
+    }
+
     private void MakeRoomForToast(string identifier)
     {
         _liveToastTags.RemoveAll(t => t.Tag == identifier);
