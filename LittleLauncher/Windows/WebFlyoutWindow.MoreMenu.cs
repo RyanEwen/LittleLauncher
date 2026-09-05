@@ -303,6 +303,22 @@ public sealed partial class WebFlyoutWindow
         var core = _webView?.CoreWebView2;
         if (core == null) return;
 
+        // **An already-granted permission is put back to "not asked" first.** requestPermission()
+        // on a site that already holds the grant resolves at once without asking, and without
+        // running whatever the site does on being granted - which for notifications is the part that
+        // registers and subscribes the push worker. A user reaching for this on a launcher that is
+        // not notifying wants the site to set itself up again, and that only happens if it is asked.
+        try
+        {
+            string origin = new Uri(core.Source).GetLeftPart(UriPartial.Authority);
+            await core.Profile.SetPermissionStateAsync(
+                CoreWebView2PermissionKind.Notifications, origin, CoreWebView2PermissionState.Default);
+        }
+        catch (Exception ex)
+        {
+            Logger.Debug(ex, "Could not clear the notification permission before asking for launcher {Name}", _launcher.Name);
+        }
+
         Logger.Info("Asking {Name}'s page to request notification permission", _launcher.Name);
 
         try
@@ -348,7 +364,7 @@ public sealed partial class WebFlyoutWindow
     /// stale-wrap offer both pass false. Neither needs it: replacing a worker with the current wrap
     /// has nothing to do with permission.</para>
     /// </param>
-    private async Task RebuildNotificationBridgeAsync(bool resetPermission = true)
+    private async Task RebuildNotificationBridgeAsync(bool resetPermission = false)
     {
         var core = _webView?.CoreWebView2;
         if (core == null) return;
