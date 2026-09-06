@@ -578,28 +578,17 @@ public sealed partial class WebFlyoutWindow
     /// <para>Picking one clears <c>WebFlyoutPosition</c>, exactly as the settings row does. A
     /// remembered position outranks the anchor, so leaving it in place would mean choosing a corner
     /// and watching the flyout open precisely where it did before.</para>
+    /// <para>The list of places is <see cref="AnchorChoices"/>, shared with the position picker that
+    /// drops out of the maximize button — and shared with it in that direction only. The picker
+    /// borrows these eleven presets to <em>move</em> the window; it never writes this setting, and
+    /// this menu never moves the window.</para>
     /// </remarks>
     private MenuFlyoutSubItem BuildAnchorSubmenu()
     {
         var submenu = new MenuFlyoutSubItem { Text = "Opens at" };
 
-        (string Label, int Value)[] anchors =
-        [
-            ("Near its tray icon", WebAnchors.Tray),
-            ("Where you last dragged it", WebAnchors.LastPosition),
-            ("Top left", WebAnchors.TopLeft),
-            ("Top centre", WebAnchors.TopCenter),
-            ("Top right", WebAnchors.TopRight),
-            ("Left", WebAnchors.Left),
-            ("Centre", WebAnchors.Center),
-            ("Right", WebAnchors.Right),
-            ("Bottom left", WebAnchors.BottomLeft),
-            ("Bottom centre", WebAnchors.BottomCenter),
-            ("Bottom right", WebAnchors.BottomRight),
-        ];
-
         int current = WebAnchors.Normalize(_launcher.WebAnchor);
-        foreach (var (label, value) in anchors)
+        foreach (var (label, value) in AnchorChoices)
         {
             var item = new RadioMenuFlyoutItem
             {

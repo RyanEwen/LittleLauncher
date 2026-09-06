@@ -220,7 +220,9 @@ data folder does not isolate them.
 per-launcher options whose right value is a **per-moment judgement** — Regular window, Close when
 focus is lost (window mode only), the pin, add/remove this page from the bookmarks, **Tab bar**,
 **Address bar**, **Zoom**, **Opens at** (a submenu of radio items, being an eleven-way choice rather
-than a toggle — "Where you last dragged it" is one of its values, not a separate toggle), Remember
+than a toggle — "Where you last dragged it" is one of its values, not a separate toggle; the maximize
+button's position picker borrows nine of these presets, but to *move* the window, and writes
+nothing), Remember
 size changes, an **Advanced** submenu — with **Keyboard shortcuts**, **Launcher settings…** and **App settings…** at its
 foot.
 
@@ -746,6 +748,35 @@ Four things follow, each a guard rather than a convention:
   nowhere an icon is drawn; a regular window appears in two such places, and without
   `ApplyWindowIcon` both show a blank placeholder. It uses the per-launcher `app-icon-{id}.ico` —
   the same file the pinned shortcut points at, so the button and its pin agree.
+
+  **What the tray shows is what the taskbar button and the switcher entry must show, and loading
+  the icon once could not deliver that.** The handles were loaded on the first show that presented
+  as a regular window and then kept for the life of the window — and for a web launcher that show
+  is the worst possible moment to sample from. `ShowFlyout` calls `ApplyTaskbarButton` *before*
+  `PrepareContentAsync`, so the browser has not started, the page has not loaded, and the favicon
+  has not been adopted: what got captured was the placeholder the launcher opened with. The tray
+  moved on to the site's icon and the window sat on the rocket for the rest of the session, which
+  reads as the app putting its own icon in the switcher.
+
+  `WebFlyoutWindow.InvalidateWindowIcon(id)` closes it, called from `MainWindow.RefreshLauncherIcon`
+  — the single method every icon trigger already runs through (favicon adoption, tray icon mode,
+  custom image, a theme change re-rendering a glyph, a sync download). Hanging it off a
+  `PropertyChanged` subscription of its own would mean restating that list and falling behind the
+  next thing added to it. Two rules in `LoadWindowIcon` follow from it now running repeatedly rather
+  than once:
+
+  - **It does not go through `WindowChrome.ApplyIcon`.** That helper leaks its `WM_SETICON` handles
+    on purpose, which is the right bargain for a window that sets its icon once and the wrong one
+    for a window that re-sets it on every icon change. It sets both paths itself instead —
+    `WM_SETICON` for the taskbar button, `AppWindow.SetIcon` for the switcher.
+  - **The old pair is destroyed after the new pair is on the window**, never before. `SendMessage`
+    is synchronous, so by then the window carries the replacement; freeing first, which is what
+    `SettingsWindow.ApplyWindowIcon` does, leaves the window pointing at a destroyed icon for the
+    length of the load. A load that fails leaves the previous icon in place, because a stale icon
+    beats the blank placeholder a clear-then-set would produce.
+
+  A launcher that has never run as a regular window is skipped entirely: it draws its icon nowhere,
+  so there is nothing to keep current and no handles to spend.
 - **The button is pinnable, and that needs more than an AUMID.** An AUMID names a group; it does
   not say how to start the group again, so `Pin to taskbar` had nothing to write down and the pin
   either was not offered or opened nothing. `ApplyRelaunchProperties` stamps the same three
@@ -2141,6 +2172,91 @@ An anchored flyout is placed on the **work area of the monitor whose tray icon w
 the primary monitor: a corner should mean a corner of the screen being worked on. It also slides in
 from the nearer edge — down from a top anchor, up from anything else — rather than travelling
 across the screen from wherever the tray happens to be.
+
+#### The position picker on the maximize button
+
+`WebFlyoutWindow.PositionPicker.cs`. Resting the pointer on the header's **maximize** button for
+450ms drops a 3×3 grid of little screens — the nine places the window can be sent, each drawn as a
+spot on a screen. It is modelled on the snap layouts Windows 11 hangs off the same button, and sits
+there for the same reason: "this needs to be somewhere else" is a thought had while looking at the
+window.
+
+**It moves the window and nothing else.** Nothing is written to the launcher — this is a gesture,
+the same kind of thing dragging the header is, and it is over when the window lands. It borrows nine
+of the `WebAnchors` **presets** because they are the obvious places to put a window and there is no
+reason to invent a second set, but it does not touch `WebAnchor`, no cell is drawn as "current", and
+the caption reads **Move to**. The sharing runs one way only: the "…" menu writes the setting and
+never moves the window; the picker moves the window and never writes the setting. Only
+`AnchorChoices` (the labels) is common to both.
+
+**It is the nine spots and nothing else.** `Tray` and `LastPosition` are not places, they are rules
+about *opening*, and as moves they come out as a corner the grid already offers and a no-op
+respectively. Each had a labelled row below a divider and both were dead weight — the second doubly
+so, being disabled for any launcher not already set to that anchor, since no other one keeps a
+remembered position. They stay in the menu, which is where they answer the question they were
+written for.
+
+The one thing that outlives the click is the position itself, and only for a launcher already set to
+`LastPosition`: `RememberFlyoutPosition` follows a picker move exactly as it follows a drag, and
+self-gates to nothing under every other anchor.
+
+**The arithmetic is `CalculatePlacement`'s**, reached through its `anchorOverride` parameter, so a
+corner picked here is the corner an open would produce — same gap, same clamping — without the
+launcher having to be set to it. Two things differ from an open, both deliberately:
+
+- **`sizeOverride` carries the window's current size.** A move that also resized would not be a move,
+  and it would undo a temporary drag-resize the user is in the middle of using.
+- **The origin is the window's own centre, not a tray click**, which is what picks the monitor: "top
+  left" means the corner of the screen you are looking at rather than the corner of whichever screen
+  the tray icon was on. An open has a click to measure from and should follow it; a move does not and
+  should not.
+
+The cells' own alignment is the same three-way `WebAnchors.IsLeft`/`IsTop` test the placement code
+runs, so the picture cannot disagree with the window.
+
+Everything else about it is the shape every popup in this window has to take, plus two traps specific
+to opening one on *hover*:
+
+- `ShouldConstrainToRootBounds = false` and `_isMenuOpen`, for the reasons in the XAML guide.
+  `FlyoutShowMode.Transient` additionally asks WinUI not to move focus into it, so a hover cannot
+  steal the page's caret — the pin stays anyway, because "asks not to" is not "cannot". Measured:
+  showing the picker raises no `Deactivated` on the flyout at all, while the click that *commits* a
+  move does, with `_isMenuOpen` true. The guard earns its place on the second of those.
+- **`_isMenuOpen` is set before `ShowAt`, not from `Opened`**, so no ordering between the two events
+  has to be assumed.
+- **The button's `PointerExited` cannot decide when to close it, and that is the whole reason
+  `StartPickerWatch` exists.** Opening the picker puts WinUI's light-dismiss layer over the window,
+  so the button reports the pointer as having left *immediately* — while it is still sitting on the
+  button. An exit-driven close therefore took the picker down ~300ms after every open, the pointer
+  re-entered the button, and it opened again: measured in the log as a clean open/close cycle about
+  once a second, which on screen reads as a picker that refuses to stay up. A longer delay does not
+  help, because nothing in that cycle is racing — the exit is simply wrong.
+
+  So the question is asked of the cursor instead, on a 200ms timer that runs only while the picker is
+  open: the button by its **screen rectangle** (the window is borderless, so an element's offset in
+  the XAML root scales straight onto its window rect), the picker by its **own content's** pointer
+  events, which are trustworthy because the popup has a tree of its own. Two consecutive misses —
+  ~400ms — closes it, which doubles as the grace period for crossing the gap between the two.
+- **The picker's content must be hit-testable everywhere, or the watch above turns on it.** A `null`
+  `Background` is not hit-testable and a transparent one is — the same rule the resize grips follow
+  — so the content sits in a `Border` with a transparent fill. Without it the gaps between the
+  cells, the caption and the padding are all holes the pointer falls through, reported as having
+  left the picker, and resting on any of them closed it after 400ms. **The presenter's own padding
+  is the same hole one layer out**, which is why `BuildPresenterStyle` sets it to zero and the
+  content carries it instead; that style is `BasedOn` the shipped `DefaultFlyoutPresenterStyle`, so
+  the presenter keeps its background, border and shadow.
+- It is taken down by a click on the maximize button (that click is a maximize, not a move), by
+  `HideFlyout`, and before the move it commits — a popup does not follow the window it hangs off.
+- Hovering a cell lights the window inside its thumbnail, the way a snap layout lights the zone it
+  would put you in. The button's hover fill says "clickable"; the accent block says which of the
+  nine places the click means.
+
+Verified end to end on a sideloaded build: the picker opens 450ms after the pointer settles, stays up
+for as long as the pointer is on the button (measured over 41s), closes ~400ms after it leaves, and a
+click on **Top left** moved a 734x1124 window from the tray corner to 12,12 — the work area's corner
+plus the placement's own 8-dip gap — at the same size, with `WebAnchor` and `WebFlyoutPosition`
+untouched in `settings.json`.
+
 
 ### The shared profile
 

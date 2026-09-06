@@ -391,6 +391,10 @@ public sealed partial class WebFlyoutWindow : Window
         // there and back beats resizing the launcher and putting it back afterwards.
         _maximizeButton = BuildHeaderButton(MaximizeGlyph(false), MaximizeTooltip(false), (_, _) => ToggleMaximized());
 
+        // Resting on it offers the places the window can go, the way Windows 11's snap layouts hang
+        // off the same button. See WebFlyoutWindow.PositionPicker.cs.
+        WirePositionPicker();
+
         // Reload acts on the page, not on the flyout, so it sits with Back and Forward on the
         // left where a browser puts it — the same reasoning that moved Back there. Built here,
         // added to the nav group below.
@@ -1806,8 +1810,10 @@ public sealed partial class WebFlyoutWindow : Window
         StopForegroundWatch();
 
         // Nothing else takes them down: a folder popup owns its own dismissal now that light
-        // dismiss is off, and one left open would outlive the window it hangs off.
+        // dismiss is off, and one left open would outlive the window it hangs off. The position
+        // picker is in the same position, and while it is up it also pins the flyout open.
         CloseFolderPopups(0);
+        HidePositionPicker();
 
         _lastDismissed = DateTime.UtcNow;
         _animationVersion++;
@@ -3669,7 +3675,17 @@ public sealed partial class WebFlyoutWindow : Window
     /// Anchors the flyout to the click, the same way the flyout does: above a bottom taskbar,
     /// below a top one, otherwise above the cursor — then clamped into the work area.
     /// </summary>
-    private FlyoutPlacement CalculatePlacement(int screenX, int screenY)
+    /// <param name="anchorOverride">
+    /// Answers "where would <em>this</em> anchor put it?" without the launcher having to be set to
+    /// it. The position picker on the maximize button moves the window without changing where it
+    /// opens, so it needs the arithmetic for an anchor the launcher does not hold.
+    /// </param>
+    /// <param name="sizeOverride">
+    /// The size to place, in pixels, when it is not the launcher's configured one — a move keeps
+    /// the size the window already is, since resizing a window that was asked to move is a surprise.
+    /// </param>
+    private FlyoutPlacement CalculatePlacement(int screenX, int screenY,
+        int? anchorOverride = null, (int Width, int Height)? sizeOverride = null)
     {
         var pt = new POINT { X = screenX, Y = screenY };
         IntPtr hMonitor = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
@@ -3682,8 +3698,8 @@ public sealed partial class WebFlyoutWindow : Window
         GetMonitorInfo(hMonitor, ref monitorInfo);
         var workArea = monitorInfo.rcWork;
 
-        int width = (int)Math.Ceiling(_launcher.ResolvedWebFlyoutWidth * scale);
-        int height = (int)Math.Ceiling(_launcher.ResolvedWebFlyoutHeight * scale);
+        int width = sizeOverride?.Width ?? (int)Math.Ceiling(_launcher.ResolvedWebFlyoutWidth * scale);
+        int height = sizeOverride?.Height ?? (int)Math.Ceiling(_launcher.ResolvedWebFlyoutHeight * scale);
         width = Math.Min(width, workArea.Right - workArea.Left);
         height = Math.Min(height, workArea.Bottom - workArea.Top);
 
@@ -3709,7 +3725,7 @@ public sealed partial class WebFlyoutWindow : Window
         // Anchored to its last position, and there is one — clamped into the work area so a screen
         // that has since gone away cannot strand it. Nothing dragged yet falls through to the tray
         // placement below, which is what the first open of such a launcher gets.
-        int anchor = WebAnchors.Normalize(_launcher.WebAnchor);
+        int anchor = anchorOverride ?? WebAnchors.Normalize(_launcher.WebAnchor);
         if (anchor == WebAnchors.LastPosition && _launcher.GetWebFlyoutPosition() is { } saved)
         {
             var savedPoint = new POINT { X = saved.X, Y = saved.Y };
