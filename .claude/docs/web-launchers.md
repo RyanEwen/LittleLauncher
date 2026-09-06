@@ -959,7 +959,7 @@ walking to a settings window and back to act on one is the whole cost.
 | Star at the end of the address bar | Address bar (off by default) | Adds or removes whatever the **address box shows** |
 | "Add to / Remove from the bookmarks bar" | The header's "…" menu | The same action, without needing the address bar on |
 | Right-click a bookmark | The bar | Open, Open in new tab, Rename, Edit address, Copy address, **Icon only**, Open in browser, **Set as default page**, Move left/right, Remove |
-| Right-click the bar's empty space | The bar | **Add bookmark…** (type an address) and **Add from browser…** (pick one out of an installed browser) |
+| Right-click the bar's empty space | The bar | **Add bookmark…** (type an address), **Add from browser…** (pick one out of an installed browser), **Add folder…**, and **Icons only**, the launcher-wide switch for the whole bar |
 | The chevron at the end | The bar | Whatever did not fit, as a menu, aligned to the chevron's right edge. A click opens the bookmark here, a middle-click or Shift/Ctrl-click in a new tab, and a right-click turns the list over into that bookmark's own menu |
 | Drag a bookmark | The bar | Reorders it, with an accent caret marking where it lands |
 
@@ -1067,8 +1067,9 @@ Rules worth not rediscovering:
   the bar never shows a drop cursor. A drop cursor is a promise — the same rule the item flyout's
   external drops follow.
 - **Icon-only is per bookmark as well as per launcher**, and the two are not redundant: a bar of
-  familiar sites wants every label gone (`Launcher.WebBookmarkIconsOnly`, in settings), while a bar
-  with one awkwardly long name wants that one collapsed and the rest readable
+  familiar sites wants every label gone (`Launcher.WebBookmarkIconsOnly`, in launcher settings and
+  on the bar's own menu), while a bar with one awkwardly long name wants that one collapsed and
+  the rest readable
   (`WebBookmark.IconsOnly`, from the bar's context menu). `ShowsIconOnly` resolves them in one
   place and the launcher-wide setting wins — a bookmark still showing its label under "icons only"
   would be that setting quietly failing, so the per-bookmark flag only ever adds to what is

@@ -182,7 +182,9 @@ model default, which would have flipped it on for every existing launcher.
 - `WebBookmarkIconsOnly` (`bool`) — hide the labels in the bookmark bar, leaving just the
   favicons; names become tooltips rather than being discarded. Only meaningful with a bar, and edited in
   the Bookmarks section rather than Advanced, because Advanced is shown for single-address
-  launchers too. It is part of the bar's rebuild signature, so toggling it re-renders
+  launchers too. **Icons only** on the bar's own right-click menu writes the same property,
+  because the moment the labels start being in the way is a moment spent looking at the bar.
+  It is part of the bar's rebuild signature, so toggling it re-renders
   rather than handing back buttons built for the other mode
 - `WebPinFlyout` (`bool`) — **two readings, one flag.** As a flyout: stay open when focus is lost.
   Under `WebRegularWindow`: keep the window always on top. Each is meaningless in the other mode —
@@ -216,7 +218,9 @@ model default, which would have flipped it on for every existing launcher.
   the first entry is the address it opens and the rest are the bar. `WebBookmark`
   (`Models/WebBookmark.cs`) is `Name` + `Url` + `IconPath` + `IconsOnly`, observable because the
   icon arrives after the bookmark does. `IconsOnly` collapses **that** bookmark to its icon; the
-  launcher-wide `WebBookmarkIconsOnly` does it to all of them and wins where the two disagree
+  launcher-wide `WebBookmarkIconsOnly` does it to all of them and wins where the two disagree.
+  Both are reachable from the bar: the per-bookmark one on a bookmark's menu as **Icon only**,
+  the launcher-wide one on the empty space's as **Icons only**
 - `WebUrl` (`string`) — **legacy**. The single address a web launcher used to hold, before one
   address and a bar of them became the same thing. `MigrateWebModel` turns it into the first
   bookmark and clears it; nothing else should read it. Still synced, because a machine on an older

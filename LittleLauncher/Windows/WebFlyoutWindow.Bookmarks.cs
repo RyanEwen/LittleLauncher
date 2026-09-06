@@ -1266,6 +1266,31 @@ public sealed partial class WebFlyoutWindow
         menu.Items.Add(new MenuFlyoutSeparator());
         menu.Items.Add(Item("Add folder…", () => _ = AddFolderAsync()));
 
+        menu.Items.Add(new MenuFlyoutSeparator());
+
+        // The launcher-wide switch, on the bar it describes. It has lived in launcher settings
+        // since it was written, and that is still where a launcher being set up meets it; but the
+        // moment the labels start being in the way is a moment spent looking at the bar, and the
+        // judgement is "do I still need to read these" about the row in front of you. Same argument
+        // that put renaming and reordering here rather than only in the form.
+        //
+        // Plural against the per-bookmark row's singular "Icon only", because they are different
+        // sizes of the same idea and the two menus can be one right-click apart.
+        var iconsOnly = new ToggleMenuFlyoutItem
+        {
+            Text = "Icons only",
+            IsChecked = _launcher.WebBookmarkIconsOnly,
+        };
+        iconsOnly.Click += (_, _) =>
+        {
+            _launcher.WebBookmarkIconsOnly = iconsOnly.IsChecked;
+
+            // Not a bookmark edit, but the same three things have to happen: save, tell the sync
+            // service, and rebuild the bar, which the signature already invalidates on this flag.
+            PersistBookmarks();
+        };
+        menu.Items.Add(iconsOnly);
+
         menu.Opened += (_, _) => _isMenuOpen = true;
         menu.Closed += (_, _) => _isMenuOpen = false;
 
