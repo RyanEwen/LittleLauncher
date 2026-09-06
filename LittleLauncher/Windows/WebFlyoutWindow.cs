@@ -745,6 +745,14 @@ public sealed partial class WebFlyoutWindow : Window
         ApplyAddressBarVisibility();
         ApplyTabBarVisibility();
 
+        // Here, rather than at the first show that enters regular-window mode, so the window is
+        // never on screen without an icon. ShowFlyout puts it in front of the user and only then
+        // calls ApplyTaskbarButton, which used to be where the icon was loaded — measured at 250ms
+        // of visible window carrying nothing. Windows re-reads the icon whenever it draws it, so
+        // its taskbar and switchers never showed that gap; anything that reads a window's icon
+        // once, as it appears, would. Costs two handles per web launcher for the app's lifetime.
+        ApplyWindowIcon();
+
         int exStyle = GetWindowLong(_hwnd, GWL_EXSTYLE);
         SetWindowLong(_hwnd, GWL_EXSTYLE, exStyle | WS_EX_TOOLWINDOW);
 

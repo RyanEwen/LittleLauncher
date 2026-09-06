@@ -232,32 +232,112 @@ public sealed partial class WebFlyoutWindow
     /// simply not worked: the handles were set and then quietly replaced. The icons are therefore
     /// kept and re-sent from <see cref="PushWindowIcon"/> on every activation, which is the same
     /// workaround <c>SettingsWindow</c> already runs for the same reason.</para>
-    /// <para>The HICONs are loaded once and deliberately leaked for the window's lifetime, as the
-    /// shell goes on referencing them — the same bargain <c>WindowChrome.ApplyIcon</c> makes. The
-    /// flyout instances are permanent (one per launcher), so this is two handles per web launcher
-    /// that has ever run as a regular window, not a per-open leak.</para>
+    /// <para><b>The first application happens in the constructor, before the window has ever been
+    /// shown.</b> Loading it from the first regular-window show is too late to be honest about:
+    /// <c>ShowFlyout</c> puts the window on screen and only then calls
+    /// <see cref="ApplyTaskbarButton"/>, so the window stood in front of the user for a quarter of
+    /// a second carrying no icon at all. Windows re-reads a window's icon each time it draws one,
+    /// so its taskbar and switchers never showed that gap; a tool that reads it once, as the window
+    /// appears, would keep whatever it found instead — which is what a third-party Alt-Tab
+    /// replacement was doing when this was found.</para>
+    /// <para>Every later call is therefore a re-assertion, not a load. It must stay cheap once the
+    /// window has an icon — it runs from every show that enters regular-window mode, and re-reading
+    /// would render and rewrite the <c>.ico</c> on every open for nothing.
+    /// <see cref="InvalidateWindowIcon"/> is what keeps the icon current when the launcher's own
+    /// icon moves.</para>
     /// </remarks>
     private void ApplyWindowIcon()
     {
+        if (_hIconBig != IntPtr.Zero)
+        {
+            PushWindowIcon();
+            return;
+        }
+
+        // Writes the file if no other surface has yet. The reload path deliberately does not do
+        // this: whatever called it has just rewritten the same file.
+        MainWindow.EnsureLauncherIconSaved(_launcher);
+        LoadWindowIcon();
+    }
+
+    /// <summary>
+    /// Re-reads the launcher's icon after <c>MainWindow.RefreshLauncherIcon</c> has rewritten it.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>The switcher entry and the taskbar button must show what the tray shows, and
+    /// loading the icon once could not do that.</b> The handles used to be loaded on the first show
+    /// that presented as a regular window and then kept for the life of the window, so both
+    /// surfaces wore whatever the launcher's icon happened to be at that instant — and for a web
+    /// launcher that is the worst instant available. The window is built and its icon applied
+    /// before the page has loaded and its favicon been adopted, so what gets captured is the
+    /// placeholder the launcher opened with. The tray icon then moved on and the window did not,
+    /// which is exactly the mismatch this exists to close.</para>
+    /// <para>Everything that can move a launcher's icon — a page favicon adopted, a tray icon mode
+    /// or custom image chosen, a theme change re-rendering a glyph, a sync download replacing the
+    /// launcher — runs through <c>MainWindow.RefreshLauncherIcon</c>. That is the one place this
+    /// hangs off, rather than a <c>PropertyChanged</c> subscription of its own that would have to
+    /// list those triggers again and would fall behind the next one added.</para>
+    /// <para>The guard is on the handles rather than on the launcher, because every web flyout now
+    /// takes its icon in the constructor: a zero handle means the load failed — no <c>.ico</c> on
+    /// disk yet — and re-reading a file that was not there is not this method's job.</para>
+    /// </remarks>
+    internal static void InvalidateWindowIcon(string launcherId)
+    {
+        if (Instances.TryGetValue(launcherId, out var panel) && panel._hIconBig != IntPtr.Zero)
+            panel.LoadWindowIcon();
+    }
+
+    /// <summary>
+    /// Puts the launcher's <c>.ico</c> on the window, replacing whatever icon it already carries.
+    /// </summary>
+    /// <remarks>
+    /// <para>Both paths are set, for the reason <c>WindowChrome.ApplyIcon</c> sets both:
+    /// <c>WM_SETICON</c> drives the taskbar button, and <c>AppWindow.SetIcon</c> is the one the
+    /// switcher prefers on a packaged build. It does not call that helper, though — the helper
+    /// leaks its <c>WM_SETICON</c> handles by design, which is the right bargain for a window that
+    /// sets its icon once and the wrong one for a window that now re-sets it on every icon change.
+    /// </para>
+    /// <para>The previous pair is destroyed <em>after</em> the new pair is on the window, never
+    /// before. <c>SendMessage</c> is synchronous, so by then the window is already carrying the
+    /// replacement; freeing first — which is what <c>SettingsWindow.ApplyWindowIcon</c> does —
+    /// leaves the window pointing at a destroyed icon for the length of the load.</para>
+    /// </remarks>
+    private void LoadWindowIcon()
+    {
         try
         {
-            if (_hIconBig == IntPtr.Zero)
+            string path = System.IO.Path.Combine(
+                MainWindow.GetPhysicalAppDataDir(), $"app-icon-{_launcher.Id}.ico");
+            if (!System.IO.File.Exists(path)) return;
+
+            var small = LoadImage(IntPtr.Zero, path, IMAGE_ICON, 16, 16, LR_LOADFROMFILE);
+            var big = LoadImage(IntPtr.Zero, path, IMAGE_ICON, 32, 32, LR_LOADFROMFILE);
+
+            // A load that fails leaves the window wearing the icon it already had. A stale icon is
+            // the better of the two failures — the alternative is a blank placeholder in the
+            // taskbar and the switcher, which reads as a broken window rather than an old icon.
+            if (big == IntPtr.Zero)
             {
-                MainWindow.EnsureLauncherIconSaved(_launcher);
-
-                string path = System.IO.Path.Combine(
-                    MainWindow.GetPhysicalAppDataDir(), $"app-icon-{_launcher.Id}.ico");
-                if (!System.IO.File.Exists(path)) return;
-
-                // Also drives AppWindow.SetIcon, which is a separate path from WM_SETICON and the
-                // one Alt-Tab prefers on a packaged build.
-                Classes.WindowChrome.ApplyIcon(_hwnd, path);
-
-                _hIconSmall = LoadImage(IntPtr.Zero, path, IMAGE_ICON, 16, 16, LR_LOADFROMFILE);
-                _hIconBig = LoadImage(IntPtr.Zero, path, IMAGE_ICON, 32, 32, LR_LOADFROMFILE);
+                if (small != IntPtr.Zero) DestroyIcon(small);
+                return;
             }
 
+            var native = LoadImage(IntPtr.Zero, path, IMAGE_ICON, 0, 0, LR_LOADFROMFILE);
+            if (native != IntPtr.Zero)
+            {
+                try { GetAppWindow().SetIcon(Microsoft.UI.Win32Interop.GetIconIdFromIcon(native)); }
+                finally { DestroyIcon(native); }
+            }
+
+            var previousSmall = _hIconSmall;
+            var previousBig = _hIconBig;
+
+            _hIconSmall = small;
+            _hIconBig = big;
             PushWindowIcon();
+
+            if (previousSmall != IntPtr.Zero) DestroyIcon(previousSmall);
+            if (previousBig != IntPtr.Zero) DestroyIcon(previousBig);
         }
         catch (Exception ex)
         {

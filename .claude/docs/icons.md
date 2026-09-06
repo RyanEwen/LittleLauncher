@@ -20,6 +20,8 @@ Little Launcher uses a flat upright rocket as its identity icon. The **app ident
 | **Start menu shortcut** | `exe,0` (embedded icon) | No — always Blue rocket |
 | **Exe embedded icon** | `Resources/LittleLauncher.ico` (compiled into exe) | No — always Blue rocket |
 | **Pin-to-taskbar dialog** | Per-launcher `app-icon-{id}.ico` loaded via `WM_SETICON` in companion exe | Yes (per launcher `TrayIconMode`) |
+| **Web launcher taskbar button** (regular-window mode) | Per-launcher `app-icon-{id}.ico` via `WM_SETICON`, from `WebFlyoutWindow.LoadWindowIcon` | Yes (per launcher `TrayIconMode`) |
+| **Web launcher task switcher** (regular-window mode) | The same file via `AppWindow.SetIcon(IconId)`, set in the same call | Yes (per launcher `TrayIconMode`) |
 | **Windows notifications (per launcher)** | `toast-icon-{id}.png` written by `SaveToastIconToAppData(Launcher)` | Yes (per launcher `TrayIconMode`) |
 | **Taskbar jump list task (per entry)** | The item's own `.exe` where it has one, else `JumpListIcons\task-{hash}.ico` rasterised from the item's icon or glyph | Follows the item's own icon |
 
@@ -88,6 +90,28 @@ All icon surfaces derive from a single source of truth: `ResolveBaseIconBitmap(L
 6. `UpdateTrayIcon(Launcher)` calls `SaveSettingsIconToAppData()` → first launcher's bitmap + gear overlay → `BitmapToIcon()` → writes `settings-icon.ico`
 7. `SettingsWindow.RefreshIcon()` reloads `settings-icon.ico` into titlebar, taskbar, and overlay
 
+**`RefreshLauncherIcon` is where a *window* icon is re-read too**, alongside the tray HICON and the
+`.ico` write. It is the one method every trigger runs through — a mode or custom-image change, a web
+launcher adopting its page's favicon, a theme change re-rendering a glyph, a sync download replacing
+the launcher — so `WebFlyoutWindow.InvalidateWindowIcon(id)` hangs off it rather than off a
+`PropertyChanged` subscription that would have to list those triggers again.
+
+Without it a regular-window web launcher's taskbar button and switcher entry showed a *frozen* icon:
+the handles were loaded on the first show and kept for the life of the window, and for a web launcher
+that first show is the worst possible moment to sample — `ShowFlyout` applies the taskbar button
+before it starts the browser, so what got captured was the placeholder the launcher had before its
+page loaded. The tray then adopted the site's favicon and the window did not.
+
+**A web flyout takes its window icon in its constructor, and that ordering is deliberate.**
+`ApplyWindowIcon()` runs where the window's ex-styles are first set, before the window has ever been
+shown; the call from `ApplyTaskbarButton` is then only a re-assertion, which is still needed because
+WinUI blanks `WM_SETICON` while it finishes initialising (WindowsAppSDK#2730 — measured: the icon
+disappears for roughly one frame after the show and `PushWindowIcon` puts it back on activation).
+Loading it from the first regular-window show instead left the window on screen for ~250ms carrying
+no icon at all. Windows re-reads a window's icon every time it draws one, so its own taskbar,
+Alt-Tab and Task View never showed that gap — a third-party switcher that samples once, as the
+window appears, did.
+
 Tray icons are registered with Shell_NotifyIcon using a stable `guidItem` derived from `Launcher.Id`. This keeps Windows' per-icon tray visibility/pin preference stable across app restarts, Store updates, and icon/name changes. Only changing a launcher's `Id` causes Windows to treat it as a new tray icon identity.
 
 **Pinned taskbar icons are NOT updated at runtime.** Windows 11's taskbar caches the icon bitmap per AUMID at pin time and does not re-read it. Changing a launcher's icon requires unpinning and re-pinning. The Launcher Settings dialog shows a note about this near the "Pin to Taskbar" button.
@@ -109,7 +133,7 @@ Tray icons are registered with Shell_NotifyIcon using a stable `guidItem` derive
 | `EnsureToastIconSaved(Launcher)` | Static. Returns that path, writing it first if absent — the notification path calls this |
 | `SaveResolvedIconToAppData(Launcher)` | `ResolveBaseIconBitmap(Launcher)` → `BitmapToIcoBytes()` → write `app-icon-{id}.ico`; copies to `app-icon.ico` for first launcher |
 | `SaveSettingsIconToAppData()` | First launcher's `ResolveBaseIconBitmap()` → gear overlay → `BitmapToIcon()` → write file |
-| `RefreshLauncherIcon(Launcher)` | Batch-friendly: updates tray HICON + writes .ico to disk only (no settings save, no cleanup, no settings window refresh) |
+| `RefreshLauncherIcon(Launcher)` | Batch-friendly: updates tray HICON, writes .ico to disk, re-reads it onto any regular-window web flyout (no settings save, no cleanup, no settings window refresh) |
 | `UpdateTrayIcon(Launcher)` | Single-launcher convenience: calls `RefreshLauncherIcon` + `SaveSettingsIconToAppData` + `CleanUpStaleIconFiles` + `SettingsWindow.RefreshIcon()` |
 | `EnsureLauncherIconSaved(Launcher)` | Static. Ensures `app-icon-{id}.ico` exists; called by pin flow before creating timestamped copy |
 | `MigrateStaleIconPaths()` | Clears dead `IconPath`/`CustomTrayIconPath` at startup (handles MSIX ↔ unpackaged path migration) |

@@ -1213,6 +1213,13 @@ public sealed partial class MainWindow : Window
             Shell_NotifyIcon(NIM_MODIFY, ref data);
         }
         SaveResolvedIconToAppData(launcher);
+
+        // A web launcher presenting as a regular window draws that same .ico on its taskbar button
+        // and its task-switcher entry, and nothing else would tell it the file has just moved. It
+        // matters most for exactly the icon a web launcher gets automatically: the page's favicon
+        // is adopted after the window is already on screen, so without this the switcher kept the
+        // placeholder the launcher opened with while the tray showed the site.
+        Windows.WebFlyoutWindow.InvalidateWindowIcon(launcher.Id);
     }
 
     /// <summary>
