@@ -105,6 +105,12 @@ writes nothing to the launcher and is dropped when the flyout is dismissed, so t
 the configured size again. That is a different thing from page fullscreen, which the page enters,
 which takes the whole monitor over the taskbar, and which hides the chrome for the duration.
 
+**Resting on that same button drops a position picker** (`Windows/WebFlyoutWindow.PositionPicker.cs`),
+a 3x3 grid of little screens, the way Windows 11 hangs snap layouts off the maximize button. It moves
+the window and writes nothing, borrowing nine of the presets the "Opens at" setting offers without
+touching the setting itself — that menu says where a launcher *opens*, this says where it should be
+right now.
+
 The header's **"…" menu** carries the per-launcher options that are per-moment decisions — window
 mode, whether it closes on focus loss, the pin, bookmarking the page on screen, the tab and address
 bars, where it opens (including "where you last dragged it") and whether a resize is remembered —
