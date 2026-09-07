@@ -105,6 +105,13 @@ writes nothing to the launcher and is dropped when the flyout is dismissed, so t
 the configured size again. That is a different thing from page fullscreen, which the page enters,
 which takes the whole monitor over the taskbar, and which hides the chrome for the duration.
 
+**Double-clicking the caption does the same thing**, in both directions, because that is what a
+double-click on a title bar means on every other window. The caption is the three strips that
+already drag the window: the header, the empty part of the tab strip and the empty part of the
+bookmark bar. It is recognised inside `BeginWindowMove` against the system's own double-click time
+and slop box rather than by handling `DoubleTapped`: those strips mark their own `PointerPressed`
+handled to start the drag, and XAML raises no tap gestures for a pointer whose press was taken.
+
 **Resting on that same button drops a position picker** (`Windows/WebFlyoutWindow.PositionPicker.cs`),
 a 3x3 grid of little screens, the way Windows 11 hangs snap layouts off the maximize button. It moves
 the window and writes nothing, borrowing nine of the presets the "Opens at" setting offers without
@@ -395,7 +402,7 @@ For pinned taskbar launches, `MainWindow` now tries to resolve the actual taskba
 - **Icon view** (ViewMode = 0, default): Each column is a `GridView` of grouped sections whose top-level layout is handled by the custom `PackedIconPanel`. Real groups render a heading plus a nested icon-grid child `ListView`, while consecutive ungrouped items are wrapped into synthetic groups so they render in the same wrapping grid surface. `Launcher.IconModeIconsPerRow` controls the maximum icons shown across each row (default 3, configurable from 1 to 12). Top-level groups use their visible child count as a width span so narrower groups can share a row beside wider groups, while the packed panel keeps row heights based on the measured group cards instead of fixed slot heights. Dragging near the flyout's left or right edge snaps the layout wider or narrower by whole icon columns without opening settings.
 - **List view** (ViewMode = 1): Each column is a drag-enabled `ListView` of top-level items and groups. Real groups render a heading plus a nested child `ListView`, so items can be dragged within groups, out to the top level, or between columns while keeping the flyout visuals close to the editor.
 
-`RebuildColumnsPanel()` rebuilds all columns (icon grid or ListView) from scratch whenever items change. Window width scales per column: 175 px for list view, or a dynamic icon-mode width derived from the configured icons-per-row value.
+`RebuildColumnsPanel()` rebuilds all columns (icon grid or ListView) from scratch whenever items change. Window width scales per column: a dynamic icon-mode width derived from the configured icons-per-row value, or for list view the width of the longest label the launcher holds, capped at 175 px and floored at 80. Every list column gets the same width (ragged columns read as a broken table), and the cap means a launcher with one long name is exactly as wide as it always was, while a launcher of one-word shortcuts stops paying for space it never used. `ComputeListColumnWidth()` decides it once per rebuild and both the columns and the window read the cached answer, so the two cannot disagree.
 
 **Right-click context menu**: Right-clicking empty space in the flyout shows a `ContextFlyout` with launcher/settings shortcuts. Right-clicking an item opens an item menu with Move up/down, Move to…, Edit, and Remove actions, while in edit mode. Outside edit mode the item menu shows only launcher-level entries.
 
