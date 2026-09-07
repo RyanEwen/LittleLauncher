@@ -181,6 +181,25 @@ writes `WebFlyoutWidth`, `WebFlyoutHeight` or `WebFlyoutPosition`**, and `ParkOf
 always be big is resized by dragging or in its settings; this is "let me look at the whole
 dashboard for a minute".
 
+**The caption double-click is the same command.** Double-clicking a title bar maximizes and
+restores on every other window on this desktop, and the three strips that drag this one (the
+header, the empty part of the tab strip, the empty part of the bookmark bar) are the title bar it
+does not have, so they owe the gesture. `BeginWindowMove` recognises it and calls `ToggleMaximized`,
+which is why it inherits every property above for free: still temporary, still unwritten, still
+dropped on dismissal.
+
+- **Counted by hand, not by handling `DoubleTapped`.** Those strips mark their own
+  `PointerPressed` handled to start a window move, and XAML raises no tap gestures for a pointer
+  whose press was taken. It is the same handledness that keeps the header's buttons out of
+  `BeginWindowMove`, which would have kept the double-click out too. `IsCaptionDoubleClick` compares
+  against `GetDoubleClickTime()` and half of `SM_CXDOUBLECLK`/`SM_CYDOUBLECLK`, so it is the
+  gesture the user configured rather than a second one that nearly matches, and it clears its
+  own state on a match so a triple-click leaves the window maximized rather than toggling twice.
+- **Tested before the maximized guard, not after.** `BeginWindowMove` returns early while
+  maximized, since there is nowhere to move a window that fills the work area; putting the
+  double-click test above that early return is the whole of what makes the second double-click
+  the restore.
+
 Three things follow from that, and each is a guard rather than a convention:
 
 - **The grips and the header drag are inert while maximized.** Both would otherwise persist the

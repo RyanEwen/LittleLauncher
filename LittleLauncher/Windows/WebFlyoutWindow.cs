@@ -301,6 +301,13 @@ public sealed partial class WebFlyoutWindow : Window
     private POINT _moveStartCursor;
     private RECT _moveStartRect;
 
+    /// <summary>
+    /// When and where the last left press on a caption surface landed, so the next one can be
+    /// recognised as the second half of a double-click. Zero means there is no pair in progress.
+    /// </summary>
+    private long _lastCaptionClickTicks;
+    private POINT _lastCaptionClickPoint;
+
     private ResizeEdges _resizeEdges;
     private bool _isResizing;
     private POINT _resizeStartCursor;
@@ -2930,14 +2937,28 @@ public sealed partial class WebFlyoutWindow : Window
     /// a moved flyout simply reopens where it was put, which is what moving something is
     /// expected to mean.</para>
     /// <para>Clicks on the header's buttons never reach here: they mark the event handled.</para>
+    /// <para>A double-click here maximizes and restores instead of moving. See
+    /// <see cref="IsCaptionDoubleClick"/>.</para>
     /// </remarks>
     private void BeginWindowMove(object sender, PointerRoutedEventArgs e)
     {
+        if (_hwnd == IntPtr.Zero || !IsWindow(_hwnd)) return;
+        if (!e.GetCurrentPoint(null).Properties.IsLeftButtonPressed) return;
+
+        // Double-clicking a title bar maximizes it and double-clicking it again puts it back, on
+        // every other window on this desktop. These strips are the title bar this window does not
+        // have, so they owe the same gesture. Tested before the maximized guard below, which is
+        // what lets the second double-click be the restore.
+        if (!_isFullScreen && IsCaptionDoubleClick())
+        {
+            ToggleMaximized();
+            e.Handled = true;
+            return;
+        }
+
         // Nowhere to move a window that already fills the screen — and dragging one would write
         // its position to WebFlyoutPosition, outliving the state that produced it.
         if (_isFullScreen || _isMaximized) return;
-        if (_hwnd == IntPtr.Zero || !IsWindow(_hwnd)) return;
-        if (!e.GetCurrentPoint(null).Properties.IsLeftButtonPressed) return;
         if (!GetWindowRect(_hwnd, out _moveStartRect)) return;
 
         GetCursorPos(out _moveStartCursor);
@@ -2950,6 +2971,39 @@ public sealed partial class WebFlyoutWindow : Window
 
         if (sender is UIElement element) element.CapturePointer(e.Pointer);
         e.Handled = true;
+    }
+
+    /// <summary>
+    /// True when this press is the second half of a double-click on one of the caption strips.
+    /// </summary>
+    /// <remarks>
+    /// <para>Counted by hand rather than by handling <c>DoubleTapped</c>. The caption strips mark
+    /// their own <c>PointerPressed</c> handled to start a window move, and XAML raises no tap
+    /// gestures for a pointer whose press was taken. It is the same handledness that keeps the
+    /// header's buttons out of <see cref="BeginWindowMove"/>, which would have kept the
+    /// double-click out too.</para>
+    /// <para>The system's own double-click time and slop box are read rather than guessed at, so
+    /// this is the gesture the user has configured and not a second, nearly-matching one. The slop
+    /// metrics are the full width and height of that box, so the tolerance either side of the first
+    /// click is half of each.</para>
+    /// <para>Screen coordinates, not window ones: the first click may have moved the window.</para>
+    /// </remarks>
+    private bool IsCaptionDoubleClick()
+    {
+        GetCursorPos(out var cursor);
+        long now = Environment.TickCount64;
+
+        bool isSecondClick =
+            _lastCaptionClickTicks != 0 &&
+            now - _lastCaptionClickTicks <= GetDoubleClickTime() &&
+            Math.Abs(cursor.X - _lastCaptionClickPoint.X) <= GetSystemMetrics(SM_CXDOUBLECLK) / 2 &&
+            Math.Abs(cursor.Y - _lastCaptionClickPoint.Y) <= GetSystemMetrics(SM_CYDOUBLECLK) / 2;
+
+        // Cleared on a match so a third click starts a fresh pair rather than toggling again: a
+        // triple-click on a title bar leaves the window maximized, it does not put it back.
+        _lastCaptionClickTicks = isSecondClick ? 0 : now;
+        _lastCaptionClickPoint = cursor;
+        return isSecondClick;
     }
 
     private void ContinueWindowMove(object sender, PointerRoutedEventArgs e)

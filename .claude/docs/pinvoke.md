@@ -65,6 +65,19 @@ its composition surfaces instead of re-rasterising on the next open. Never use a
 negative coordinate for this: monitors can be arranged to the left of or above the primary, so
 `-9999` is not reliably off screen.
 
+## Recognising a double-click by hand
+
+`GetDoubleClickTime()` plus `GetSystemMetrics(SM_CXDOUBLECLK / SM_CYDOUBLECLK)` are how a XAML
+surface counts a double-click itself. `WebFlyoutWindow.IsCaptionDoubleClick` needs them because the
+strips standing in for that window's title bar mark their own `PointerPressed` handled to start a
+window move, and XAML raises no `Tapped` / `DoubleTapped` for a pointer whose press was taken.
+
+Both are **user settings**, so read them rather than picking numbers: a hard-coded 500ms and 4px
+is a second gesture that nearly matches the one the user configured. The two metrics are the full
+width and height of the box the second click must land in, so the tolerance either side of the
+first click is half of each. Compare positions in **screen** coordinates, since the first click may
+have moved the window out from under the second.
+
 ## Per-window opacity
 
 `SetLayeredWindowAttributes(hwnd, 0, alpha, LWA_ALPHA)` fades a whole window, but only once

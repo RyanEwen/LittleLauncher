@@ -248,6 +248,12 @@ public static partial class NativeMethods
     internal const int SM_XVIRTUALSCREEN = 76;
     internal const int SM_YVIRTUALSCREEN = 77;
 
+    // The size of the box a second click must land in to count as a double-click, in pixels.
+    // Paired with GetDoubleClickTime above: both are user settings, so anything recognising a
+    // double-click by hand has to read them rather than pick its own numbers.
+    internal const int SM_CXDOUBLECLK = 36;
+    internal const int SM_CYDOUBLECLK = 37;
+
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool PostMessage(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);
