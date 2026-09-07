@@ -31,6 +31,33 @@ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
 - Use `NumberBox` for numeric inputs
 - Use `FontIcon` with Segoe Fluent Icons glyphs
 
+## Measuring a string, not a control
+
+Layout arithmetic sometimes needs to know how wide a piece of text draws: `FlyoutWindow` sizes its
+list columns to the longest label a launcher holds. There is no text-metrics API to ask, so the
+answer comes from a `TextBlock` that exists only to be measured:
+
+```xml
+<Canvas x:Name="LabelMeasureHost" IsHitTestVisible="False" Opacity="0">
+    <TextBlock x:Name="LabelMeasure" TextWrapping="NoWrap" />
+</Canvas>
+```
+
+- **In the tree, not beside it.** An unparented element has no `XamlRoot`, so it resolves neither
+  the window's font nor its scale, and it is the *real* font that decides the width. Parked in the
+  window's own tree it inherits both.
+- **A `Canvas` is what makes it free.** It measures children against infinity and reports no size of
+  its own, so nothing here reaches the surrounding layout.
+- Set the properties that matter (`FontSize`, `FontWeight`, `Text`), call `InvalidateMeasure()`,
+  then `Measure(new Size(double.PositiveInfinity, double.PositiveInfinity))` and read
+  `DesiredSize.Width`.
+- **Treat zero as "no answer", not as "no width".** Before the tree is live there is nothing to lay
+  text out against, and a caller that reads that as a real width will size something to nothing.
+
+This is not the measure-after-layout trap: it measures a string, never a laid-out container, so no
+result can feed back into the geometry that produced it. See the "compute, don't measure" rule in
+[drag-drop.md](drag-drop.md).
+
 ## Data Binding
 
 - Bind to `SettingsManager.Current.<Property>` for settings

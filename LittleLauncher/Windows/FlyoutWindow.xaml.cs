@@ -31,7 +31,49 @@ namespace LittleLauncher.Windows;
 
 public partial class FlyoutWindow : Window
 {
-    private const int ColumnWidth = 175;
+    /// <summary>
+    /// The widest a list-mode column may be, and the fixed width every one of them used to have.
+    /// </summary>
+    /// <remarks>
+    /// Columns are now sized to the longest label they actually hold
+    /// (<see cref="ComputeListColumnWidth"/>), because a column of one-word shortcuts spent most
+    /// of its width on nothing. This is the ceiling on that, so nothing is ever wider than the
+    /// flyout has always been and long names go on trimming exactly as they did.
+    /// </remarks>
+    private const int MaxListColumnWidth = 175;
+
+    /// <summary>
+    /// The narrowest one may be: the width of the column header edit mode draws over it, which is
+    /// the widest fixed thing a list column ever has to show: a 20px remove button and its
+    /// margin, then "Column N" and its own.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately low. It is a guard against a launcher of one-letter names collapsing into a
+    /// sliver, not a second opinion about how wide the labels need to be. An empty launcher never
+    /// reaches it: with nothing to measure, <see cref="ComputeListColumnWidth"/> keeps the full
+    /// width, which is what the empty-state placeholder is sized against.
+    /// </remarks>
+    private const int MinListColumnWidth = 80;
+
+    /// <summary>
+    /// Everything a list row spends on something other than its label: the container's 8px
+    /// padding either side, the 24px icon cell, and the 8px gap after it.
+    /// </summary>
+    /// <remarks>
+    /// Mirrors <c>LauncherItemContainerStyle</c> and <c>LauncherItemTemplate</c> in the XAML,
+    /// which carry a comment pointing back here. Measured content is never fed back into this;
+    /// see the "compute, don't measure" rule in the drag-drop guide.
+    /// </remarks>
+    private const int ListItemChromeWidth = 8 + 24 + 8 + 8;
+
+    /// <summary>The same for a group header, which has no icon: 8px of margin either side.</summary>
+    private const int ListGroupHeaderChromeWidth = 8 + 8;
+
+    /// <summary>The same for the launcher title, which spans every column.</summary>
+    private const int LauncherTitleChromeWidth = 8 + 8;
+
+    private const double ListItemFontSize = 13;
+    private const double ListGroupHeaderFontSize = 12;
     private const int DefaultIconColumnWidth = 260;
     private const int IconCellWidth = 80;
     private const int IconCellHeight = 84;
@@ -93,6 +135,17 @@ public partial class FlyoutWindow : Window
     private bool _fadeStyleApplied;
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _preRenderTimer;
     private int _lastItemsHash;
+
+    /// <summary>
+    /// The width every list-mode column is currently drawn at, decided once per rebuild.
+    /// </summary>
+    /// <remarks>
+    /// Cached rather than recomputed on each read because two things have to agree on it: the
+    /// columns themselves (<see cref="CreateColumnListView"/>) and the window sized around them
+    /// (<see cref="GetFlyoutWidth"/>). They are read at different moments, the second of them
+    /// before the flyout has ever been laid out.
+    /// </remarks>
+    private int _listColumnWidth = MaxListColumnWidth;
     private MainWindow? _owner;
     private LauncherItem? _dragItem;
     private ObservableCollection<LauncherItem>? _dragSourceCollection;
@@ -159,6 +212,9 @@ public partial class FlyoutWindow : Window
         GetAppWindow().SetPresenter(presenter);
 
         InitializeResizeGrips();
+        // Text cannot be measured yet, so the first rebuild falls back to the fixed column
+        // width; RootGrid_Loaded retakes it once there is something to measure against.
+        RootGrid.Loaded += RootGrid_Loaded;
         RebuildColumnsPanel();
         InitializeEmptyPlaceholder();
         InitializeEditChrome();
@@ -778,7 +834,7 @@ public partial class FlyoutWindow : Window
             : "ListItemTemplateSelector";
 
         ListViewBase lv = isIconMode ? new GridView() : new ListView();
-        lv.Width = isIconMode ? GetIconColumnWidth(_columnLists[columnIndex]) : ColumnWidth;
+        lv.Width = isIconMode ? GetIconColumnWidth(_columnLists[columnIndex]) : _listColumnWidth;
         lv.Padding = new Thickness(0);
         lv.IsItemClickEnabled = true;
         lv.SelectionMode = ListViewSelectionMode.None;
@@ -977,12 +1033,128 @@ public partial class FlyoutWindow : Window
         listView.UpdateLayout();
     }
 
+    /// <summary>
+    /// Sizes a list-mode column to the longest label the launcher actually holds, capped at
+    /// <see cref="MaxListColumnWidth"/> and floored at <see cref="MinListColumnWidth"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>One width for every column, not one each. Columns of different widths read as a
+    /// broken table rather than as a tidy one, and the flyout has no column rules to make the
+    /// ragged edges look deliberate, so the widest label in the launcher sets the width of all
+    /// of them.</para>
+    /// <para>Group headers count too, and against their own chrome: they carry no icon, so a
+    /// header needs 32px less than an item with the same text.</para>
+    /// <para>The cap is what keeps this from being a behaviour change for anyone: a launcher with
+    /// one long name is exactly as wide as it was, and only the launchers that were wasting the
+    /// space get narrower.</para>
+    /// </remarks>
+    private int ComputeListColumnWidth()
+    {
+        double widest = 0;
+        bool measuredAnything = false;
+
+        void Consider(string? label, double fontSize, global::Windows.UI.Text.FontWeight weight, int chrome)
+        {
+            double width = MeasureLabelWidth(label, fontSize, weight);
+            if (width <= 0) return;
+
+            measuredAnything = true;
+            widest = Math.Max(widest, width + chrome);
+        }
+
+        foreach (var column in _columnLists)
+        {
+            foreach (var item in column)
+            {
+                if (item.IsGroup)
+                {
+                    Consider(item.Name, ListGroupHeaderFontSize, Microsoft.UI.Text.FontWeights.SemiBold, ListGroupHeaderChromeWidth);
+                    foreach (var child in item.Children)
+                        Consider(child.Name, ListItemFontSize, Microsoft.UI.Text.FontWeights.Normal, ListItemChromeWidth);
+                }
+                else
+                {
+                    Consider(item.Name, ListItemFontSize, Microsoft.UI.Text.FontWeights.Normal, ListItemChromeWidth);
+                }
+            }
+        }
+
+        // Nothing measurable: an empty launcher, or a tree not yet live enough to lay text out.
+        // Either way the honest answer is the width the flyout has always had: an empty launcher
+        // still has its placeholder to show, and a premature call is retaken on Loaded.
+        if (!measuredAnything) return MaxListColumnWidth;
+
+        // The launcher's title spans every column, so it is a floor on their shared width rather
+        // than on any one of them. Without it a launcher of short items would start ellipsizing a
+        // name that fits perfectly well today.
+        if (LauncherTitle.Visibility == Visibility.Visible)
+        {
+            double title = MeasureLabelWidth(LauncherTitle.Text, ListGroupHeaderFontSize, Microsoft.UI.Text.FontWeights.SemiBold);
+            if (title > 0)
+                widest = Math.Max(widest, (title + LauncherTitleChromeWidth) / Math.Max(1, _columnLists.Count));
+        }
+
+        return Math.Clamp((int)Math.Ceiling(widest), MinListColumnWidth, MaxListColumnWidth);
+    }
+
+    /// <summary>
+    /// How wide a label draws, in DIPs, at the font a list row or group header gives it.
+    /// </summary>
+    /// <remarks>
+    /// <para>Measuring a <i>string</i>, which is the one thing the arithmetic cannot know up
+    /// front. It is not measuring laid-out content, which is what the "compute, don't measure"
+    /// rule in the drag-drop guide forbids: nothing here reads a container's <c>DesiredSize</c>,
+    /// so no result can feed back into the geometry that produced it.</para>
+    /// <para><c>LabelMeasure</c> is a TextBlock parked in a zero-sized Canvas in the flyout's own
+    /// tree, so it resolves the same font, theme and scale the real rows do. Returns 0 before the
+    /// tree is live, which every caller reads as "no answer" rather than as "no width".</para>
+    /// </remarks>
+    private double MeasureLabelWidth(string? label, double fontSize, global::Windows.UI.Text.FontWeight weight)
+    {
+        if (string.IsNullOrWhiteSpace(label)) return 0;
+
+        LabelMeasure.FontSize = fontSize;
+        LabelMeasure.FontWeight = weight;
+        LabelMeasure.Text = label;
+        LabelMeasure.InvalidateMeasure();
+        LabelMeasure.Measure(new global::Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+
+        return LabelMeasure.DesiredSize.Width;
+    }
+
+    /// <summary>
+    /// Retakes the column width once the flyout's tree is live, and rebuilds if the answer moved.
+    /// </summary>
+    /// <remarks>
+    /// The first rebuild runs from the constructor, where a TextBlock has nothing to lay text out
+    /// against and measures zero, and <c>PreRenderOffScreen</c> sizes the window from that same
+    /// pass. This is the one correction, wired to <c>Loaded</c> and unhooked after it fires. The
+    /// parked window's own size does not matter: every <c>Toggle</c> resizes from
+    /// <see cref="GetFlyoutWidth"/>, which reads the field this writes.
+    /// </remarks>
+    private void RootGrid_Loaded(object sender, RoutedEventArgs e)
+    {
+        RootGrid.Loaded -= RootGrid_Loaded;
+
+        int width = ComputeListColumnWidth();
+        if (width == _listColumnWidth) return;
+
+        _listColumnWidth = width;
+        if (IsListMode)
+        {
+            foreach (var columnListView in ColumnListViews())
+                columnListView.Width = width;
+
+            ResizeIfVisible();
+        }
+    }
+
     private int GetFlyoutWidth()
     {
         int contentWidth;
 
         if (IsListMode)
-            contentWidth = ColumnWidth * Math.Max(1, ColumnsPanel.Children.Count);
+            contentWidth = _listColumnWidth * Math.Max(1, ColumnsPanel.Children.Count);
         else
         {
             contentWidth = 0;
@@ -1240,6 +1412,9 @@ public partial class FlyoutWindow : Window
                 ColumnsPanel.Margin = new Thickness(0, 0, 0, 4);
             }
         }
+
+        // Before the columns are built, and after the title is decided: both feed it.
+        _listColumnWidth = ComputeListColumnWidth();
 
         bool multipleColumns = _columnLists.Count > 1;
 

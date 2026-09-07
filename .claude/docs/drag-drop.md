@@ -51,8 +51,11 @@ any item or group.
   window with `SWP_ASYNCWINDOWPOS`, so reading its rect immediately returns the *old* bounds.
 - The **edit-mode border tint** uses the DWM border colour (`DWMWA_BORDER_COLOR`), not a XAML
   border — a `BorderThickness` on `RootGrid` would inset the content.
-- `GetFlyoutWidth()` sums fixed column widths arithmetically and is never measured, so anything
-  wider than the content is **clipped**.
+- `GetFlyoutWidth()` sums column widths arithmetically and never measures laid-out content, so
+  anything wider than it is **clipped**. In list mode the column width itself comes from
+  `ComputeListColumnWidth()`, which measures label *strings* (see "Sizing a list column" below).
+  That is a different thing from measuring the tree, and the only input to the arithmetic that is
+  not known up front.
 - Per-column headers and the empty-launcher placeholder *do* add height, and both are counted
   in the arithmetic (`CurrentColumnHeaderHeight`, `CurrentEmptyPlaceholderHeight`). Anything
   that reserves space must be added there, or the content overflows the window — an empty
@@ -84,6 +87,33 @@ constant that fed its own output back into the arithmetic and grew without bound
 and a double-counted margin (`DesiredSize` already includes the element's own margin). Edit
 chrome heights are now derived from geometry that is known up front — toolbar rows × slot,
 header height × 1.
+
+### Sizing a list column
+
+List columns used to be a flat 175px each, which a column of one-word shortcuts spent mostly on
+nothing. `ComputeListColumnWidth()` now sizes them to the longest label the launcher holds, capped
+at `MaxListColumnWidth` (that same 175, so nothing is ever wider than it used to be) and floored at
+`MinListColumnWidth`.
+
+- **One width for all of them.** Columns of differing widths read as a broken table, and the flyout
+  has no column rules to make ragged edges look deliberate.
+- **This measures a string, not a tree.** `MeasureLabelWidth` sets text on `LabelMeasure` (a
+  `TextBlock` parked in a zero-sized `Canvas` in the flyout's own tree, so it resolves the same
+  font, theme and scale the real rows do) and reads its `DesiredSize`. Nothing reads a
+  *container's* size, so no result can feed back into the geometry that produced it, which is the
+  failure the rule above is about.
+- **The chrome around a label is a constant, not a measurement.** `ListItemChromeWidth`,
+  `ListGroupHeaderChromeWidth` and `LauncherTitleChromeWidth` mirror padding and margins that live
+  in the XAML; each of those three places carries a comment pointing back at its constant.
+- **The answer is cached in `_listColumnWidth`, decided once per rebuild.** Two things have to
+  agree on it: the columns (`CreateColumnListView`) and the window sized around them
+  (`GetFlyoutWidth`), the second of which is read before the flyout has ever been laid out.
+- **A measurement of zero means "no answer", never "no width".** The first rebuild runs from the
+  constructor, where a `TextBlock` has nothing to lay text out against; that pass keeps the full
+  width, and `RootGrid_Loaded` retakes it once and unhooks itself. The parked window's own size
+  does not matter, because every `Toggle` resizes from `GetFlyoutWidth()`.
+- **An empty launcher keeps the full width** for the same reason: nothing to measure is not a
+  reason to shrink, and the empty-state placeholder is sized against the flyout it sits in.
 
 Where a real measurement genuinely is needed, take it **after layout**, never during
 construction or mid-animation. `LauncherSettingsWindow` sizes itself on `Loaded` for this
