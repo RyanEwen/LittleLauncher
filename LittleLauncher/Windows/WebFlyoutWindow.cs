@@ -88,7 +88,7 @@ public sealed partial class WebFlyoutWindow : Window
     private readonly Button _forwardButton;
     private readonly Button _moreButton;
 
-    /// <summary>Shows and hides the address bar. Its glyph reports which it will do.</summary>
+    /// <summary>The address chrome shown by the launcher's preference or temporarily for a blank tab.</summary>
     private readonly Grid _addressBar;
     private readonly TextBox _addressBox;
     private readonly Grid _header;
@@ -422,9 +422,8 @@ public sealed partial class WebFlyoutWindow : Window
 
         var headerButtons = _headerButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
         headerButtons.Children.Add(_moreButton);
-        // No address-bar button: the "…" menu carries the toggle, and a header this narrow is
-        // better spent on the page controls. The menu was always the twin of this button anyway -
-        // one affordance beats two that differ only in where they live.
+        // The address-bar button lives beside New tab in the tab strip, where it remains close to
+        // the blank-tab flow without taking space from this narrow header.
         // Pin sits beside maximize rather than at the head of the group: both decide how the
         // flyout behaves as a window, and the page actions between them made that read as two
         // unrelated buttons.
@@ -3156,24 +3155,11 @@ public sealed partial class WebFlyoutWindow : Window
     // ── Address bar ─────────────────────────────────────────────────
 
     /// <summary>
-    /// Shows or hides the address bar for the launcher's current setting.
-    /// </summary>
-    /// <remarks>
-    /// The header check is not optional: the bar lives with the header, so anything that hid the
-    /// header — a bookmark bar collapsed to a strip, a page gone fullscreen — meant to hide this
-    /// too.
-    /// <para>There was a header button that revealed the bar for one visit without changing the
-    /// launcher. It is gone, and with it the temporary state: the More menu carries the setting
-    /// itself, which is one affordance instead of two that differed only in how long they lasted —
-    /// a distinction the header had no room to explain.</para>
-    /// </remarks>
-    /// <summary>
     /// Turns the address bar on or off for this launcher.
     /// </summary>
     /// <remarks>
-    /// It writes the launcher rather than lasting for the visit, which is the same thing the "…"
-    /// menu's item does — there was once a reveal-for-this-visit button here and it was removed,
-    /// because one affordance beats two that differ only in how long they last.
+    /// The tab-strip button and the "…" menu both write the lasting launcher preference. The
+    /// automatic reveal for an empty tab is separate and never calls this method.
     /// </remarks>
     private void ToggleAddressBar()
     {
@@ -3183,6 +3169,7 @@ public sealed partial class WebFlyoutWindow : Window
         ApplyAddressBarVisibility();
     }
 
+    /// <summary>Shows or hides the address bar for the lasting setting or blank-tab override.</summary>
     private void ApplyAddressBarVisibility()
     {
         // An empty tab overrides the launcher's setting: it has nothing else in it, and the only
@@ -3191,6 +3178,18 @@ public sealed partial class WebFlyoutWindow : Window
         bool visible = (_launcher.WebShowAddressBar || IsActiveTabBlank) && _header.Visibility == Visibility.Visible;
 
         _addressBar.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+
+        // Report the stored preference, not the temporary blank-tab override. When the launcher is
+        // configured to hide the bar, a blank tab may still have it on screen without making this
+        // button claim that the preference changed.
+        if (_addressBarButton != null)
+        {
+            ToolTipService.SetToolTip(_addressBarButton,
+                _launcher.WebShowAddressBar ? "Hide the address bar" : "Show the address bar");
+
+            if (_addressBarButton.Content is FontIcon glyph)
+                glyph.Opacity = _launcher.WebShowAddressBar ? 1.0 : 0.6;
+        }
 
         if (visible) SyncAddressBox();
 

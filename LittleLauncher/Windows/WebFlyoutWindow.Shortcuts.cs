@@ -357,6 +357,12 @@ public sealed partial class WebFlyoutWindow
             ApplyAddressBarVisibility();
         }
 
+        FocusVisibleAddressBar();
+    }
+
+    /// <summary>Focuses an address bar that is already visible without changing its preference.</summary>
+    private void FocusVisibleAddressBar()
+    {
         _addressBox.Focus(FocusState.Programmatic);
         _addressBox.SelectAll();
     }

@@ -96,6 +96,7 @@ public sealed partial class WebFlyoutWindow
 
     private readonly Grid _tabBar = new();
     private Button? _newTabButton;
+    private Button? _addressBarButton;
 
     /// <summary>
     /// The strip's scroller. Kept because two things need it: the width the chips are squeezed
@@ -173,6 +174,20 @@ public sealed partial class WebFlyoutWindow
         // on the header's back button.
         _newTabButton = BuildHeaderButton("\uE710", "New tab", (_, _) => OpenNewTab());
 
+        // Keep the address toggle with the tab controls: a blank tab reveals the bar temporarily,
+        // while this button changes the launcher's lasting preference. U+E71B is Segoe Fluent's
+        // World glyph, escaped for the same reason as the Add glyph above.
+        _addressBarButton = BuildHeaderButton("\uE71B", "Address bar", (_, _) => ToggleAddressBar());
+
+        var tabButtons = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 2,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        tabButtons.Children.Add(_newTabButton);
+        tabButtons.Children.Add(_addressBarButton);
+
         var scroller = new ScrollViewer
         {
             Content = _tabStrip,
@@ -201,9 +216,9 @@ public sealed partial class WebFlyoutWindow
         _tabBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         _tabBar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         Grid.SetColumn(scroller, 0);
-        Grid.SetColumn(_newTabButton, 1);
+        Grid.SetColumn(tabButtons, 1);
         _tabBar.Children.Add(scroller);
-        _tabBar.Children.Add(_newTabButton);
+        _tabBar.Children.Add(tabButtons);
 
         // Drawn in a layer of its own rather than by shuffling chips, for the reason recorded on the
         // bookmark bar's caret: the element that would move is the drag source, and taking it out of
@@ -258,7 +273,8 @@ public sealed partial class WebFlyoutWindow
             ? Visibility.Visible
             : Visibility.Collapsed;
 
-        // Always available: it opens an empty tab, so there is no address it could be missing.
+        // Both buttons stay available whenever the strip is: one opens an empty tab and the other
+        // changes whether loaded tabs keep showing their address.
     }
 
     /// <summary>Re-syncs the strip's contents, selection and visibility with <see cref="_tabs"/>.</summary>
@@ -940,9 +956,11 @@ public sealed partial class WebFlyoutWindow
         var tab = await CreateTabAsync(homeKey: null, navigateTo: null);
         if (tab == null) return;
 
-        // The address bar is the whole content of an empty tab, so put the caret in it.
+        // The address bar is the whole content of an empty tab, so put the caret in it. Do not use
+        // FocusAddressBar here: Ctrl+L means "show this from now on", while the blank-tab override
+        // is deliberately temporary and must leave WebShowAddressBar untouched.
         ApplyAddressBarVisibility();
-        FocusAddressBar();
+        FocusVisibleAddressBar();
     }
 
 
