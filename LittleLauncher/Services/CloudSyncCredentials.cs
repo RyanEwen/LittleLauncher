@@ -1,4 +1,4 @@
-﻿namespace LittleLauncher.Services;
+namespace LittleLauncher.Services;
 
 /// <summary>
 /// OAuth client registrations for the native cloud providers.
@@ -13,7 +13,7 @@
 /// <para>The env-var overrides exist so a second registration can be pointed at for testing
 /// without editing source. They win when set.</para>
 /// <para>Registering these is a one-time manual step — see
-/// <see href="../../.claude/docs/sync.md">sync.md</see> for exactly what to create in the Entra
+/// <see href="../../.codex/docs/sync.md">sync.md</see> for exactly what to create in the Entra
 /// and Google Cloud portals. Until they are filled in, the two providers report themselves as
 /// unconfigured rather than failing at sign-in.</para>
 /// </remarks>
@@ -81,5 +81,5 @@ public static class CloudSyncCredentials
     /// </summary>
     public static string NotConfiguredMessage(string providerName) =>
         $"This build has no {providerName} app registration, so sign-in is unavailable. " +
-        $"See .claude/docs/sync.md for how to create one.";
+        $"See .codex/docs/sync.md for how to create one.";
 }

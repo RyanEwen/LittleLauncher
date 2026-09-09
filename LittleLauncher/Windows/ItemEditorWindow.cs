@@ -302,9 +302,15 @@ public sealed class ItemEditorWindow : Window
             if (currentTab == "custom")
             {
                 var t = pathBox.Text.Trim();
+                // The other tab also holds arguments for the selected app. Preserve
+                // its type (especially a PWA's AUMID) until the path actually changes.
+                if (pickedEntry != null &&
+                    string.Equals(t, pickedEntry.LaunchPath, StringComparison.OrdinalIgnoreCase))
+                    return (t, pickedEntry.IsPwa, false);
                 return (t, false, LooksLikeWebUrl(t));
             }
-            if (appList.SelectedItem is AppPickerEntry e)
+            // Filtering the list can hide its selected row without changing the target.
+            if (pickedEntry is AppPickerEntry e)
                 return (e.LaunchPath, e.IsPwa, false);
             return ("", false, false);
         }
@@ -318,6 +324,7 @@ public sealed class ItemEditorWindow : Window
             {
                 pickedEntry = match;
                 populating = true;
+                pathBox.Text = match.LaunchPath;
                 if (appList.ItemsSource is IEnumerable<AppPickerEntry> shown && shown.Contains(match))
                 {
                     appList.SelectedItem = match;
@@ -733,6 +740,9 @@ public sealed class ItemEditorWindow : Window
         async Task SelectEntry(AppPickerEntry e)
         {
             pickedEntry = e;
+            populating = true;
+            pathBox.Text = e.LaunchPath;
+            populating = false;
             if (string.IsNullOrWhiteSpace(nameBox.Text)) nameBox.Text = e.Name;
             SyncDerived();
             lastFetchedPath = "";

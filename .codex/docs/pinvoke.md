@@ -1,4 +1,4 @@
-﻿> **Scope:** Use when adding P/Invoke declarations, Win32 interop, or native method signatures. Covers DllImport conventions, struct layouts, and safety patterns for this project.
+> **Scope:** Use when adding P/Invoke declarations, Win32 interop, or native method signatures. Covers DllImport conventions, struct layouts, and safety patterns for this project.
 > **Governs:** `**/NativeMethods.cs` (`LittleLauncher/Classes/NativeMethods.cs`).
 
 # P/Invoke Conventions

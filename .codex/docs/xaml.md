@@ -1,4 +1,4 @@
-﻿> **Scope:** Use when editing XAML files for WinUI 3 controls, Fluent Design, NavigationView pages, or resource dictionaries. Covers WinUI 3 control conventions, resource localization, and Mica/Acrylic backdrop patterns.
+> **Scope:** Use when editing XAML files for WinUI 3 controls, Fluent Design, NavigationView pages, or resource dictionaries. Covers WinUI 3 control conventions, resource localization, and Mica/Acrylic backdrop patterns.
 > **Governs:** `**/*.xaml` (all XAML across the solution).
 
 # WinUI 3 XAML Conventions
@@ -89,7 +89,7 @@ There is **no type dropdown**. The target is chosen via a two-item `SelectorBar`
 
 - The list is fed by `AppPickerEntry` rows (display name, `LaunchPath`, `IsPwa`, icon target). The catalog combines `GetInstalledApplications()` + `GetInstalledPwas()` and is built on a **background STA thread** via `AppPickerService.RunStaAsync` (the shell enumeration is expensive and apartment-threaded), so the dialog opens instantly and the list fills in.
 - Icons stream in asynchronously via `AppPickerService.LoadIcons` → `ShellIcons.Extract` (an `IShellItemImageFactory` 32px BGRA extraction). The `ListView` `DataTemplate` is built from a XAML string with `XamlReader.Load` and binds `{Binding Icon}` (`ObservableObject` change notification), since the dialog is code-built.
-- **Target resolution:** `ResolveTarget()` keys off the active tab — `custom` → the typed path/link (classified by `LooksLikeWebUrl` / `LooksLikeFilePath` into website vs application); `list` → the selected `AppPickerEntry`. It returns `(path, isPwa, isWebsite)`; `SyncDerived()` pushes that into the derived flags and the app-window options' visibility.
+- **Target resolution:** Selecting or preselecting an app also fills the File or link path, so switching tabs to enter arguments retains the selected target. `ResolveTarget()` keys off the active tab — `custom` → the typed path/link, retaining the picked entry's PWA type while its path matches and otherwise classifying it with `LooksLikeWebUrl` / `LooksLikeFilePath`; `list` → the remembered `pickedEntry`, even if search filtering hides its row. It returns `(path, isPwa, isWebsite)`; `SyncDerived()` pushes that into the derived flags and the app-window options' visibility.
 - Stored values are unchanged from before (PWA → AUMID in `Path` + `IsPwa`; Store app → `shell:AppsFolder\…` path; exe → file path; website URL → `IsWebsite`), so launch behaviour in `FlyoutWindow` is preserved.
 
 ## Settings rows (code-built)

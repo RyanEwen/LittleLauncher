@@ -1,6 +1,13 @@
 ---
-description: Add a new observable setting property to UserSettings with serialization, change handler, and optional UI binding.
+name: "source-command-add-setting"
+description: "Add a new observable setting property to UserSettings with serialization, change handler, and optional UI binding."
 ---
+
+# source-command-add-setting
+
+Use this skill when the user asks to run the migrated source command `add-setting`.
+
+## Command Template
 
 Add a new setting property to the Little Launcher application.
 
@@ -17,6 +24,6 @@ Add a new setting property to the Little Launcher application.
    - Bind to `SettingsManager.Current.{PropertyName}` with `Mode=TwoWay`
    - Add localization string keys to `Resources/Localization/Dictionary-en-US.xaml`
 
-4. Build and verify: `dotnet build LittleLauncher/LittleLauncher.csproj -c Debug -p:Platform=x64`
+4. Build and verify through the [sideloaded Release MSIX workflow](../source-command-rebuild/SKILL.md)
 
-See [.claude/docs/user-settings.md](../docs/user-settings.md) for the full UserSettings conventions.
+See [.codex/docs/user-settings.md](../../../.codex/docs/user-settings.md) for the full UserSettings conventions.

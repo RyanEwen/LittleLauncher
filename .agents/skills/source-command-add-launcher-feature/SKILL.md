@@ -1,6 +1,13 @@
 ---
-description: Add a new launcher item feature to the LauncherItem model, taskbar control, flyout, and editing UI.
+name: "source-command-add-launcher-feature"
+description: "Add a new launcher item feature to the LauncherItem model, taskbar control, flyout, and editing UI."
 ---
+
+# source-command-add-launcher-feature
+
+Use this skill when the user asks to run the migrated source command `add-launcher-feature`.
+
+## Command Template
 
 Add a new feature to the launcher items in Little Launcher.
 
@@ -18,4 +25,4 @@ Add a new feature to the launcher items in Little Launcher.
 
 4. Add any new string keys to `LittleLauncher/Resources/Localization/Dictionary-en-US.xaml`
 
-5. Build and verify: `dotnet build LittleLauncher/LittleLauncher.csproj -c Debug`
+5. Build and verify through the [sideloaded Release MSIX workflow](../source-command-rebuild/SKILL.md)

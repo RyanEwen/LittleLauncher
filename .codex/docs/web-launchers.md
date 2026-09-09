@@ -1,4 +1,4 @@
-﻿> **Scope:** Use when working on web launchers — the WebView2 flyout, its resource policy, or the
+> **Scope:** Use when working on web launchers — the WebView2 flyout, its resource policy, or the
 > per-launcher web settings. Covers why the browser is torn down rather than kept warm, the
 > WebView2 APIs that make that work, and the WinUI-specific limits worked around here.
 > **Governs:** `**/WebFlyoutWindow.cs`, `**/LauncherPanels.cs`, the `Web*` properties on `Models/Launcher.cs`.

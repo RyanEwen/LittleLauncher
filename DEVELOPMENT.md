@@ -104,8 +104,15 @@ Version is defined once in `Directory.Build.props`. Pushing a `v*` tag triggers 
 .\LittleLauncherMSIXuild-msix.ps1 -Platform ARM64 -NoSign
 ```
 
-Upload the two `.msix` files individually in Partner Center. Store submission **cannot** be automated for this product — it is paid and on Pricing Version 2, which rules out both of Microsoft's automation paths — and the Store build must never be published as a CI artifact from this public repo. Both points are settled and written up, with the reasoning and the re-enable steps, in [.claude/docs/installer.md](.claude/docs/installer.md).
+Upload the two `.msix` files individually in Partner Center. Store submission **cannot** be automated for this product — it is paid and on Pricing Version 2, which rules out both of Microsoft's automation paths — and the Store build must never be published as a CI artifact from this public repo. Both points are settled and written up, with the reasoning and the re-enable steps, in [.codex/docs/installer.md](.codex/docs/installer.md).
 
 There is no MSI. Little Launcher ships as the portable zip and the Store package, and nothing else; see the packaging guide above.
 
-See the versioning and packaging guides under [`.claude/docs/`](.claude/docs/) for more detail.
+See the versioning and packaging guides under [`.codex/docs/`](.codex/docs/) for more detail.
+
+## Codex workflow
+
+Start with [AGENTS.md](AGENTS.md) and the [Codex workflow index](.codex/README.md).
+Local verification in this workspace uses the sideloaded Release MSIX; the Debug commands above
+remain available for explicitly requested debugger sessions. The rebuild skill documents how to
+update the package in place and verify its running identity.

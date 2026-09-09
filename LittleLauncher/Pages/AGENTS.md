@@ -2,13 +2,13 @@
 
 Settings pages are WinUI 3 `Page` objects navigated via `NavigationView`. Follow the XAML conventions for all `.xaml` here.
 
-@../../.claude/docs/xaml.md
+Read and follow [xaml.md](../../.codex/docs/xaml.md) before changing the code described above.
 
 **There is no item editor here.** All launcher item editing lives in the flyout's edit mode (`Windows/FlyoutWindow.EditMode.cs`); the former `LauncherItemsPage` was removed. `LaunchersPage` keeps only launcher-level concerns — cards, sharing, and the per-launcher bulk operations in `LauncherBulkOps` (export, import, bookmark import). Per-launcher settings open in `LauncherSettingsWindow`, shared with the flyout.
 
-`LaunchersPage` drives per-launcher tray/pin icons. When editing it, follow the icon system conventions: [.claude/docs/icons.md](../../.claude/docs/icons.md).
+`LaunchersPage` drives per-launcher tray/pin icons. When editing it, follow the icon system conventions: [.codex/docs/icons.md](../../.codex/docs/icons.md).
 
-`SyncPage` is the UI for global sync and swaps panels per sync provider. When editing it, follow the sync conventions: [.claude/docs/sync.md](../../.claude/docs/sync.md).
+`SyncPage` is the UI for global sync and swaps panels per sync provider. When editing it, follow the sync conventions: [.codex/docs/sync.md](../../.codex/docs/sync.md).
 
 ## Bookmark UI
 

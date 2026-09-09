@@ -37,7 +37,7 @@ public partial class UserSettings : ObservableObject
     /// <para>Any future setting whose default is <c>true</c> (or any non-zero number) needs this
     /// attribute, or the phrasing inverted so <c>false</c> is the default behaviour — the approach
     /// the launcher's <c>Web*</c> properties take. See
-    /// <see href="../../.claude/docs/user-settings.md">user-settings.md</see>.</para>
+    /// <see href="../../.codex/docs/user-settings.md">user-settings.md</see>.</para>
     /// </remarks>
     [ObservableProperty]
     [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
@@ -197,7 +197,7 @@ public partial class UserSettings : ObservableObject
     /// <see cref="SyncProviders.Sftp"/> is 0 on purpose: <c>WhenWritingDefault</c> drops the key
     /// when the value is the CLR default, so 0 has to mean the behaviour every settings file
     /// written before this setting existed was configured for. See
-    /// <see href="../../.claude/docs/user-settings.md">user-settings.md</see>.
+    /// <see href="../../.codex/docs/user-settings.md">user-settings.md</see>.
     /// </remarks>
     /// <summary>
     /// Which destination the Cloud Sync page is currently *editing*. UI state only — it does

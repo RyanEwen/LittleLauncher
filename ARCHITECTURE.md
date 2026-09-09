@@ -1,4 +1,4 @@
-﻿# Architecture — Little Launcher
+# Architecture — Little Launcher
 
 ## High-level flow
 
@@ -50,7 +50,7 @@ and flushes back via `PersistFlyoutReorder()`.
 Drag-and-drop supports cross-column and cross-group moves. All ListViews use
 `CanDragItems="True"` with custom `DragOver`/`Drop` handlers — WinUI 3''s `CanReorderItems` is
 intentionally avoided because it takes full internal control of drag events and cannot support
-cross-collection moves. See [.claude/docs/drag-drop.md](.claude/docs/drag-drop.md).
+cross-collection moves. See [.codex/docs/drag-drop.md](.codex/docs/drag-drop.md).
 
 The same handlers also accept drags from **outside** the app (`FlyoutWindow.ExternalDrop.cs`):
 a drag arriving with no `_dragItem` set came from File Explorer, the desktop, the Start Menu or
@@ -92,7 +92,7 @@ after that rebuilds from nothing and lands at the same anchored position.
 
 A web launcher holds a list of bookmarks; the first is the page it opens and the rest show as a
 browser-style bar along the bottom — several web launchers in one tray icon. See
-[.claude/docs/web-launchers.md](.claude/docs/web-launchers.md) for the single-source rule that keeps
+[.codex/docs/web-launchers.md](.codex/docs/web-launchers.md) for the single-source rule that keeps
 "which URL is showing" answerable in one place.
 
 The flyout is resized by dragging its edges — invisible XAML grips, since a window with no
@@ -151,7 +151,7 @@ else, copies or opens its address, makes it the one that opens by default, moves
 and dragging one along the bar reorders it, with an accent caret marking where it will land. Neither
 editing nor deleting a bookmark disturbs the page on screen. Launcher settings still holds the full
 list, which is the right shape for a launcher being set up rather than one being used. See
-[.claude/docs/web-launchers.md](.claude/docs/web-launchers.md).
+[.codex/docs/web-launchers.md](.codex/docs/web-launchers.md).
 
 **Every browser a web launcher owns is a tab** (`Windows/WebFlyoutWindow.Tabs.cs`), and a link
 asking for a new window becomes one instead of leaving for the real browser — using the browser's
@@ -160,7 +160,7 @@ A strip between the header and the address bar switches between them, appearing 
 there are two. The load-bearing distinction is **who chose the address**: tabs the launcher owns
 (its own page) may write its icon and be re-navigated when its settings change; a tab opened from a
 link — or from a middle-clicked bookmark — is the user's own place and nothing configured may move
-it. See [.claude/docs/web-launchers.md](.claude/docs/web-launchers.md).
+it. See [.codex/docs/web-launchers.md](.codex/docs/web-launchers.md).
 
 Web launchers also get a **Start Menu shortcut each**, in a `Programs\Little Launcher\` group kept
 in sync by `Services/StartMenuShortcutService`, so they can be opened from Start search, PowerToys
@@ -172,7 +172,7 @@ A web launcher can also stop being a flyout altogether: `Launcher.WebRegularWind
 always-on-top and dismiss-on-focus-loss and puts it in the taskbar and the task switcher, so its
 pinned button shows the running indicator and closes it when clicked. **The switcher entry cannot be
 declined** — taskbar eligibility is `WS_EX_TOOLWINDOW`, which governs both, and four ways round it
-were measured and failed; see [.claude/docs/web-launchers.md](.claude/docs/web-launchers.md). That
+were measured and failed; see [.codex/docs/web-launchers.md](.codex/docs/web-launchers.md). That
 is why the setting names a window kind rather than offering a taskbar-only toggle. In that mode the
 header also carries a **minimize** button, and the window stamps the three
 `PKEY_AppUserModel_Relaunch*` properties alongside its AUMID so its taskbar button can be **pinned**
@@ -224,7 +224,7 @@ finishes with the notification before it builds the toast — `AppNotificationMa
 the message loop, and the idle unload can run inside it — and tracked notifications are dropped when
 the browser unloads.
 
-See [.claude/docs/web-launchers.md](.claude/docs/web-launchers.md) for the WinUI WebView2 limits
+See [.codex/docs/web-launchers.md](.codex/docs/web-launchers.md) for the WinUI WebView2 limits
 worked around (no controller access, so zoom is CSS; focus-loss must be re-verified against
 `GetForegroundWindow` because the browser's HWNDs are children of the window).
 
@@ -342,7 +342,7 @@ by the shared-launcher dialog, since global sync reaches those two through their
 newer local work, and the in-place merge into the live launcher collection. Only an explicit
 user-initiated download passes `force: true`.
 
-Full conventions, including how to add a transport: [.claude/docs/sync.md](.claude/docs/sync.md).
+Full conventions, including how to add a transport: [.codex/docs/sync.md](.codex/docs/sync.md).
 
 ### Shared launcher sync
 
@@ -456,11 +456,11 @@ flattened as the flyout flattens them, or its bookmarks for a web launcher.
   attempts it, falls back to user tasks, and remembers the refusal. The same constraint is why no
   entry offers "Remove from this list".
 - Web launchers add two rules of their own - a single-address launcher publishes nothing, and a
-  bookmark opens in a new foreground tab. See [.claude/docs/web-launchers.md](.claude/docs/web-launchers.md).
+  bookmark opens in a new foreground tab. See [.codex/docs/web-launchers.md](.codex/docs/web-launchers.md).
 
 ## Distribution
 
-Little Launcher ships through exactly two channels: the **portable zip** attached to each GitHub release, and the **Microsoft Store MSIX**. A per-user WiX MSI was a third until v1.35.1 and was retired — it re-implemented, less well, what the Store already does (managed install, silent update, clean uninstall), and the portable zip covers everyone who wants to stay off the Store. Only the Store build installs its own updates; the portable one checks GitHub and links to the release page. See [.claude/docs/installer.md](.claude/docs/installer.md).
+Little Launcher ships through exactly two channels: the **portable zip** attached to each GitHub release, and the **Microsoft Store MSIX**. A per-user WiX MSI was a third until v1.35.1 and was retired — it re-implemented, less well, what the Store already does (managed install, silent update, clean uninstall), and the portable zip covers everyone who wants to stay off the Store. Only the Store build installs its own updates; the portable one checks GitHub and links to the release page. See [.codex/docs/installer.md](.codex/docs/installer.md).
 
 ## MSIX packaging
 
@@ -473,4 +473,4 @@ Little Launcher ships through exactly two channels: the **portable zip** attache
 - **Image assets** in `LittleLauncherMSIX/Images/` use standard MRT naming qualifiers (e.g. `.scale-200.`, `.targetsize-48.`) and are indexed into `resources.pri` by `makepri`.
 - **Companion exe** is deployed at startup to the external helper directory, and packaged builds also mirror it into the shared raw `%AppData%\\LittleLauncher\\` path for backward compatibility with old launcher pins. See "Companion exe" section above.
 - **`-NoSign` flag** skips all signing for Store uploads (Microsoft re-signs during ingestion). Without `-NoSign`, the script signs with a self-signed dev cert or a trusted PFX.
-- **Update checks run in MSIX builds too**, against the Store rather than GitHub Releases, and this is the only build that can update *itself*: Home/About offer **Download & Install** and apply a Store update in place, where a portable copy gets **View Release** and a link. About also offers a restart when no update is pending, since a staged one cannot apply while the tray process is alive. The **startup update toast** stays unpackaged-only — Store updates otherwise install silently, so there is nothing to interrupt anyone about. The manifest declares a `windows.toastNotificationActivation` COM activator regardless, so `AppNotificationManager` registers for both install types and packaged builds can still raise one-time upgrade notices. See [.claude/docs/installer.md](.claude/docs/installer.md) for the Store update flow and the version-reporting trap it works around.
+- **Update checks run in MSIX builds too**, against the Store rather than GitHub Releases, and this is the only build that can update *itself*: Home/About offer **Download & Install** and apply a Store update in place, where a portable copy gets **View Release** and a link. About also offers a restart when no update is pending, since a staged one cannot apply while the tray process is alive. The **startup update toast** stays unpackaged-only — Store updates otherwise install silently, so there is nothing to interrupt anyone about. The manifest declares a `windows.toastNotificationActivation` COM activator regardless, so `AppNotificationManager` registers for both install types and packaged builds can still raise one-time upgrade notices. See [.codex/docs/installer.md](.codex/docs/installer.md) for the Store update flow and the version-reporting trap it works around.

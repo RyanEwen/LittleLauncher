@@ -1,4 +1,4 @@
-﻿> **Scope:** Use when adding or modifying observable settings properties in UserSettings.cs, Launcher model properties, handling property change side-effects, or extending the serialized settings schema.
+> **Scope:** Use when adding or modifying observable settings properties in UserSettings.cs, Launcher model properties, handling property change side-effects, or extending the serialized settings schema.
 > **Governs:** `**/ViewModels/UserSettings*.cs`, `**/Models/Launcher.cs`.
 
 # UserSettings Conventions

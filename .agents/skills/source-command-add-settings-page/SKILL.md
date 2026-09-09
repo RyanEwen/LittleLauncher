@@ -1,6 +1,13 @@
 ---
-description: Scaffold a new settings page with XAML and code-behind, add NavigationViewItem, and register localization strings.
+name: "source-command-add-settings-page"
+description: "Scaffold a new settings page with XAML and code-behind, add NavigationViewItem, and register localization strings."
 ---
+
+# source-command-add-settings-page
+
+Use this skill when the user asks to run the migrated source command `add-settings-page`.
+
+## Command Template
 
 Create a new settings page for the Little Launcher WinUI 3 application.
 
@@ -23,6 +30,6 @@ Create a new settings page for the Little Launcher WinUI 3 application.
 
 4. Add all new string keys to `LittleLauncher/Resources/Localization/Dictionary-en-US.xaml`
 
-5. Build and verify: `dotnet build LittleLauncher/LittleLauncher.csproj -c Debug -p:Platform=x64`
+5. Build and verify through the [sideloaded Release MSIX workflow](../source-command-rebuild/SKILL.md)
 
-See [.claude/docs/xaml.md](../docs/xaml.md) for the full WinUI 3 XAML conventions.
+See [.codex/docs/xaml.md](../../../.codex/docs/xaml.md) for the full WinUI 3 XAML conventions.

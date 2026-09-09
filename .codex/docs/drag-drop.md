@@ -1,4 +1,4 @@
-﻿> **Scope:** Use when modifying drag-and-drop or edit mode in the flyout. Covers the custom drag-drop system, cross-list moves, insertion indicators, the edit-mode geometry contract, and known WinUI 3 limitations.
+> **Scope:** Use when modifying drag-and-drop or edit mode in the flyout. Covers the custom drag-drop system, cross-list moves, insertion indicators, the edit-mode geometry contract, and known WinUI 3 limitations.
 > **Governs:** `**/FlyoutWindow.xaml*`, `**/FlyoutWindow.EditMode.cs`.
 
 # Drag-and-Drop & Edit Mode Conventions (FlyoutWindow)

@@ -1,4 +1,4 @@
-﻿// Copyright © 2024-2026 The Little Launcher Authors
+// Copyright © 2024-2026 The Little Launcher Authors
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -545,7 +545,7 @@ public partial class Launcher : ObservableObject
     /// its inverse, and off means locked. A bool that defaults to <c>true</c> cannot be turned off
     /// in this settings file: <c>WhenWritingDefault</c> drops <c>false</c> on save and the field
     /// initialiser puts <c>true</c> back on load. See
-    /// <c>.claude/docs/user-settings.md</c>.</para>
+    /// <c>.codex/docs/user-settings.md</c>.</para>
     /// <para>Locking is how a size is pinned down: set the width and height you want, turn Remember
     /// Size off, and dragging the edges then only lasts as long as the flyout is open. It is the
     /// same bargain the header's maximize makes, one step less drastic — and unlike maximize it is
