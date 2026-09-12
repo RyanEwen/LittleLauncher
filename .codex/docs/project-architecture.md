@@ -2,6 +2,15 @@
 
 Paths in this reference are relative to the LittleLauncher project unless stated otherwise.
 
+`Models/WebLauncherPresets.cs` owns messaging service creation templates. The Add Launcher
+menu creates independent, editable web launchers from them and opens their sign-in pages.
+
+`Windows/WebFlyoutWindow.VideoFit.cs` owns optional fitting of contained fullscreen to a video's
+intrinsic aspect ratio, including monitor bounds, pending-fit cancellation and temporary sizing.
+
+`Windows/WebFlyoutWindow.FullscreenTitleBar.cs` owns the fullscreen header overlay,
+top-edge hover detection, and returning its existing controls to the normal chrome on exit.
+
 ## Architecture
 
 - **Single-instance app** enforced via a named `Mutex` ("LittleLauncher"). A second launch signals the first instance via `PostMessage` with registered window messages (`LittleLauncher_ShowFlyout_{launcherId}`, `LittleLauncher_ShowSettings`).

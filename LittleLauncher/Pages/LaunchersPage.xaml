@@ -12,11 +12,9 @@
                     <TextBlock Text="Each launcher has its own set of launcher items and its own tray icon."
                                FontSize="13" Opacity="0.6" Margin="0,0,0,20"/>
 
-                    <!-- One button, three kinds. Three side-by-side buttons did not fit the 450px
-                         column - the third was clipped mid-word - and they sat below every card,
-                         where adding a launcher is the one thing you cannot find by scrolling to
-                         it. A menu fits any width, and the three kinds read as one action with
-                         three answers, which is what they are. -->
+                    <!-- Keep creation in one menu above the cards. The messaging presets are
+                         inserted between custom creation and shared-link creation in code,
+                         so choosing a service creates and opens it in two clicks. -->
                     <Button x:Name="AddLauncherButton" HorizontalAlignment="Left" Margin="0,0,0,20">
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <FontIcon Glyph="&#xE710;" FontSize="14"/>
@@ -24,7 +22,7 @@
                             <FontIcon Glyph="&#xE70D;" FontSize="10" Opacity="0.6"/>
                         </StackPanel>
                         <Button.Flyout>
-                            <MenuFlyout Placement="Bottom">
+                            <MenuFlyout x:Name="AddLauncherMenu" Placement="Bottom">
                                 <MenuFlyoutItem Text="Shortcuts" Click="AddLauncherButton_Click">
                                     <MenuFlyoutItem.Icon>
                                         <FontIcon Glyph="&#xE71D;"/>
@@ -37,7 +35,7 @@
                                         <FontIcon Glyph="&#xE774;"/>
                                     </MenuFlyoutItem.Icon>
                                 </MenuFlyoutItem>
-                                <MenuFlyoutSeparator/>
+                                <MenuFlyoutSeparator x:Name="SharedLauncherSeparator"/>
                                 <MenuFlyoutItem Text="From a shared link…" Click="AddSharedLauncherButton_Click">
                                     <MenuFlyoutItem.Icon>
                                         <FontIcon Glyph="&#xE753;"/>

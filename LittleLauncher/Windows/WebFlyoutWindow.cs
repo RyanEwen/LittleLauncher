@@ -267,9 +267,11 @@ public sealed partial class WebFlyoutWindow : Window
     /// </remarks>
     private string _barSignature = "";
 
-    /// <summary>True while the page has an element in fullscreen and the window has grown to suit.</summary>
+    /// <summary>True while the page has an element in fullscreen.</summary>
     private bool _isFullScreen;
+    private bool _fullScreenInWindow;
     private RECT _preFullScreenRect;
+    private RECT? _dismissedFullScreenRect;
 
     /// <summary>
     /// True while the user has grown the flyout to fill its monitor's work area from the header.
@@ -317,6 +319,7 @@ public sealed partial class WebFlyoutWindow : Window
     private DateTime _lastDismissed = DateTime.MinValue;
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _idleUnloadTimer;
     private SlideEdge _lastEntranceEdge = SlideEdge.Bottom;
+    private int _resizeAnchor = WebAnchors.BottomCenter;
 
     private enum SlideEdge
     {
@@ -335,7 +338,7 @@ public sealed partial class WebFlyoutWindow : Window
         Bottom = 8,
     }
 
-    private readonly record struct FlyoutPlacement(int Left, int Top, int StartTop, int Width, int Height, SlideEdge Edge);
+    private readonly record struct FlyoutPlacement(int Left, int Top, int StartTop, int Width, int Height, SlideEdge Edge, int ResizeAnchor);
 
     private static bool AreAnimationsEnabled => SettingsManager.Current.FlyoutAnimationsEnabled;
 
@@ -861,7 +864,7 @@ public sealed partial class WebFlyoutWindow : Window
             grip.PointerCaptureLost += Grip_PointerCaptureLost;
 
             Grid.SetRow(grip, 0);
-            Grid.SetRowSpan(grip, 2);
+            Grid.SetRowSpan(grip, root.RowDefinitions.Count);
             root.Children.Add(grip);
             _resizeGrips.Add(grip);
         }
@@ -888,7 +891,7 @@ public sealed partial class WebFlyoutWindow : Window
     /// </summary>
     /// <remarks>
     /// The grips are transparent, so "showing" one means showing its resize cursor — and a resize
-    /// cursor is a promise. While maximized or fullscreen there is no edge to drag (one is the
+    /// cursor is a promise. While maximized or display fullscreen there is no edge to drag (one is the
     /// work area, the other the screen) and <see cref="Grip_PointerPressed"/> refuses the drag, so
     /// leaving them hit-testable offered a resize that could not happen. Collapsing them removes
     /// the cursor and the hit-testing together; the guard in the handler stays as the backstop for
@@ -896,18 +899,20 @@ public sealed partial class WebFlyoutWindow : Window
     /// </remarks>
     private void UpdateResizeGripVisibility()
     {
-        var visibility = _isMaximized || _isFullScreen ? Visibility.Collapsed : Visibility.Visible;
+        var visibility = CanResizeWindow ? Visibility.Visible : Visibility.Collapsed;
         foreach (var grip in _resizeGrips)
             grip.Visibility = visibility;
     }
 
+    private bool CanResizeWindow => !_isMaximized && (!_isFullScreen || _fullScreenInWindow);
+
     private void Grip_PointerPressed(object sender, PointerRoutedEventArgs e)
     {
-        // Neither state has an edge to drag: one is the screen, the other is the work area. A
+        // Display fullscreen and maximized windows have no edge to drag. A
         // resize from here would also persist the maximized size onto the launcher, which is
         // exactly what "temporarily" rules out. The grips are collapsed in both states
         // (UpdateResizeGripVisibility); this stays as the backstop.
-        if (_isFullScreen || _isMaximized) return;
+        if (!CanResizeWindow) return;
         if (sender is not ResizeGrip grip || grip.Tag is not ResizeEdges edges) return;
 
         GetCursorPos(out _resizeStartCursor);
@@ -915,6 +920,7 @@ public sealed partial class WebFlyoutWindow : Window
 
         _resizeEdges = edges;
         _isResizing = true;
+        _videoFitVersion++;
 
         // A resize in flight must not be overtaken by a slide still finishing.
         _animationVersion++;
@@ -947,6 +953,10 @@ public sealed partial class WebFlyoutWindow : Window
         if (_resizeEdges.HasFlag(ResizeEdges.Top)) top = Math.Min(top + dy, bottom - minHeight);
         if (_resizeEdges.HasFlag(ResizeEdges.Bottom)) bottom = Math.Max(bottom + dy, top + minHeight);
 
+        if (left != _resizeStartRect.Left || top != _resizeStartRect.Top ||
+            right != _resizeStartRect.Right || bottom != _resizeStartRect.Bottom)
+            _videoFitApplied = false;
+
         SetWindowPos(_hwnd, IntPtr.Zero, left, top, right - left, bottom - top,
             SWP_NOZORDER | SWP_NOACTIVATE);
 
@@ -977,6 +987,9 @@ public sealed partial class WebFlyoutWindow : Window
         if (!_isResizing) return;
         _isResizing = false;
         _resizeEdges = ResizeEdges.None;
+
+        // Pressing a grip without changing the bounds must not save a temporary video fit.
+        if (_videoFitApplied) return;
 
         if (_hwnd == IntPtr.Zero || !IsWindow(_hwnd) || !GetWindowRect(_hwnd, out var rect)) return;
 
@@ -1231,6 +1244,12 @@ public sealed partial class WebFlyoutWindow : Window
     /// <summary>Grows the flyout to fill the screen, or puts it back to the size it was.</summary>
     private void ToggleMaximized()
     {
+        if (_isFullScreen)
+        {
+            _ = ExitPageFullscreenAsync();
+            return;
+        }
+
         if (_isMaximized)
             ExitMaximized(restoreGeometry: true);
         else
@@ -1294,8 +1313,8 @@ public sealed partial class WebFlyoutWindow : Window
     private void UpdateMaximizeButton()
     {
         if (_maximizeButton.Content is FontIcon icon)
-            icon.Glyph = MaximizeGlyph(_isMaximized);
-        ToolTipService.SetToolTip(_maximizeButton, MaximizeTooltip(_isMaximized));
+            icon.Glyph = MaximizeGlyph(_isMaximized || _isFullScreen);
+        ToolTipService.SetToolTip(_maximizeButton, MaximizeTooltip(_isMaximized || _isFullScreen));
     }
 
     private AppWindow GetAppWindow() =>
@@ -1470,7 +1489,9 @@ public sealed partial class WebFlyoutWindow : Window
 
         _preloadPending = true;
         PreRenderOffScreen();
-        _ = ShowHomeContentAsync();
+        // Preloading is an automatic reopen, so it must restore the saved tabs before creating
+        // a home tab. Loading home directly overwrites the previous session at startup.
+        _contentPreparation = PrepareContentAsync();
 
         // A page that never finishes loading must not be left rendering for the session. The
         // navigation is not cancelled — only the "it has settled" decision is forced.
@@ -1738,13 +1759,21 @@ public sealed partial class WebFlyoutWindow : Window
         // BringToFront exists to avoid. Left as it was, the launcher could never be shown again.
         if (IsMinimized) ShowWindow(_hwnd, SW_RESTORE);
 
+        // The page can leave fullscreen while hidden. Reconcile before choosing its
+        // presentation, without moving the parked window back onto the desktop.
+        if (_isFullScreen && _webView?.CoreWebView2?.ContainsFullScreenElement != true)
+            ApplyFullScreen(false);
+
+        _header.Visibility = _isFullScreen ? Visibility.Collapsed : Visibility.Visible;
+
         // Rebuilt per open: bookmarks can have been added or renamed since the last one.
         RebuildBookmarkBar();
 
-        _header.Visibility = Visibility.Visible;
-
         var placement = CalculatePlacement(screenX, screenY);
+        if (_isFullScreen)
+            placement = GetFullscreenReopenPlacement(screenX, screenY, placement);
         _lastEntranceEdge = placement.Edge;
+        _resizeAnchor = placement.ResizeAnchor;
 
         _idleUnloadTimer?.Stop();
 
@@ -1753,12 +1782,14 @@ public sealed partial class WebFlyoutWindow : Window
         // rectangle — for the frames XAML takes to paint. The flyout hides that by pre-rendering
         // parked off screen at startup; a web launcher deliberately builds nothing until it is
         // asked for, so it takes the plain show instead and slides on every open after this one.
-        if (AreAnimationsEnabled && _hasBeenShown)
+        if (AreAnimationsEnabled && _hasBeenShown && !_isFullScreen)
             ShowAnimated(placement);
         else
             ShowWithoutAnimation(placement);
 
         _hasBeenShown = true;
+
+        if (_isFullScreen) ConfigureFullscreenTitleBar();
 
         // PROTOTYPE: light up the launcher's pinned taskbar button while the flyout is on screen.
         // After the show, so the button appears with the window rather than ahead of it.
@@ -1774,6 +1805,7 @@ public sealed partial class WebFlyoutWindow : Window
     private void ShowWithoutAnimation(FlyoutPlacement placement)
     {
         _animationVersion++;
+        _isShowing = false;
         _isHiding = false;
         _isOpen = true;
         ClearFade();
@@ -1829,6 +1861,12 @@ public sealed partial class WebFlyoutWindow : Window
         CloseFolderPopups(0);
         HidePositionPicker();
 
+        // Capture before the exit animation moves the window. Parking coordinates
+        // and configured normal dimensions cannot describe this fullscreen view.
+        if (_isFullScreen && GetWindowRect(_hwnd, out var fullscreenRect))
+            _dismissedFullScreenRect = fullscreenRect;
+        _videoFitVersion++;
+
         _lastDismissed = DateTime.UtcNow;
         _animationVersion++;
 
@@ -1861,6 +1899,8 @@ public sealed partial class WebFlyoutWindow : Window
     private void ParkOffScreen()
     {
         _isOpen = false;
+        _fullscreenHeaderTimer?.Stop();
+        if (_isFullScreen) _header.Visibility = Visibility.Collapsed;
         ClearFade();
 
         // Drop the taskbar button before the window goes off screen. The park leaves it visible in
@@ -2093,7 +2133,7 @@ public sealed partial class WebFlyoutWindow : Window
     /// </remarks>
     private async Task PrepareContentAsync()
     {
-        // First open of the run, with pages remembered from the last one — see
+        // Open after startup or idle unload, with pages remembered from the last session. See
         // WebFlyoutWindow.Session.cs. Ahead of everything else, because it decides what the tabs
         // *are*; the branches below only choose between tabs that already exist.
         if (HasSessionToRestore)
@@ -2955,13 +2995,14 @@ public sealed partial class WebFlyoutWindow : Window
             return;
         }
 
-        // Nowhere to move a window that already fills the screen — and dragging one would write
-        // its position to WebFlyoutPosition, outliving the state that produced it.
-        if (_isFullScreen || _isMaximized) return;
+        // Display fullscreen stays fixed until explicitly exited with Restore.
+        if (_isFullScreen && !_fullScreenInWindow) return;
+        if (_isMaximized) return;
         if (!GetWindowRect(_hwnd, out _moveStartRect)) return;
 
         GetCursorPos(out _moveStartCursor);
         _isMovingWindow = true;
+        _videoFitVersion++;
 
         // A slide still in flight would otherwise keep writing its own positions.
         _animationVersion++;
@@ -3026,6 +3067,18 @@ public sealed partial class WebFlyoutWindow : Window
         if (!_isMovingWindow) return;
         _isMovingWindow = false;
 
+        // A fitted video's normal-size destination follows the drag too, so
+        // leaving fullscreen restores size without jumping back across the screen.
+        if (_isFullScreen && GetWindowRect(_hwnd, out var moved))
+        {
+            int deltaX = moved.Left - _moveStartRect.Left;
+            int deltaY = moved.Top - _moveStartRect.Top;
+            _preFullScreenRect.Left += deltaX;
+            _preFullScreenRect.Right += deltaX;
+            _preFullScreenRect.Top += deltaY;
+            _preFullScreenRect.Bottom += deltaY;
+        }
+
         if (sender is UIElement element) element.ReleasePointerCapture(e.Pointer);
         RememberFlyoutPosition();
         e.Handled = true;
@@ -3053,11 +3106,11 @@ public sealed partial class WebFlyoutWindow : Window
     }
 
     /// <summary>
-    /// Grows the flyout to fill its monitor while the page is showing something fullscreen, and
-    /// puts it back afterwards.
+    /// Hides the launcher controls while the page is fullscreen, optionally growing to fill its
+    /// monitor, and restores the previous presentation afterwards.
     /// </summary>
     /// <remarks>
-    /// The whole monitor, not the work area — fullscreen means over the taskbar too. The header
+    /// Display fullscreen covers the whole monitor, including the taskbar. The header
     /// and bookmark bar are hidden for the duration, and the root's fixed bar-mode height is
     /// released so the page can actually fill the window rather than being clipped to the size
     /// the flyout was.
@@ -3071,20 +3124,32 @@ public sealed partial class WebFlyoutWindow : Window
         {
             if (!GetWindowRect(_hwnd, out _preFullScreenRect)) return;
             _isFullScreen = true;
+            _videoFitVersion++;
+            _videoFitApplied = false;
+            _fullScreenInWindow = _launcher.WebFullScreenInWindow;
             UpdateResizeGripVisibility();
 
             // The bookmark bar goes with it: it follows the header's visibility, for the reason
             // recorded on ApplyBookmarkBarVisibility, because collapsing it here as well was what let a
             // later rebuild put it back while the page was still fullscreen.
             _header.Visibility = Visibility.Collapsed;
+            ConfigureFullscreenTitleBar();
             _root.ClearValue(FrameworkElement.HeightProperty);
             _root.VerticalAlignment = VerticalAlignment.Stretch;
 
-            // The page has to reach the actual edges. Two things otherwise frame it: the inset
-            // that keeps the browser clear of the resize grips, which shows as a band of acrylic
-            // down each side, and the window's rounded corners, which cut the corners off a
-            // screen-filling video.
-            _contentHost.Margin = new Thickness(0);
+            // Display fullscreen reaches the actual edges. Contained fullscreen keeps a narrow
+            // inset on all four sides so the hosted browser cannot intercept the resize grips.
+            _contentHost.Margin = new Thickness(_fullScreenInWindow ? GripThickness : 0);
+
+            // Window-contained fullscreen uses the same chrome and exit handling, but preserves
+            // the launcher's bounds and rounded corners. The page fills the current window.
+            if (_fullScreenInWindow)
+            {
+                if (_launcher.WebFitFullscreenToVideo && !_isMaximized && _webView?.CoreWebView2 is { } core)
+                    _ = FitFullscreenToVideoAsync(core, _videoFitVersion);
+                return;
+            }
+
             int squareCorners = DWMWCP_DONOTROUND;
             DwmSetWindowAttribute(_hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref squareCorners, sizeof(int));
 
@@ -3098,7 +3163,12 @@ public sealed partial class WebFlyoutWindow : Window
             return;
         }
 
+        bool restoreBounds = !_fullScreenInWindow || _videoFitApplied;
+        _videoFitVersion++;
+        _videoFitApplied = false;
         _isFullScreen = false;
+        _fullScreenInWindow = false;
+        ConfigureFullscreenTitleBar();
         UpdateResizeGripVisibility();
 
         _header.Visibility = Visibility.Visible;
@@ -3108,10 +3178,53 @@ public sealed partial class WebFlyoutWindow : Window
 
         RebuildBookmarkBar();
 
+        // A contained fullscreen session may have been resized. Keep its current bounds,
+        // including temporary drags made with Remember size changes turned off.
+        _dismissedFullScreenRect = null;
+        if (!restoreBounds || !_isOpen) return;
+
         SetWindowPos(_hwnd, IntPtr.Zero, _preFullScreenRect.Left, _preFullScreenRect.Top,
             _preFullScreenRect.Right - _preFullScreenRect.Left,
             _preFullScreenRect.Bottom - _preFullScreenRect.Top,
             SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    }
+
+    /// <summary>
+    /// Reopens a retained fullscreen page on the invocation monitor. Normal placement
+    /// remains its exit destination; contained fullscreen keeps its last pixel size.
+    /// No temporary fullscreen dimensions are written to the launcher settings.
+    /// </summary>
+    private FlyoutPlacement GetFullscreenReopenPlacement(int screenX, int screenY, FlyoutPlacement normal)
+    {
+        _preFullScreenRect = new RECT
+        {
+            Left = normal.Left,
+            Top = normal.Top,
+            Right = normal.Left + normal.Width,
+            Bottom = normal.Top + normal.Height
+        };
+
+        if (_fullScreenInWindow)
+        {
+            if (_dismissedFullScreenRect is not { } saved) return normal;
+            return CalculatePlacement(screenX, screenY,
+                sizeOverride: (saved.Right - saved.Left, saved.Bottom - saved.Top));
+        }
+
+        var monitor = new MONITORINFOEX { cbSize = Marshal.SizeOf<MONITORINFOEX>() };
+        var point = new POINT { X = screenX, Y = screenY };
+        if (!GetMonitorInfo(MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST), ref monitor))
+            return normal;
+
+        var bounds = monitor.rcMonitor;
+        return normal with
+        {
+            Left = bounds.Left,
+            Top = bounds.Top,
+            StartTop = bounds.Top,
+            Width = bounds.Right - bounds.Left,
+            Height = bounds.Bottom - bounds.Top
+        };
     }
 
     /// <summary>Steps back through the page's own history, not the flyout's.</summary>
@@ -3175,7 +3288,7 @@ public sealed partial class WebFlyoutWindow : Window
         // An empty tab overrides the launcher's setting: it has nothing else in it, and the only
         // thing to do with one is type an address. Hiding the bar there would leave a blank panel
         // with no way to use it.
-        bool visible = (_launcher.WebShowAddressBar || IsActiveTabBlank) && _header.Visibility == Visibility.Visible;
+        bool visible = !_isFullScreen && (_launcher.WebShowAddressBar || IsActiveTabBlank) && _header.Visibility == Visibility.Visible;
 
         _addressBar.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
 
@@ -3770,6 +3883,12 @@ public sealed partial class WebFlyoutWindow : Window
 
         bool nearBottom = screenY >= workArea.Bottom - edgeThreshold;
         bool nearTop = screenY <= workArea.Top + edgeThreshold;
+        // The reserved strip distinguishes a side taskbar from a horizontal
+        // taskbar's corner icon. Sides take precedence when both edges are near.
+        bool nearLeft = workArea.Left > monitorInfo.rcMonitor.Left
+            && screenX <= workArea.Left + edgeThreshold;
+        bool nearRight = workArea.Right < monitorInfo.rcMonitor.Right
+            && screenX >= workArea.Right - edgeThreshold;
 
         int left = screenX - (width / 2);
         int top = nearBottom
@@ -3777,6 +3896,12 @@ public sealed partial class WebFlyoutWindow : Window
             : nearTop
                 ? workArea.Top + gap
                 : screenY - height - gap;
+
+        if (nearLeft || nearRight)
+        {
+            left = nearLeft ? workArea.Left + gap : workArea.Right - width - gap;
+            top = screenY - height / 2;
+        }
 
         if (left < workArea.Left) left = workArea.Left;
         if (left + width > workArea.Right) left = workArea.Right - width;
@@ -3796,7 +3921,7 @@ public sealed partial class WebFlyoutWindow : Window
 
             int savedLeft = Math.Clamp(saved.X, area.Left, Math.Max(area.Left, area.Right - width));
             int savedTop = Math.Clamp(saved.Y, area.Top, Math.Max(area.Top, area.Bottom - height));
-            return new FlyoutPlacement(savedLeft, savedTop, savedTop, width, height, SlideEdge.Bottom);
+            return new FlyoutPlacement(savedLeft, savedTop, savedTop, width, height, SlideEdge.Bottom, WebAnchors.TopLeft);
         }
 
         // A fixed anchor replaces the tray-relative placement — on the monitor whose tray icon
@@ -3823,12 +3948,23 @@ public sealed partial class WebFlyoutWindow : Window
                 ? anchoredTop - slideDistance
                 : anchoredTop + slideDistance;
 
-            return new FlyoutPlacement(anchoredLeft, anchoredTop, anchoredStart, width, height, anchoredEdge);
+            return new FlyoutPlacement(anchoredLeft, anchoredTop, anchoredStart, width, height, anchoredEdge, anchor);
         }
 
         var edge = nearTop ? SlideEdge.Top : SlideEdge.Bottom;
         int startTop = edge == SlideEdge.Top ? top - slideDistance : top + slideDistance;
-        return new FlyoutPlacement(left, top, startTop, width, height, edge);
+        // Tray placement normally grows from its horizontal center. At a clamped screen edge,
+        // keep that edge fixed instead so a width change does not pull away from the tray.
+        int resizeAnchor = nearTop
+            ? left == workArea.Left ? WebAnchors.TopLeft : left + width == workArea.Right ? WebAnchors.TopRight : WebAnchors.TopCenter
+            : left == workArea.Left ? WebAnchors.BottomLeft : left + width == workArea.Right ? WebAnchors.BottomRight : WebAnchors.BottomCenter;
+        if (nearLeft || nearRight)
+        {
+            // Resizing a side-anchored launcher keeps its tray-facing edge and
+            // vertical center, matching the position used when it opens.
+            resizeAnchor = nearLeft ? WebAnchors.Left : WebAnchors.Right;
+        }
+        return new FlyoutPlacement(left, top, startTop, width, height, edge, resizeAnchor);
     }
 
     private int GetSlideDistancePx() => Math.Max(18, (int)Math.Round(SlideDistanceDip * GetScale()));

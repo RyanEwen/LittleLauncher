@@ -269,7 +269,7 @@ public sealed partial class WebFlyoutWindow
     /// </remarks>
     private void ApplyTabBarVisibility()
     {
-        _tabBar.Visibility = ShouldShowTabBar && _header.Visibility == Visibility.Visible
+        _tabBar.Visibility = !_isFullScreen && ShouldShowTabBar && _header.Visibility == Visibility.Visible
             ? Visibility.Visible
             : Visibility.Collapsed;
 

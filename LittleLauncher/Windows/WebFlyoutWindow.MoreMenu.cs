@@ -184,8 +184,7 @@ public sealed partial class WebFlyoutWindow
     }
 
     /// <summary>
-    /// The "Advanced" submenu: the three things a launcher can do to its own browser that nothing
-    /// else in the app exposes.
+    /// The "Advanced" submenu: fullscreen behavior and browser maintenance tools.
     /// </summary>
     /// <remarks>
     /// <para><b>Buried on purpose.</b> None of these is part of using a launcher, and two of them
@@ -201,6 +200,18 @@ public sealed partial class WebFlyoutWindow
     private MenuFlyoutSubItem BuildAdvancedSubmenu()
     {
         var submenu = new MenuFlyoutSubItem { Text = "Advanced" };
+
+        submenu.Items.Add(Toggle("Fullscreen fills launcher", _launcher.WebFullScreenInWindow, on =>
+        {
+            _launcher.WebFullScreenInWindow = on;
+        }));
+        var fitFullscreenToVideo = Toggle("Fit fullscreen to video", _launcher.WebFitFullscreenToVideo, on =>
+        {
+            _launcher.WebFitFullscreenToVideo = on;
+        });
+        fitFullscreenToVideo.IsEnabled = _launcher.WebFullScreenInWindow;
+        submenu.Items.Add(fitFullscreenToVideo);
+        submenu.Items.Add(new MenuFlyoutSeparator());
 
         // Nothing in the app opened DevTools. A web launcher is a browser with no menu bar, so the
         // only way in was a right-click on the page hoping the default context menu was still

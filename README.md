@@ -82,6 +82,13 @@ Little Launcher lives in the Windows system tray and/or taskbar. Clicking its ic
 - **Links open in tabs** — a link that wants a new window opens as another tab of the launcher rather than throwing you out into your browser, and a tab strip appears as soon as there is more than one. Sign-in popups work properly inside the flyout, tabs remember where you were across a dismissal, and if you would rather links just went to your browser, one menu item puts that back.
 - **An address bar when you want one** — a web launcher can show the page address under its header, and type a new one. Off by default, because most launchers open one known page.
 - **Options where you are looking** — the flyout header's **…** menu carries the settings you actually change while using a launcher — window mode, address bar, tab bar, reload on open, where links open, where the flyout opens, whether moving and resizing it sticks — without going to the settings window for them.
+- **Fullscreen videos inside the launcher**: keep page fullscreen inside a resizable launcher and optionally fit the window to the video's proportions from **… > Advanced**.
+- **Fullscreen window controls**: hover at the top edge to reveal the titlebar to restore or close,
+  or drag to reposition contained fullscreen. Display fullscreen stays fixed in place.
+  Reopening preserves fullscreen while the page remains loaded.
+- **Messaging presets**: choose WhatsApp, Google Messages, Messenger, Discord, or Teams from
+  **Add Launcher** to open a ready-to-sign-in web launcher. These stay active while hidden for
+  incoming messages; notification permissions are still yours to choose.
 - **Application & website shortcuts** — launch any executable or URL with one click from the flyout.
 - **Manual icon picker** — choose item icons from Fluent glyphs, emojis, bundled app icons, uploaded images, or the selfh.st icon catalog.
 - **View modes** — choose between list view, icon grid view, or a compact tray-sized small-icon grid with no labels.

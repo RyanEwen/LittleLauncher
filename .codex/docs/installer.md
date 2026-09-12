@@ -148,13 +148,15 @@ itself.
 
 ### Sideloading a build over the installed package
 
-**The output filename carries the version** (`LittleLauncher-1.33.0-ARM64.msix`), so `msix-output`
-accumulates builds instead of overwriting the same two names. It used to be
-`LittleLauncher-ARM64.msix`, which meant every build replaced the last one with nothing on disk to
-say which was which — and the file you hand to Partner Center is chosen by eye. Partner Center reads
-the version from the manifest either way; the name is so the human cannot pick the wrong one. The
-same change is in the CopilotRekey and ImmichDrive copies of the script — see the sibling-app note
-in the repo memory. CI globs `LittleLauncher-*.msix`, so it was unaffected.
+**The output filename carries the version** (`LittleLauncher-1.33.0-ARM64.msix`). After an unsigned
+Store package has been created successfully, the script removes MSIX files for older releases while
+preserving both architecture packages for the current version. This leaves one upload-ready pair
+after sequential x64 and ARM64 builds, keeps the previous release intact when a new build fails,
+and prevents a signed fourth-component local-test build from deleting the Store upload artifacts.
+It used to write `LittleLauncher-ARM64.msix`, which left nothing on disk to identify the version,
+and later accumulated every version indefinitely. Partner Center reads the version from the
+manifest either way; the name is so the human cannot pick the wrong file. CI globs
+`LittleLauncher-*.msix`, so it is unaffected.
 
 **Plain `build-msix.ps1` (no arguments) is the wrong tool for "put my build on this machine".** It
 stamps the *dev* cert's subject (`CN=RyanEwen`) as the publisher, and the publisher is part of the

@@ -111,6 +111,37 @@ Write-Host "Version: $msixVersion (from Directory.Build.props)" -ForegroundColor
 # the human picking the file cannot get it wrong.
 $msixFile    = Join-Path $outputDir "LittleLauncher-$version-$Platform.msix"
 
+<#
+.SYNOPSIS
+    Removes package files from releases other than the one just built.
+
+.DESCRIPTION
+    Keeps both architecture packages for the current release so sequential x64 and ARM64 builds
+    produce one upload-ready pair. Cleanup runs only after packaging and signing succeed, leaving
+    the previous release available if the current build fails.
+#>
+function Remove-OldMsixArtifacts {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Directory,
+
+        [Parameter(Mandatory)]
+        [string]$CurrentVersion
+    )
+
+    $currentReleasePattern = "^LittleLauncher-$([regex]::Escape($CurrentVersion))-(x64|ARM64)\.msix$"
+    $oldPackages = Get-ChildItem $Directory -File -Filter "LittleLauncher-*.msix" |
+        Where-Object { $_.Name -notmatch $currentReleasePattern }
+
+    foreach ($oldPackage in $oldPackages) {
+        Remove-Item -LiteralPath $oldPackage.FullName -Force
+    }
+
+    if ($oldPackages.Count -gt 0) {
+        Write-Host "  Removed $($oldPackages.Count) package(s) from older releases"
+    }
+}
+
 # ── Signing certificate (auto-generate if missing) ─────────────────────────────
 if ($NoSign) {
     Write-Host "Skipping signing (Store upload mode)" -ForegroundColor Yellow
@@ -290,6 +321,12 @@ if ($NoSign) {
         & $signtool sign /fd SHA256 /a /f $pfxFile /p "LittleLauncher" $msixFile
     }
     if ($LASTEXITCODE -ne 0) { Write-Error "signtool sign failed"; exit 1 }
+}
+
+# Store upload builds keep the output directory limited to their current release without
+# discarding the other architecture. Signed local-test builds preserve that upload-ready pair.
+if ($NoSign) {
+    Remove-OldMsixArtifacts -Directory $outputDir -CurrentVersion $version
 }
 
 # ── Done ──────────────────────────────────────────────────────────────────────

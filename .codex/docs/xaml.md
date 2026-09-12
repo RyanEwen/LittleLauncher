@@ -66,6 +66,11 @@ result can feed back into the geometry that produced it. See the "compute, don't
 
 ## Backdrops
 
+The web launcher's fullscreen titlebar reuses its existing header by moving it from the chrome
+stack into the root grid's content row as a top-aligned overlay. Its hover visibility must not
+reveal the address, tab, or bookmark bars, which explicitly check fullscreen state. See
+[web-launchers.md](web-launchers.md) and `WebFlyoutWindow.FullscreenTitleBar.cs`.
+
 - **SettingsWindow** uses `MicaBackdrop`
 - **FlyoutWindow** uses a transparent backdrop
 

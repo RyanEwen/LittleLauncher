@@ -8,6 +8,8 @@ Read and follow [xaml.md](../../.codex/docs/xaml.md) before changing the code de
 
 `LaunchersPage` drives per-launcher tray/pin icons. When editing it, follow the icon system conventions: [.codex/docs/icons.md](../../.codex/docs/icons.md).
 
+Its messaging preset creation flow also follows [web-launchers.md](../../.codex/docs/web-launchers.md).
+
 `SyncPage` is the UI for global sync and swaps panels per sync provider. When editing it, follow the sync conventions: [.codex/docs/sync.md](../../.codex/docs/sync.md).
 
 ## Bookmark UI

@@ -286,6 +286,8 @@ internal static class LauncherPayload
         existing.WebHiddenPolicy = downloaded.WebHiddenPolicy;
         existing.WebIdleUnloadMinutes = downloaded.WebIdleUnloadMinutes;
         existing.WebReloadOnShow = downloaded.WebReloadOnShow;
+        existing.WebFullScreenInWindow = downloaded.WebFullScreenInWindow;
+        existing.WebFitFullscreenToVideo = downloaded.WebFitFullscreenToVideo;
         existing.WebLinksInBrowser = downloaded.WebLinksInBrowser;
         existing.WebPinFlyout = downloaded.WebPinFlyout;
         existing.WebSharedProfile = downloaded.WebSharedProfile;

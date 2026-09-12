@@ -395,6 +395,16 @@ public partial class Launcher : ObservableObject
     [ObservableProperty]
     public partial bool WebShowAddressBar { get; set; }
 
+    /// <summary>Keep fullscreen web content inside the launcher window instead of filling the display.</summary>
+    /// <remarks>Defaults to <c>false</c> to preserve display fullscreen for existing launchers.</remarks>
+    [ObservableProperty]
+    public partial bool WebFullScreenInWindow { get; set; }
+
+    /// <summary>Fit the launcher to a video's aspect ratio when fullscreen stays inside the launcher.</summary>
+    /// <remarks>Defaults to <c>false</c> so entering fullscreen does not resize existing launchers.</remarks>
+    [ObservableProperty]
+    public partial bool WebFitFullscreenToVideo { get; set; }
+
     /// <summary>
     /// Keep the flyout on screen when it loses focus, instead of dismissing like a flyout.
     /// </summary>

@@ -12,7 +12,9 @@ using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
+using static LittleLauncher.Classes.NativeMethods;
 using Launcher = LittleLauncher.Models.Launcher;
 
 namespace LittleLauncher.Pages;
@@ -27,6 +29,7 @@ public sealed partial class LaunchersPage : Page
     public LaunchersPage()
     {
         InitializeComponent();
+        BuildWebPresetMenu();
         RebuildLauncherCards();
 
         if (PendingSettingsLauncher is not null)
@@ -438,6 +441,52 @@ public sealed partial class LaunchersPage : Page
 
     // ── Event handlers ──────────────────────────────────────────────
 
+    /// <summary>Adds the messaging templates beside the existing custom creation choices.</summary>
+    private void BuildWebPresetMenu()
+    {
+        int index = AddLauncherMenu.Items.IndexOf(SharedLauncherSeparator);
+        AddLauncherMenu.Items.Insert(index++, new MenuFlyoutSeparator());
+        foreach (var preset in WebLauncherPresets.All)
+        {
+            var item = new MenuFlyoutItem
+            {
+                Text = preset.Name,
+                Icon = new FontIcon { Glyph = "\uE8F2" },
+                Tag = preset,
+            };
+            ToolTipService.SetToolTip(item, Application.Current.Resources["MessagingPresetHint"]);
+            item.Click += AddWebPreset_Click;
+            AddLauncherMenu.Items.Insert(index++, item);
+        }
+    }
+
+    /// <summary>Creates a complete preset and opens its page after the Add menu dismisses.</summary>
+    private void AddWebPreset_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuFlyoutItem { Tag: WebLauncherPreset preset }) return;
+        var launcher = preset.Create(SettingsManager.Current.Launchers.Select(item => item.Name));
+        RegisterLauncher(launcher);
+
+        // Site icons arrive through the same bookmark/page favicon pipeline as a custom launcher.
+        _ = WebFlyoutWindow.FetchBookmarkIconAsync(launcher, launcher.WebBookmarks[0]);
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (MainWindow.Current is not { } owner) return;
+            GetCursorPos(out var point);
+            LauncherPanels.Toggle(owner, point.X, point.Y, launcher.Id);
+        });
+    }
+
+    /// <summary>Persists a new launcher and refreshes its tray icon and settings card together.</summary>
+    private void RegisterLauncher(Launcher launcher)
+    {
+        SettingsManager.Current.Launchers.Add(launcher);
+        SettingsManager.SaveSettings();
+        AutoSyncService.NotifyLaunchersChanged();
+        MainWindow.Current?.RefreshTrayIcons();
+        RebuildLauncherCards();
+    }
+
     private async void AddLauncherButton_Click(object sender, RoutedEventArgs e)
     {
         var newLauncher = new Launcher
@@ -453,14 +502,7 @@ public sealed partial class LaunchersPage : Page
             // swaps its browser profile and signs it out.
             WebSharedProfile = true,
         };
-        SettingsManager.Current.Launchers.Add(newLauncher);
-        SettingsManager.SaveSettings();
-        AutoSyncService.NotifyLaunchersChanged();
-
-        // Tell MainWindow to create a tray icon for the new launcher
-        MainWindow.Current?.RefreshTrayIcons();
-
-        RebuildLauncherCards();
+        RegisterLauncher(newLauncher);
 
         // Show settings dialog for new launcher
         await ShowLauncherSettingsDialog(newLauncher, isNewLauncher: true);
@@ -497,12 +539,7 @@ public sealed partial class LaunchersPage : Page
             // AddLauncherButton_Click for why this is set at creation and not as a model default.
             WebSharedProfile = true,
         };
-        SettingsManager.Current.Launchers.Add(newLauncher);
-        SettingsManager.SaveSettings();
-        AutoSyncService.NotifyLaunchersChanged();
-
-        MainWindow.Current?.RefreshTrayIcons();
-        RebuildLauncherCards();
+        RegisterLauncher(newLauncher);
 
         // No edit mode afterwards, unlike a shortcut launcher: a web launcher has no items, and
         // its settings window is the whole of its setup.

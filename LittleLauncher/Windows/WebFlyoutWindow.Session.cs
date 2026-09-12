@@ -16,7 +16,7 @@ namespace LittleLauncher.Windows;
 /// <para><c>_rememberedUrl</c> already carries the launcher's own tab through an idle unload, but
 /// only in memory — quitting Little Launcher forgot it, and forgot every other tab outright. A
 /// launcher used as a small browser therefore came back at its address with the rest gone.</para>
-/// <para><b>Written as it changes, read once per launcher per run.</b> Restoring happens when the
+/// <para><b>Written as it changes, restored whenever its browsers have been unloaded.</b> Restoring happens when the
 /// launcher is <em>opened</em>, never at startup, which is what keeps the resource contract: a
 /// launcher nobody opens still builds nothing, and one that is opened pays exactly what its tabs
 /// cost — which is what they were already costing before the restart. All but the active tab are
@@ -27,13 +27,6 @@ namespace LittleLauncher.Windows;
 /// </remarks>
 public sealed partial class WebFlyoutWindow
 {
-    /// <summary>True once this launcher has restored, so a later open does not do it again.</summary>
-    /// <remarks>
-    /// A restore is for the first open of a run. After that the tabs are live and are themselves
-    /// the session — re-reading the stored list would resurrect tabs the user has since closed.
-    /// </remarks>
-    private bool _sessionRestored;
-
     /// <summary>Guards the save while a restore is mid-flight.</summary>
     /// <remarks>
     /// Restoring creates tabs, and creating a tab saves the session. Without this the half-built
@@ -69,7 +62,9 @@ public sealed partial class WebFlyoutWindow
             // during tab creation, found nothing, and wrote nothing. A launcher whose single tab
             // then never changed had no session recorded at all, which is exactly what "my tabs
             // are not coming back" looked like.
-            if (string.IsNullOrEmpty(url)) url = tab.NavigatedUrl;
+            // The initial document can also be about:blank while the requested page is pending.
+            // Keep that destination until the browser has committed a real address.
+            if (IsBlankAddress(url)) url = tab.NavigatedUrl;
 
             url = NormalizeUrl(url);
             if (string.IsNullOrEmpty(url) || url.Equals("about:blank", StringComparison.OrdinalIgnoreCase)) continue;
@@ -117,9 +112,9 @@ public sealed partial class WebFlyoutWindow
         SettingsManager.SaveSettings();
     }
 
-    /// <summary>True when there is a stored session and this run has not used it yet.</summary>
+    /// <summary>True when stored pages have no live browsers and are not already being restored.</summary>
     private bool HasSessionToRestore =>
-        !_sessionRestored && _tabs.Count == 0 && _launcher.WebSessionTabs is { Count: > 0 };
+        !_restoringSession && _tabs.Count == 0 && _launcher.WebSessionTabs is { Count: > 0 };
 
     /// <summary>
     /// Rebuilds the tabs this launcher had open.
@@ -133,12 +128,12 @@ public sealed partial class WebFlyoutWindow
     {
         var urls = _launcher.WebSessionTabs?.ToList() ?? [];
 
-        // Set before the first await: a second show while this is running must not start again.
-        _sessionRestored = true;
         if (urls.Count == 0) return;
 
         int active = urls.Count == 0 ? 0 : Math.Clamp(_launcher.WebSessionActiveTab, 0, urls.Count - 1);
 
+        // Set before the first await: a second show must not start another restore. Once the
+        // browsers are unloaded, an empty live list allows the next open to restore them again.
         _restoringSession = true;
         try
         {

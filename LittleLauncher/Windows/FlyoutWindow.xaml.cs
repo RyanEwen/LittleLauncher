@@ -1566,8 +1566,19 @@ public partial class FlyoutWindow : Window
         int edgeThreshold = (int)(16 * scale);
         bool nearBottom = screenY >= workArea.Bottom - edgeThreshold;
         bool nearTop = screenY <= workArea.Top + edgeThreshold;
+        // Require a reserved side strip so a bottom/top tray icon at a corner is
+        // not mistaken for a vertical taskbar. Test sides first at their corners.
+        bool nearLeft = workArea.Left > monitorInfo.rcMonitor.Left
+            && screenX <= workArea.Left + edgeThreshold;
+        bool nearRight = workArea.Right < monitorInfo.rcMonitor.Right
+            && screenX >= workArea.Right - edgeThreshold;
 
-        if (nearBottom)
+        if (nearLeft || nearRight)
+        {
+            left = nearLeft ? workArea.Left + gap : workArea.Right - flyoutWidth - gap;
+            top = screenY - flyoutHeight / 2;
+        }
+        else if (nearBottom)
         {
             // Taskbar at bottom (common case): position just above taskbar
             top = workArea.Bottom - flyoutHeight - gap;

@@ -1,7 +1,7 @@
 > **Scope:** Use when working on web launchers — the WebView2 flyout, its resource policy, or the
 > per-launcher web settings. Covers why the browser is torn down rather than kept warm, the
 > WebView2 APIs that make that work, and the WinUI-specific limits worked around here.
-> **Governs:** `**/WebFlyoutWindow.cs`, `**/LauncherPanels.cs`, the `Web*` properties on `Models/Launcher.cs`.
+> **Governs:** `**/WebFlyoutWindow.cs`, `**/LauncherPanels.cs`, `Models/WebLauncherPresets.cs`, the `Web*` properties on `Models/Launcher.cs`, and preset creation in `Pages/LaunchersPage.xaml*`.
 
 # Web Launchers
 
@@ -9,7 +9,22 @@ A launcher whose `Kind` is `LauncherKinds.Web` opens `WebFlyoutWindow` instead o
 a tray-anchored WebView2 on `Launcher.WebUrl`, or on a bar of bookmarks (see below). The motivating case is a Home Assistant dashboard —
 camera cards and an agenda, one tray click away, and costing nothing while it is not being looked at.
 
-## Routing — never branch on kind at the call site
+## Messaging creation presets
+
+The Add Launcher menu lists WhatsApp, Google Messages, Messenger, Discord, and Teams directly.
+Selecting one creates and saves an ordinary web launcher and opens the official service page
+without a settings dialog. `Models/WebLauncherPresets.cs` owns their names, addresses, sizes,
+and factory. Each instance gets a fresh ID and independent bookmark objects; duplicate names
+receive a numeric suffix. Presets are only creation defaults and never overwrite later edits.
+
+Messaging presets use the existing shared-profile default and `KeepRunning` hidden policy,
+so closing the panel does not suspend message delivery. The menu tooltip explains background
+activity and sign-in. Notification, microphone, and camera permissions still use the normal
+prompts. The service's favicon follows the existing bookmark/page icon pipeline. Normal web
+creation and shortcut creation share `LaunchersPage.RegisterLauncher` for save, sync, and tray
+registration. Preset dimensions are DIPs and opening still clamps to the monitor work area.
+
+## Routing and launcher-kind dispatch
 
 `Windows/LauncherPanels.cs` is the only place that decides which window a launcher opens. Tray
 clicks, the companion exe's `PostMessage`, launcher deletion and sync-driven removal all go through
@@ -132,6 +147,8 @@ browser, so the usual `WS_THICKFRAME` + `WM_NCCALCSIZE` trick has nothing to hit
 
 Resizing is therefore done in XAML: `AddResizeGrips` overlays four transparent edge strips and four
 corner squares (`Grid.RowSpan` across the whole window), each carrying its `ResizeEdges` in `Tag`.
+The span uses `root.RowDefinitions.Count`, including the bookmarks row. A fixed two-row span left
+the bottom edge and corners above the bookmark bar instead of at the window's actual bottom.
 A press captures the pointer and records the cursor and window rects in *screen* coordinates; each
 move recomputes the rect from the raw cursor delta and calls `SetWindowPos`. Two details matter:
 
@@ -976,6 +993,58 @@ too**: "these are the bookmarks the bar already holds" is a rebuild that was not
 decision that the bar should be on screen. The address bar and the tab strip were already gated on
 the header for the same reason; the bar is a row of its own below the page, so it had to be gated
 explicitly rather than by sitting in the same `StackPanel`.
+
+**Fullscreen can stay inside the launcher.** The **… > Advanced > Fullscreen fills launcher**
+toggle persists `Launcher.WebFullScreenInWindow` per launcher and syncs with its settings. It is
+off by default, preserving display fullscreen. When enabled, `ApplyFullScreen` hides the same
+header and bars, but keeps the resize grips, a narrow content inset for their hit targets, and
+rounded corners. Resizing uses the normal Remember size changes policy, and exiting keeps the
+resized bounds. Maximized launchers still cannot be resized. Display fullscreen alone restores its
+original bounds on exit. The mode is captured on entry so a settings sync cannot change the active
+session's resize or restoration policy. The choice applies to the next page fullscreen
+request; it does not change the header's maximize behavior.
+
+Closing and reopening a still-loaded fullscreen page retains its fullscreen presentation:
+the header and bars stay hidden, display fullscreen fills the invocation monitor, and contained
+fullscreen retains its last size (including a video fit), clamped by normal placement rules.
+Capture the size before the hide animation, never from parked coordinates. Reopening does not
+animate through the normal size, and normal placement remains the destination when fullscreen
+exits. A fullscreen exit while hidden must not move the parked window onscreen. Idle unload
+still destroys the page and its fullscreen session; this state is not persisted across unloads.
+
+Fullscreen titlebar behavior lives in `WebFlyoutWindow.FullscreenTitleBar.cs`. The existing
+header is reparented as a top overlay, revealed within six dips of the window's top edge,
+and hidden after the pointer leaves for 300 ms. Its menu keeps it revealed while open.
+The restore control exits page fullscreen; close dismisses the launcher. Tabs, address bar,
+and bookmarks remain hidden independently of titlebar visibility, so revealing it cannot
+change the browser viewport. The pointer watch uses screen coordinates because WebView2
+consumes pointer events, and stops on dismissal and fullscreen exit.
+The overlay uses the opaque `SolidBackgroundFillColorBaseBrush` so page content cannot show
+through its controls. Dragging the revealed titlebar moves contained fullscreen without changing
+its size. Display fullscreen cannot be dragged or resized; Restore explicitly exits fullscreen
+before window geometry can change. The position picker is unavailable during fullscreen.
+Dragging cancels pending video fitting, and the normal-size restore destination follows a
+fitted video's move.
+
+**Fit fullscreen to video** in the same Advanced menu optionally fits the launcher's viewport to
+the fullscreen video's intrinsic aspect ratio (`WebFlyoutWindow.VideoFit.cs`). It is off by default
+and only applies inside a non-maximized launcher. YouTube's fullscreen player wrapper is searched
+for its visible video, so its letterboxed container dimensions are never mistaken for the video's.
+The fit keeps the current width unless minimum dimensions or the monitor work area require a change;
+it accounts for the resize inset and clamps the position to the current monitor. It resizes around
+the current placement anchor: bottom edges stay fixed for bottom anchors, top edges for top anchors,
+and centered axes stay centered. Placement carries this anchor through temporary position-picker
+moves too. Tray placement beside a reserved left/right taskbar strip centers vertically on the
+invocation point, clamps to the work area, and preserves its tray-facing edge and vertical center
+when resized. Top/bottom tray placement preserves its top/bottom edge and horizontal center, or
+its clamped side edge; a remembered position preserves the top-left corner. A manually moved window keeps that
+anchor relative to its current bounds, without jumping back to its configured screen position.
+It does not persist
+an automatic size: exiting restores the previous bounds unless the user manually resized afterward.
+Manual resize cancels any pending fit and uses the normal Remember size changes policy.
+Metadata is retried briefly on entry, with stale results ignored after exit, a tab change, or a drag.
+Non-video fullscreen and videos inside inaccessible frames leave the size unchanged. Black bars
+encoded into the video itself cannot be removed by fitting its dimensions.
 
 **There is no collapsed state.** A launcher used to open as a bare 34px strip and grow when a
 bookmark was clicked; with one mode and an address that always exists, nothing could ever put it
@@ -2073,8 +2142,12 @@ no browser-action UI** — so `Services/BrowserExtensionService.cs` and
   its tabs cost — which is what they were already costing before the restart. The active tab is
   created first and in the foreground; the rest follow behind it, so only the page being looked at
   renders.
-- **Once per run** (`_sessionRestored`). After the first open the tabs are live and are themselves
-  the session; re-reading the stored list would resurrect tabs the user has since closed.
+- **Restore whenever no live tabs remain**, including after an idle unload. Live tabs and an
+  in-progress restore prevent duplicate restoration. A once-per-run flag previously blocked
+  restoration after idle unload, so reopening created one home tab and overwrote the saved list.
+- **Startup preloading uses `PrepareContentAsync` too.** Keep-running launchers must restore
+  their session before creating a home tab. Calling `ShowHomeContentAsync` directly from preload
+  replaced saved tabs with the home page before the user even opened the launcher.
 - **The save is guarded while a restore is mid-flight** (`_restoringSession`), or the half-built
   list overwrites the stored one as each tab is created.
 - **Saved from `NavigationCompleted`, not only from `RefreshTabBar`.** This was the bug that made
@@ -2084,7 +2157,8 @@ no browser-action UI** — so `Services/BrowserExtensionService.cs` and
   not per active tab.
 - **A browser that has not navigated yet reports `Source` as the empty string, not `null`.** So
   `Source ?? NavigatedUrl` never fired, and the save that runs during tab creation found nothing to
-  record. Test the string, not the reference.
+  record. Test with `IsBlankAddress`, including `about:blank`: a pending initial document must not
+  erase the requested destination before navigation commits.
 - Each save compares against what is stored and writes nothing when the set has not moved — it runs
   on every navigation of every tab, and each write is the whole settings file.
 - **Closing the last tab clears the session.** It is an explicit "I am done with this", not a place

@@ -143,6 +143,12 @@ model default, which would have flipped it on for every existing launcher.
 - `WebHiddenPolicy` (`int`) — `WebHiddenPolicies.UnloadWhenIdle` (0, default) / `Suspend` (1) / `KeepRunning` (2)
 - `WebIdleUnloadMinutes` (`int`) — 0 means the default; read `ResolvedWebIdleUnloadMinutes`
 - `WebReloadOnShow` (`bool`) — re-fetch on every open
+- `WebFullScreenInWindow` (`bool`): keep fullscreen web content inside the launcher window.
+  Defaults `false`, preserving display fullscreen for existing launchers. Saved per launcher and
+  copied by global sync; toggled in the flyout's **… > Advanced** menu.
+- `WebFitFullscreenToVideo` (`bool`): fit the launcher to the video's aspect ratio when entering
+  fullscreen inside the launcher. Defaults `false`; saved per launcher and copied by global sync.
+  **… > Advanced > Fit fullscreen to video** is enabled only when **Fullscreen fills launcher** is on.
 - `WebShowAddressBar` (`bool`) — keep an address bar under the flyout's header. Defaults `false`,
   which is both the safe direction under `WhenWritingDefault` and the behaviour that shipped
   first. Off does not mean unreachable: the header carries a button that reveals the bar for the

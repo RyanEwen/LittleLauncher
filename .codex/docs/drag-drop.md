@@ -40,6 +40,11 @@ button, Escape (first press exits edit mode, second dismisses), or hiding the fl
 
 ### Geometry contract
 
+Tray placement recognizes reserved left/right taskbar strips before checking top/bottom
+proximity. Side taskbars place the flyout beside the taskbar and vertically centered on the
+invocation point, clamped to the monitor work area. Top/bottom taskbars and interior overflow
+popup clicks retain their existing below/above placement. Web flyouts follow the same rule.
+
 Edit mode may grow the flyout's **height**. It must never change its **width**, or the size of
 any item or group.
 

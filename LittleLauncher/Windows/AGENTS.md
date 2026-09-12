@@ -17,3 +17,6 @@ Flyout item rendering, favicon/app-icon fetching, and `InvalidateItems()` are pa
 and torn down early, and several WinUI WebView2 limits are worked around there:
 
 Read and follow [web-launchers.md](../../.codex/docs/web-launchers.md) before changing the code described above.
+
+The same guide governs `WebFlyoutWindow.FullscreenTitleBar.cs`, including its fullscreen
+header overlay and hover lifecycle.

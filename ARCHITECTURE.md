@@ -2,6 +2,13 @@
 
 ## High-level flow
 
+Messaging presets in `Models/WebLauncherPresets.cs` feed the existing launcher creation and
+browser paths. They create normal editable launchers, with no new persisted preset identity.
+
+Web fullscreen retains its presentation across dismissal while the page remains loaded.
+`WebFlyoutWindow.FullscreenTitleBar.cs` reuses the existing header as a hover-revealed overlay
+with window controls and dragging, without changing the fullscreen browser viewport.
+
 ```
 App.xaml  →  MainWindow (invisible, owns tray icon)
                 ├── LauncherPanels (routes a tray click by Launcher.Kind)
@@ -103,7 +110,10 @@ flyout uses (pin open, drop always-on-top, restore activation on close).
 The header also **maximizes the flyout to the monitor's work area, temporarily**: unlike a drag, it
 writes nothing to the launcher and is dropped when the flyout is dismissed, so the next open is at
 the configured size again. That is a different thing from page fullscreen, which the page enters,
-which takes the whole monitor over the taskbar, and which hides the chrome for the duration.
+which hides the chrome for the duration. It takes the whole monitor by default, or stays inside
+the resizable launcher under **Fullscreen fills launcher**. **Fit fullscreen to video** optionally
+fits that viewport to the video's intrinsic aspect ratio (`Windows/WebFlyoutWindow.VideoFit.cs`).
+The automatic size is temporary; a manual resize takes over and follows the normal persistence policy.
 
 **Double-clicking the caption does the same thing**, in both directions, because that is what a
 double-click on a title bar means on every other window. The caption is the three strips that

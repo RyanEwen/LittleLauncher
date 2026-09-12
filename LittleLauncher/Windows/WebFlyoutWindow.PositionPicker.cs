@@ -122,6 +122,7 @@ public sealed partial class WebFlyoutWindow
 
     private void SchedulePickerOpen()
     {
+        if (_isFullScreen) return;
         if (_positionPicker?.IsOpen == true) return;
 
         _pickerOpenTimer ??= DispatcherQueue.CreateTimer();
@@ -494,6 +495,7 @@ public sealed partial class WebFlyoutWindow
 
         MoveResize(placement.Left, placement.Top, placement.Width, placement.Height);
         _lastEntranceEdge = placement.Edge;
+        _resizeAnchor = placement.ResizeAnchor;
 
         // A move is a move however it was made: a launcher set to open where it was last put should
         // follow this one exactly as it follows a drag of the header. Self-gating — it writes

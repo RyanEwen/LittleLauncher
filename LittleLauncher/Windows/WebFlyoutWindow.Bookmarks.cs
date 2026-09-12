@@ -169,7 +169,7 @@ public sealed partial class WebFlyoutWindow
     /// bar be visible" rather than one per caller.</para>
     /// </remarks>
     private void ApplyBookmarkBarVisibility() =>
-        _bookmarkBar.Visibility = IsBarMode && _header.Visibility == Visibility.Visible
+        _bookmarkBar.Visibility = !_isFullScreen && IsBarMode && _header.Visibility == Visibility.Visible
             ? Visibility.Visible
             : Visibility.Collapsed;
 
