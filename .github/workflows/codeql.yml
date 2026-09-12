@@ -45,8 +45,7 @@ jobs:
         include:
         - language: actions
           build-mode: none
-        # Buildless analysis so CI never has to compile the app (a manual build
-        # would need the private external/promo submodule checked out).
+        # Buildless analysis keeps this workflow focused on CodeQL's source analysis.
         - language: csharp
           build-mode: none
         # CodeQL supports the following values keywords for 'language': 'actions', 'c-cpp', 'csharp', 'go', 'java-kotlin', 'javascript-typescript', 'python', 'ruby', 'rust', 'swift'
