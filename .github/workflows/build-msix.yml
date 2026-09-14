@@ -125,8 +125,7 @@ jobs:
           fi
 
           BODY=$(git log "$RANGE" --pretty=format:"- %s" --no-merges \
-            | grep -vi "^- Bump version" \
-            | grep -vi "^- Merge branch")
+            | awk 'tolower($0) !~ /^- (bump version|merge branch)/')
 
           if [ -z "$BODY" ]; then
             BODY="- Maintenance release (no notable changes)"
@@ -137,6 +136,8 @@ jobs:
             echo "## What's Changed"
             echo ""
             echo "$BODY"
+            echo ""
+            echo "*AI disclosure: this release and the related code were written with the assistance of AI.*"
             echo "RELEASE_EOF"
           } >> "$GITHUB_OUTPUT"
 

@@ -36,6 +36,11 @@ Pushing a tag matching `v*` triggers `.github/workflows/build-msix.yml` which:
 
 The Store package is **not** built or submitted by that workflow. `store-publish.yml` only proves the packaging still works; the `.msix` files you upload are built locally and submitted in Partner Center by hand — see [installer.md](installer.md).
 
+Release-note filtering must succeed even when only version-bump commits remain, so the maintenance
+fallback can run. The workflow uses `awk` rather than `grep`, whose no-match exit status aborts Bash
+under `-e`. If publication fails after successful builds, the matching CI build artifacts can be
+packaged as portable ZIPs and published against the existing tag without rewriting it.
+
 ## How to release
 
 1. Edit `Directory.Build.props` — change `<Version>X.Y.Z</Version>`
