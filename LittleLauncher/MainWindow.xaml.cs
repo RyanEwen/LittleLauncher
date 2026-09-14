@@ -333,15 +333,15 @@ public sealed partial class MainWindow : Window
     /// Opens a launcher's panel from a context with no pointer position — a clicked toast.
     /// </summary>
     /// <remarks>
-    /// Anchored the same way a pinned shortcut's signal is: on the taskbar button if the launcher
-    /// has one, otherwise on the cursor, which on a toast click is the corner the tray lives in
-    /// anyway. Web launchers with an anchor or a remembered position ignore both and place
-    /// themselves — see <c>CalculatePlacement</c>.
+    /// Prefer the launcher's tray icon, then its taskbar button if the icon is unavailable.
+    /// The cursor over a toast is only a last resort. Explicit placement settings still apply
+    /// inside the panel's placement calculation.
     /// </remarks>
     internal void OpenLauncherPanel(string launcherId)
     {
         GetCursorPos(out var pt);
-        TryResolveLauncherAnchorPoint(launcherId, pt.X, pt.Y, out int anchorX, out int anchorY);
+        if (!TryResolveTrayAnchorPoint(launcherId, pt.X, pt.Y, out int anchorX, out int anchorY))
+            TryResolveLauncherAnchorPoint(launcherId, pt.X, pt.Y, out anchorX, out anchorY);
         DispatcherQueue.TryEnqueue(() => LauncherPanels.Toggle(this, anchorX, anchorY, launcherId));
     }
 
@@ -1587,6 +1587,36 @@ public sealed partial class MainWindow : Window
         catch { /* best-effort cleanup */ }
     }
 
+    /// <summary>
+    /// Resolves the center of this launcher's registered tray icon for tray and notification
+    /// activation. Returns false and preserves the supplied fallback if the shell has no bounds.
+    /// </summary>
+    private bool TryResolveTrayAnchorPoint(string launcherId, int fallbackX, int fallbackY,
+        out int anchorX, out int anchorY)
+    {
+        anchorX = fallbackX;
+        anchorY = fallbackY;
+        if (!_trayIcons.TryGetValue(launcherId, out var entry) || !entry.IsAdded) return false;
+
+        var identifier = new NOTIFYICONIDENTIFIER
+        {
+            cbSize = (uint)Marshal.SizeOf<NOTIFYICONIDENTIFIER>(),
+            hWnd = _hwnd,
+            uID = entry.Uid,
+            guidItem = entry.Guid,
+        };
+        int result = Shell_NotifyIconGetRect(ref identifier, out var iconRect);
+        if (result != 0 || iconRect.Right <= iconRect.Left || iconRect.Bottom <= iconRect.Top)
+        {
+            Logger.Debug("Tray anchor unavailable for launcher {Id}: HRESULT {Result}", launcherId, result);
+            return false;
+        }
+
+        anchorX = iconRect.Left + (iconRect.Right - iconRect.Left) / 2;
+        anchorY = iconRect.Top + (iconRect.Bottom - iconRect.Top) / 2;
+        return true;
+    }
+
     private bool TryResolveLauncherAnchorPoint(string launcherId, int fallbackX, int fallbackY, out int anchorX, out int anchorY)
     {
         anchorX = fallbackX;
@@ -1742,7 +1772,9 @@ public sealed partial class MainWindow : Window
                 {
                     GetCursorPos(out var pt);
                     string lid = targetLauncherId;
-                    DispatcherQueue.TryEnqueue(() => LauncherPanels.Toggle(this, pt.X, pt.Y, lid));
+                    TryResolveTrayAnchorPoint(lid, pt.X, pt.Y, out int anchorX, out int anchorY);
+
+                    DispatcherQueue.TryEnqueue(() => LauncherPanels.Toggle(this, anchorX, anchorY, lid));
                 }
                 else if (notification == WM_RBUTTONUP || notification == WM_CONTEXTMENU)
                 {

@@ -437,7 +437,9 @@ public sealed partial class WebFlyoutWindow : Window
         // It is collapsed outside regular-window mode rather than absent, so the strip is built
         // once and the setting can be flipped while the window is alive.
         headerButtons.Children.Add(_minimizeButton);
+        headerButtons.Children.Add(BuildEnterFullscreenButton());
         headerButtons.Children.Add(_maximizeButton);
+        headerButtons.Children.Add(BuildFullscreenMaximizeButton());
         headerButtons.Children.Add(BuildHeaderButton("", "Close", (_, _) => HideFlyout(), redOnHover: true));
 
         // Back sits on the left, where every browser puts it, rather than among the window
@@ -486,6 +488,7 @@ public sealed partial class WebFlyoutWindow : Window
         header.PointerMoved += ContinueWindowMove;
         header.PointerReleased += EndWindowMove;
         header.PointerCaptureLost += EndWindowMove;
+        header.PointerEntered += async (_, _) => await RefreshFullscreenAvailabilityAsync();
         header.Children.Add(navButtons);
         header.Children.Add(_headerTitle);
         header.Children.Add(headerButtons);
@@ -1269,7 +1272,7 @@ public sealed partial class WebFlyoutWindow : Window
     /// </remarks>
     private void EnterMaximized()
     {
-        if (_isMaximized || _isFullScreen) return;
+        if (_isMaximized || (_isFullScreen && !_fullScreenInWindow)) return;
         if (_hwnd == IntPtr.Zero || !IsWindow(_hwnd)) return;
         if (!GetWindowRect(_hwnd, out _preMaximizeRect)) return;
 
@@ -1313,8 +1316,14 @@ public sealed partial class WebFlyoutWindow : Window
     private void UpdateMaximizeButton()
     {
         if (_maximizeButton.Content is FontIcon icon)
-            icon.Glyph = MaximizeGlyph(_isMaximized || _isFullScreen);
-        ToolTipService.SetToolTip(_maximizeButton, MaximizeTooltip(_isMaximized || _isFullScreen));
+            icon.Glyph = _isFullScreen ? "\uE73F" : MaximizeGlyph(_isMaximized);
+        string tooltip = _isFullScreen
+            ? (string)Application.Current.Resources["ExitFullscreenContent"]
+            : MaximizeTooltip(_isMaximized);
+        ToolTipService.SetToolTip(_maximizeButton, tooltip);
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(_maximizeButton, tooltip);
+        UpdateFullscreenMaximizeButton();
+        _ = RefreshFullscreenAvailabilityAsync();
     }
 
     private AppWindow GetAppWindow() =>
@@ -1864,7 +1873,8 @@ public sealed partial class WebFlyoutWindow : Window
         // Capture before the exit animation moves the window. Parking coordinates
         // and configured normal dimensions cannot describe this fullscreen view.
         if (_isFullScreen && GetWindowRect(_hwnd, out var fullscreenRect))
-            _dismissedFullScreenRect = fullscreenRect;
+            _dismissedFullScreenRect = _fullScreenInWindow && _isMaximized
+                ? _preMaximizeRect : fullscreenRect;
         _videoFitVersion++;
 
         _lastDismissed = DateTime.UtcNow;
@@ -2427,7 +2437,13 @@ public sealed partial class WebFlyoutWindow : Window
         {
             if (TryHandleBrowserPageNavigation(core, tab, e)) return;
 
-            if (IsActiveCore(core)) ShowLoading(tab);
+            if (IsActiveCore(core))
+            {
+                _fullscreenAvailabilityVersion++;
+                if (_enterFullscreenButton is { } fullscreenButton)
+                    fullscreenButton.Visibility = Visibility.Collapsed;
+                ShowLoading(tab);
+            }
         };
 
         core.HistoryChanged += (_, _) =>
@@ -3164,6 +3180,13 @@ public sealed partial class WebFlyoutWindow : Window
         }
 
         bool restoreBounds = !_fullScreenInWindow || _videoFitApplied;
+        if (_fullScreenInWindow && _isMaximized && _videoFitApplied)
+        {
+            // Leaving the page's fullscreen mode keeps the window maximized. Its later
+            // size restore must return to the normal view, not the temporary video fit.
+            _preMaximizeRect = _preFullScreenRect;
+            restoreBounds = false;
+        }
         _videoFitVersion++;
         _videoFitApplied = false;
         _isFullScreen = false;
@@ -3263,6 +3286,7 @@ public sealed partial class WebFlyoutWindow : Window
         // address writes the same string, which raises nothing at all — and the star would then
         // still be answering for the page before it.
         UpdateBookmarkStar();
+        _ = RefreshFullscreenAvailabilityAsync();
     }
 
     // ── Address bar ─────────────────────────────────────────────────

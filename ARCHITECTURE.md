@@ -8,6 +8,13 @@ browser paths. They create normal editable launchers, with no new persisted pres
 Web fullscreen retains its presentation across dismissal while the page remains loaded.
 `WebFlyoutWindow.FullscreenTitleBar.cs` reuses the existing header as a hover-revealed overlay
 with window controls and dragging, without changing the fullscreen browser viewport.
+Contained fullscreen can use the existing temporary maximize state without exiting page fullscreen.
+`WebFlyoutWindow.ContentFullscreen.cs` detects visible videos for the header's fullscreen action;
+the explicit click requests browser fullscreen with user activation, and normal fullscreen events
+apply the launcher's contained/display policy.
+
+Tray and notification activation share `MainWindow.TryResolveTrayAnchorPoint`, using the registered
+icon's shell rectangle. Notifications fall back to a taskbar button before the cursor when needed.
 
 ```
 App.xaml  →  MainWindow (invisible, owns tray icon)

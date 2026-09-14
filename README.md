@@ -83,9 +83,13 @@ Little Launcher lives in the Windows system tray and/or taskbar. Clicking its ic
 - **An address bar when you want one** — a web launcher can show the page address under its header, and type a new one. Off by default, because most launchers open one known page.
 - **Options where you are looking** — the flyout header's **…** menu carries the settings you actually change while using a launcher — window mode, address bar, tab bar, reload on open, where links open, where the flyout opens, whether moving and resizing it sticks — without going to the settings window for them.
 - **Fullscreen videos inside the launcher**: keep page fullscreen inside a resizable launcher and optionally fit the window to the video's proportions from **… > Advanced**.
-- **Fullscreen window controls**: hover at the top edge to reveal the titlebar to restore or close,
-  or drag to reposition contained fullscreen. Display fullscreen stays fixed in place.
-  Reopening preserves fullscreen while the page remains loaded.
+- **Fullscreen window controls**: hover at the top edge to exit fullscreen or close,
+  maximize and restore the contained window's size, or drag to reposition it. Display fullscreen
+  stays fixed in place. Reopening preserves fullscreen while the page remains loaded.
+- **Fullscreen video button**: the header offers fullscreen when it detects a visible video.
+  Embedded players may still need their own fullscreen control.
+- **Notification positioning**: clicking a notification opens its launcher beside its tray icon,
+  while respecting the launcher's configured placement.
 - **Messaging presets**: choose WhatsApp, Google Messages, Messenger, Discord, or Teams from
   **Add Launcher** to open a ready-to-sign-in web launcher. These stay active while hidden for
   incoming messages; notification permissions are still yours to choose.

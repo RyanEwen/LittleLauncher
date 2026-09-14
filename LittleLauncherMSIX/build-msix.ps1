@@ -130,8 +130,8 @@ function Remove-OldMsixArtifacts {
     )
 
     $currentReleasePattern = "^LittleLauncher-$([regex]::Escape($CurrentVersion))-(x64|ARM64)\.msix$"
-    $oldPackages = Get-ChildItem $Directory -File -Filter "LittleLauncher-*.msix" |
-        Where-Object { $_.Name -notmatch $currentReleasePattern }
+    $oldPackages = @(Get-ChildItem $Directory -File -Filter "LittleLauncher-*.msix" |
+        Where-Object { $_.Name -notmatch $currentReleasePattern })
 
     foreach ($oldPackage in $oldPackages) {
         Remove-Item -LiteralPath $oldPackage.FullName -Force

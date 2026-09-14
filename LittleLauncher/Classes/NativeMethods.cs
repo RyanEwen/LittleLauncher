@@ -365,6 +365,18 @@ public static partial class NativeMethods
         public IntPtr hBalloonIcon;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct NOTIFYICONIDENTIFIER
+    {
+        public uint cbSize;
+        public IntPtr hWnd;
+        public uint uID;
+        public Guid guidItem;
+    }
+
+    [LibraryImport("shell32.dll")]
+    internal static partial int Shell_NotifyIconGetRect(ref NOTIFYICONIDENTIFIER identifier, out RECT iconLocation);
+
     internal const uint NIF_MESSAGE = 0x00000001;
     internal const uint NIF_ICON    = 0x00000002;
     internal const uint NIF_TIP     = 0x00000004;

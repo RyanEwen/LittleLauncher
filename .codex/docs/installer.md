@@ -158,6 +158,9 @@ and later accumulated every version indefinitely. Partner Center reads the versi
 manifest either way; the name is so the human cannot pick the wrong file. CI globs
 `LittleLauncher-*.msix`, so it is unaffected.
 
+The cleanup candidate list must remain an array even when empty or containing one package,
+so strict-mode PowerShell can read its count after sequential architecture builds.
+
 **Plain `build-msix.ps1` (no arguments) is the wrong tool for "put my build on this machine".** It
 stamps the *dev* cert's subject (`CN=RyanEwen`) as the publisher, and the publisher is part of the
 package identity — so the result installs as a **second, separate package** with its own family

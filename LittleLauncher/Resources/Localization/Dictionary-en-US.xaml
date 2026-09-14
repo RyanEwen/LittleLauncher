@@ -85,4 +85,9 @@
     <x:String x:Key="StoreInstallAfterClose">The Microsoft Store will finish installing the update after the app closes.</x:String>
     <x:String x:Key="StoreNoUpdatesAvailable">No updates are currently available in the Microsoft Store.</x:String>
     <x:String x:Key="MessagingPresetHint">Create and open this messaging launcher. Stays active while hidden so it can receive messages. Sign in and allow notifications on the service's page.</x:String>
+    <x:String x:Key="MaximizeFullscreenLauncher">Maximize launcher (keep content fullscreen)</x:String>
+    <x:String x:Key="RestoreFullscreenLauncherSize">Restore launcher size (keep content fullscreen)</x:String>
+    <x:String x:Key="ExitFullscreenContent">Exit fullscreen content</x:String>
+    <x:String x:Key="EnterFullscreenContent">Fullscreen video</x:String>
+    <x:String x:Key="FullscreenContentUnavailable">This video could not enter fullscreen. Try the player's fullscreen control.</x:String>
 </ResourceDictionary>

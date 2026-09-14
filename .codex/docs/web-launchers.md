@@ -1015,7 +1015,14 @@ still destroys the page and its fullscreen session; this state is not persisted 
 Fullscreen titlebar behavior lives in `WebFlyoutWindow.FullscreenTitleBar.cs`. The existing
 header is reparented as a top overlay, revealed within six dips of the window's top edge,
 and hidden after the pointer leaves for 300 ms. Its menu keeps it revealed while open.
-The restore control exits page fullscreen; close dismisses the launcher. Tabs, address bar,
+The exit-fullscreen control sits before the window maximize control; close dismisses the launcher. Contained fullscreen
+also shows a separate maximize/restore-size button. It reuses the normal temporary maximize
+state and monitor work area, leaving the page fullscreen and the taskbar visible. Restoring
+size returns to the exact pre-maximize bounds, including a video fit. Maximizing cancels
+pending video fitting. Exiting page fullscreen while maximized keeps the window maximized;
+its later size restore drops any temporary video fit. Dismissal drops maximize and retains
+the contained fullscreen size from before expansion, so reopening is resizable again.
+Tabs, address bar,
 and bookmarks remain hidden independently of titlebar visibility, so revealing it cannot
 change the browser viewport. The pointer watch uses screen coordinates because WebView2
 consumes pointer events, and stops on dismissal and fullscreen exit.
@@ -1025,6 +1032,16 @@ its size. Display fullscreen cannot be dragged or resized; Restore explicitly ex
 before window geometry can change. The position picker is unavailable during fullscreen.
 Dragging cancels pending video fitting, and the normal-size restore destination follows a
 fitted video's move.
+
+`WebFlyoutWindow.ContentFullscreen.cs` adds a fullscreen-video button to the normal header
+when the active document exposes a visible video and permits the standard Fullscreen API.
+Navigation/tab changes and titlebar hover refresh detection without polling hidden pages.
+The largest visible video is selected again at click time. The explicit click uses the
+DevTools `Runtime.evaluate` user-gesture flag to satisfy fullscreen activation requirements;
+availability checks never grant activation. Browser fullscreen events still own host geometry,
+so the existing contained/display policy applies. This targets the video itself, not custom
+player chrome. Cross-origin frames, shadow-root players, and non-video fullscreen widgets
+continue to use their site's own controls. Stale results cannot update a different tab's header.
 
 **Fit fullscreen to video** in the same Advanced menu optionally fits the launcher's viewport to
 the fullscreen video's intrinsic aspect ratio (`WebFlyoutWindow.VideoFit.cs`). It is off by default
@@ -1488,8 +1505,9 @@ driven from it — `ReportShown` when Windows accepts the toast, `ReportClicked`
 - **The toast carries its launcher** (`AddArgument("launcher", id)`), and
   `MainWindow.OnNotificationInvoked` routes a click to `WebFlyoutWindow.HandleNotificationActivation`
   before falling back to opening the Home page. That opens the flyout via
-  `MainWindow.OpenLauncherPanel`, which anchors on the taskbar button if there is one and the cursor
-  otherwise.
+  `MainWindow.OpenLauncherPanel`, which uses the same per-launcher tray-icon rectangle as a tray
+  click. If the icon is unavailable, it falls back to the taskbar button, then the cursor.
+  A notification's cursor position must not take precedence over the launcher's tray icon.
 - **The launcher's adopted page icon is used, not `notification.IconUri`** — the latter is a page URL
   Windows would have to fetch itself, and for a dashboard behind a login it would fetch a redirect.
 - `_notificationSources` and `_pendingActions` are **capped**, not trusted to drain: a toast the

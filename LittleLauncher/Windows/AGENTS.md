@@ -20,3 +20,5 @@ Read and follow [web-launchers.md](../../.codex/docs/web-launchers.md) before ch
 
 The same guide governs `WebFlyoutWindow.FullscreenTitleBar.cs`, including its fullscreen
 header overlay and hover lifecycle.
+It also governs `WebFlyoutWindow.ContentFullscreen.cs`, which detects visible video targets
+and requests page fullscreen from the header.

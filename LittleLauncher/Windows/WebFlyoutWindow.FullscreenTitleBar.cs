@@ -16,6 +16,44 @@ public sealed partial class WebFlyoutWindow
     private StackPanel? _normalHeaderParent;
     private DispatcherQueueTimer? _fullscreenHeaderTimer;
     private int _fullscreenHeaderMisses;
+    private Button? _fullscreenMaximizeButton;
+
+    /// <summary>
+    /// Builds the window-size control shown beside fullscreen exit. It changes the host
+    /// bounds without asking the page to leave fullscreen or changing the saved launcher size.
+    /// </summary>
+    private Button BuildFullscreenMaximizeButton()
+    {
+        _fullscreenMaximizeButton = BuildHeaderButton(MaximizeGlyph(false), "", (_, _) =>
+        {
+            if (!_isFullScreen || !_fullScreenInWindow) return;
+
+            // A pending video fit must not undo a maximize followed quickly by restore.
+            _videoFitVersion++;
+            if (_isMaximized)
+                ExitMaximized(restoreGeometry: true);
+            else
+                EnterMaximized();
+        });
+        UpdateFullscreenMaximizeButton();
+        return _fullscreenMaximizeButton;
+    }
+
+    /// <summary>Distinguishes resizing the launcher from exiting the page's fullscreen mode.</summary>
+    private void UpdateFullscreenMaximizeButton()
+    {
+        if (_fullscreenMaximizeButton is not { } button) return;
+
+        button.Visibility = _isFullScreen && _fullScreenInWindow
+            ? Visibility.Visible : Visibility.Collapsed;
+        if (button.Content is FontIcon icon)
+            icon.Glyph = MaximizeGlyph(_isMaximized);
+
+        string key = _isMaximized ? "RestoreFullscreenLauncherSize" : "MaximizeFullscreenLauncher";
+        string label = (string)Application.Current.Resources[key];
+        ToolTipService.SetToolTip(button, label);
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(button, label);
+    }
 
     /// <summary>
     /// Moves the existing titlebar into an overlay during fullscreen, preserving all
