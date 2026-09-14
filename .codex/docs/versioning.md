@@ -46,6 +46,11 @@ The Store package is **not** built or submitted by that workflow. `store-publish
 
 ## Version bump guidance
 
+Before preparing a Store update, account for versions already handed off for upload as well as
+published Git tags. Store submissions can precede GitHub releases. Changed package contents need
+a newer release version; reusing the same version and filename makes replacement builds ambiguous
+and can conflict with packages already submitted to Partner Center.
+
 - **Patch** (`v1.0.1`): Bug fixes, minor tweaks, no new features
 - **Minor** (`v1.1.0`): New features, non-breaking changes
 - **Major** (`v2.0.0`): Breaking changes to settings format, major redesigns
