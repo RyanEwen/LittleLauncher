@@ -19,6 +19,11 @@ on:
         type: string
         default: ''
 
+      existing_draft:
+        description: 'Existing API draft ID to repair and upload without committing'
+        type: string
+        default: ''
+
 permissions:
   contents: read
 
@@ -93,6 +98,7 @@ jobs:
           version: 'v0.4.3'
 
       - name: Configure Store credentials
+        if: inputs.existing_draft == ''
         shell: pwsh
         env:
           AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
@@ -116,6 +122,7 @@ jobs:
 
 
       - name: Publish to Microsoft Store
+        if: inputs.existing_draft == ''
         shell: pwsh
         env:
           NO_COMMIT: ${{ github.event_name == 'workflow_dispatch' && inputs.no_commit }}
@@ -138,3 +145,17 @@ jobs:
           } else {
             'Store submission committed. Publication depends on Microsoft certification and the submission publishing settings.' >> $env:GITHUB_STEP_SUMMARY
           }
+
+      - name: Update the selected test draft
+        if: inputs.existing_draft != ''
+        shell: pwsh
+        env:
+          SUBMISSION_ID: ${{ inputs.existing_draft }}
+          PRICE_ID: ${{ inputs.price_id }}
+          NO_COMMIT: ${{ inputs.no_commit }}
+          AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+          AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+          AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+        run: |
+          if ($env:NO_COMMIT -ne 'true') { throw 'Updating a test draft requires no_commit.' }
+          & ./.github/scripts/update-store-test-draft.ps1 -SubmissionId $env:SUBMISSION_ID -PriceId $env:PRICE_ID -UploadPath "$env:GITHUB_WORKSPACE/LittleLauncherMSIX/bin/msix-output/LittleLauncher.msixupload"

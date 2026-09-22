@@ -322,3 +322,13 @@ settings). Copy **Seller ID** / **Publisher ID** → `SELLER_ID`.
 **Step 6: validate a draft.** Manually dispatch `store-publish.yml` with `no_commit` enabled,
 then inspect the draft's packages and pricing in Partner Center before committing it.
 If the CLI reports `Base`, follow the pricing guidance above instead of forcing a tier.
+
+### Repairing the existing pricing test draft
+
+The manual Store workflow accepts an existing_draft ID with no_commit enabled and an explicit
+price_id. The selected draft must match the current pending API submission and be PendingCommit.
+The helper in .github/scripts/update-store-test-draft.ps1 combines the approved Web Launcher
+feature bullets to meet the API's 20-feature limit, sets the requested tier, replaces packages,
+and uploads the bundle. It never creates, deletes, or commits submissions. Review the resulting
+regional prices and packages in Partner Center before any separate submission decision.
+
