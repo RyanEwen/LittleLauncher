@@ -15,7 +15,7 @@ on:
         type: boolean
         default: true
       price_id:
-        description: 'Optional price tier to test in a draft (for example Tier2)'
+        description: 'Optional tier ID verified against this account pricing table'
         type: string
         default: ''
 
@@ -133,7 +133,7 @@ jobs:
           # An explicit tier is only permitted in a draft until its prices are reviewed.
           if (![string]::IsNullOrWhiteSpace($env:PRICE_ID)) {
             if ($env:NO_COMMIT -ne 'true') { throw 'Price overrides require a draft run.' }
-            if ($env:PRICE_ID -notmatch '^Tier[0-9]+$') { throw 'Expected a price ID such as Tier2.' }
+            if ($env:PRICE_ID -notmatch '^Tier[0-9]+$') { throw 'Expected a numeric price tier ID.' }
             $publishArgs += @('--priceId', $env:PRICE_ID)
           }
           & msstore @publishArgs

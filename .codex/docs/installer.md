@@ -362,3 +362,13 @@ isAdvancedPricingModel flag without changing it. Microsoft documents Tier1012-Ti
 for advanced pricing and Tier2-Tier96 for the original model. The Partner Center
 price-tier table is needed to map a tier ID to US .99 and compare regional prices.
 
+
+Read-only API inspections (Actions runs 35783439136 and 35783542100) showed that
+the published submission has priceId Base with isAdvancedPricingModel true, whereas
+the failed Tier2 draft reports isAdvancedPricingModel false. The live app therefore uses
+the advanced tier range. Microsoft documents Tier1012-Tier1424 for that range, but
+the exact ID for US .99 was not verified. The current Partner Center 'view
+conversion table' link failed to load for both live and draft submissions. Do not
+substitute a tier until its USD and regional values are confirmed in the account table
+or by Microsoft support.
+
