@@ -29,7 +29,7 @@ if ($draft.status -eq 'PendingCommit') {
     if ($verified.targetPublishMode -ne 'Manual') { throw 'Manual publication hold was not retained. Not committing.' }
     if ($verified.pricing.priceId -ne $draft.pricing.priceId) { throw 'Price changed unexpectedly. Not committing.' }
     Write-Output "Verified publication hold: Manual; price: $($verified.pricing.priceId)"
-    $result = Invoke-RestMethod -Method Post -Uri "$uri/commit" -Headers $headers
+    $result = Invoke-RestMethod -Method Post -Uri "$uri/commit" -Headers $headers -ContentType 'application/json'
     Write-Output "Commit response: $($result.status)"
 } elseif ($draft.targetPublishMode -ne 'Manual') {
     throw 'Existing submission is not held for manual publication.'
