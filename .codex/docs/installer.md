@@ -348,3 +348,11 @@ committing, and checks ingestion status. It does not release the app. Re-running
 commit reads status without committing again. Inspect ingested prices and packages before
 separately authorizing publication.
 
+
+The approved held commit was attempted in Actions run 35767396785. Microsoft confirmed
+targetPublishMode Manual and accepted the commit request, then returned CommitFailed with
+InvalidOperation: Price Tier is not supported. Tier2 is therefore NOT a verified usable
+price for this app; accepting the initial PUT did not establish ingestion compatibility.
+No publication occurred. Use Partner Center for a manual release or obtain a supported
+price identifier from Microsoft before another API pricing attempt.
+
