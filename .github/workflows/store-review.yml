@@ -1,0 +1,27 @@
+name: Commit Store submission for manual release
+on:
+  workflow_dispatch:
+    inputs:
+      submission_id:
+        description: 'Existing uploaded submission to commit with publication held'
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: store-package
+  cancel-in-progress: false
+jobs:
+  review:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Hold publication and commit uploaded draft
+        shell: pwsh
+        env:
+          SUBMISSION_ID: ${{ inputs.submission_id }}
+          AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+          AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+          AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+        run: ./.github/scripts/commit-store-review.ps1 -SubmissionId $env:SUBMISSION_ID

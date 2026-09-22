@@ -339,3 +339,12 @@ previous packages and unchanged prices in all 240 markets. This is not verificat
 Tier2's effective prices: Microsoft documents that submission changes appear after API
 commit ingestion. Keep this draft uncommitted until the publication decision is approved.
 
+
+### Committing with publication held
+
+After approval, dispatch store-review.yml with the existing submission_id. Its helper
+commit-store-review.ps1 changes only targetPublishMode to Manual, reads it back before
+committing, and checks ingestion status. It does not release the app. Re-running after
+commit reads status without committing again. Inspect ingested prices and packages before
+separately authorizing publication.
+
