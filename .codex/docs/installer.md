@@ -356,3 +356,9 @@ price for this app; accepting the initial PUT did not establish ingestion compat
 No publication occurred. Use Partner Center for a manual release or obtain a supported
 price identifier from Microsoft before another API pricing attempt.
 
+
+Use the inspect_only option of store-review.yml to read the submission's
+isAdvancedPricingModel flag without changing it. Microsoft documents Tier1012-Tier1424
+for advanced pricing and Tier2-Tier96 for the original model. The Partner Center
+price-tier table is needed to map a tier ID to US .99 and compare regional prices.
+

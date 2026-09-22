@@ -5,7 +5,10 @@ Commits an already uploaded Store draft only after verifying manual publication.
 Preserves pricing, listings, and packages. Never invokes a publish endpoint. Re-running
 after commit only reads status, so an interrupted run cannot submit a second time.
 #>
-param([Parameter(Mandatory)][ValidatePattern('^[0-9]+$')][string]$SubmissionId)
+param(
+    [Parameter(Mandatory)][ValidatePattern('^[0-9]+$')][string]$SubmissionId,
+    [switch]$InspectOnly
+)
 $ErrorActionPreference = 'Stop'
 $api = 'https://manage.devcenter.microsoft.com/v1.0/my/applications/9P3ZZBDQ6PJF'
 $token = Invoke-RestMethod -Method Post -Uri "https://login.microsoftonline.com/$env:AZURE_AD_TENANT_ID/oauth2/token" -Body @{
@@ -21,6 +24,16 @@ if ($app.pendingApplicationSubmission.id -ne $SubmissionId) {
 }
 $uri = "$api/submissions/$SubmissionId"
 $draft = Invoke-RestMethod -Uri $uri -Headers $headers
+if ($InspectOnly) {
+    # This read-only path answers which documented tier range the account supports.
+    [pscustomobject]@{
+        status = $draft.status
+        priceId = $draft.pricing.priceId
+        isAdvancedPricingModel = $draft.pricing.isAdvancedPricingModel
+        manualPublication = $draft.targetPublishMode -eq 'Manual'
+    } | ConvertTo-Json | Write-Output
+    return
+}
 if ($draft.status -eq 'PendingCommit') {
     # Change only the release hold; the existing uploaded bundle remains in place.
     $draft.targetPublishMode = 'Manual'

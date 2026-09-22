@@ -6,6 +6,10 @@ on:
         description: 'Existing uploaded submission to commit with publication held'
         required: true
         type: string
+      inspect_only:
+        description: 'Read pricing model and status without changing the submission'
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -17,11 +21,15 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Hold publication and commit uploaded draft
+      - name: Inspect or commit uploaded draft
         shell: pwsh
         env:
           SUBMISSION_ID: ${{ inputs.submission_id }}
+          INSPECT_ONLY: ${{ inputs.inspect_only }}
           AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
           AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
           AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
-        run: ./.github/scripts/commit-store-review.ps1 -SubmissionId $env:SUBMISSION_ID
+        run: |
+          $args = @{ SubmissionId = $env:SUBMISSION_ID }
+          if ($env:INSPECT_ONLY -eq 'true') { $args.InspectOnly = $true }
+          & ./.github/scripts/commit-store-review.ps1 @args
