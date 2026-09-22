@@ -332,3 +332,10 @@ feature bullets to meet the API's 20-feature limit, sets the requested tier, rep
 and uploads the bundle. It never creates, deletes, or commits submissions. Review the resulting
 regional prices and packages in Partner Center before any separate submission decision.
 
+
+The September 22 draft retry (Actions run 35766179842) succeeded: the API returned Tier2
+and 20 English features, and both 1.40.2 packages uploaded. The portal still showed the
+previous packages and unchanged prices in all 240 markets. This is not verification of
+Tier2's effective prices: Microsoft documents that submission changes appear after API
+commit ingestion. Keep this draft uncommitted until the publication decision is approved.
+
