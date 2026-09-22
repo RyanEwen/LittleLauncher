@@ -2473,6 +2473,11 @@ public sealed partial class WebFlyoutWindow : Window
             {
             bool active = IsActiveCore(core);
 
+            // A page can navigate away from its fullscreen element without a matching
+            // ContainsFullScreenElementChanged callback reaching this active tab.
+            if (active && _isFullScreen && !core.ContainsFullScreenElement)
+                ApplyFullScreen(false);
+
             if (e.IsSuccess)
             {
                 ApplyZoom(core);   // CSS zoom lives in the document, so each navigation drops it

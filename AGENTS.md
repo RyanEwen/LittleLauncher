@@ -54,7 +54,7 @@ Release builds AOT-publish the companion exe (`LauncherShortcut`) automatically.
 - Microsoft.WindowsAppSDK 1.8.260209005 (WinUI 3)
 - H.NotifyIcon.WinUI 2.4.1 (system tray)
 - CommunityToolkit.Mvvm 8.4.0
-- SSH.NET 2025.1.0
+- SSH.NET 2026.0.0
 - NLog 6.1.1
 - Microsoft.Data.Sqlite 9.0.3 (Firefox bookmark import from places.sqlite)
 - Microsoft Edge WebView2 — the managed API arrives transitively with the Windows App SDK (no explicit `PackageReference`), and web launchers need the **Evergreen WebView2 Runtime** on the machine. It ships with Windows 11; `WebFlyoutWindow` surfaces an install prompt if `CoreWebView2Environment` cannot start.

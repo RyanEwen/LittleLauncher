@@ -8,7 +8,7 @@ Little Launcher ships through **two channels, and neither of them is an installe
 | Channel | Artifact | Put in place by | Updates |
 |---|---|---|---|
 | **Portable** | `LittleLauncher-{x64,ARM64}-portable.zip`, attached to the GitHub release | the user, unzipping it wherever they like | in-app check against GitHub Releases; the app opens the release page and the user replaces the folder |
-| **Microsoft Store** | MSIX, built locally and uploaded in Partner Center | the Store | in-app through the Store APIs, or silently by the Store itself |
+| **Microsoft Store** | MSIX, submitted by CI to Partner Center | the Store | in-app through the Store APIs, or silently by the Store itself |
 
 **There is no MSI.** A per-user WiX installer shipped up to v1.35.1 and was retired: it duplicated
 what the Store already does properly — managed install, silent update, clean uninstall — while
@@ -222,67 +222,37 @@ read like a platform limitation and was not one.
 **The CLSID must stay stable.** Changing it orphans the activator for any toast already sitting
 in the Action Center.
 
-## CI state: portable/GitHub Release automated, Store submission manual
+## CI Store publishing
 
-`build-msix.yml` (badly named — it builds the app, the portable zips and the GitHub Release, not
-the MSIX) runs clean on every `v*` tag. It attaches two artifacts,
-`LittleLauncher-{x64,ARM64}-portable.zip`, and that is the whole GitHub side: nothing manual is
-needed for portable users, and nothing installs itself for them either.
+`build-msix.yml` publishes portable ZIPs and the GitHub Release on `v*` tags.
+`store-publish.yml` builds unsigned x64 and ARM64 MSIX packages on one runner,
+zips them into `LittleLauncher.msixupload`, and submits directly to Partner Center for
+product `9P3ZZBDQ6PJF`. No Store package is uploaded as a public Actions artifact.
 
-**The Store submission itself cannot be automated at all** — see the next section; it is a
-paid-product / Pricing Version 2 restriction, not a credential problem. **Store packages are
-built locally and never published from CI:**
+The workflow pins [Microsoft Store CLI v0.4.3](https://github.com/microsoft/msstore-cli/releases/tag/v0.4.3).
+It preserves existing round-trippable pricing. Little Launcher has used Pricing Version 2;
+if the API returns `PriceId: "Base"`, publishing still stops safely. The CLI's `--priceId`
+override can replace per-market prices with one tier, so the workflow does not supply one.
+Resolve that case in Partner Center or agree on a verified tier and pricing migration before
+changing CI. See [Microsoft PR #175](https://github.com/microsoft/msstore-cli/pull/175).
 
-```powershell
-.\LittleLauncherMSIX\build-msix.ps1 -Platform x64   -NoSign
-.\LittleLauncherMSIX\build-msix.ps1 -Platform ARM64 -NoSign
-# then upload the two .msix files individually in Partner Center
-```
+Manual dispatch defaults `no_commit` to true, uploading a draft without submitting it.
+Use that first to verify credentials, both architectures and pricing in Partner Center.
+Tag pushes and manual runs with `no_commit` disabled commit the submission; certification
+and the submission's publishing settings determine when it becomes available.
 
-**Upload the individual `.msix` files, not a `.msixupload`.** The `.msixupload` container exists
-to give `msstore publish` a single file; it does not upload reliably through the Partner Center
-UI. Since `msstore` cannot be used for this product at all, there is no reason to produce one.
+All four required repository secrets were present when checked on September 22, 2026:
+`AZURE_AD_TENANT_ID`, `AZURE_AD_APPLICATION_CLIENT_ID`, `AZURE_AD_APPLICATION_SECRET`,
+and `SELLER_ID`. Presence does not verify expiry or the app registration's Manager role.
 
-**Never publish the Store build from CI.** This repository is public, and GitHub Actions
-artifacts only require *read* access to download — on a public repo, that is everyone. An earlier
-version of `store-publish.yml` uploaded the `.msixupload` as an artifact, which published the
-Store build of a paid app; those artifacts were deleted on 2026-07-25 and the step removed. The
-workflow now only *validates* that packaging still succeeds and produces no downloadable output.
-
-## Automated Store submission is not possible for this product
-
-**Settled — do not re-litigate without new information from Microsoft.** Little Launcher is a
-**paid** Store product on **Pricing Version 2** (confirmed: the "Review price per market" button
-is present under Pricing and availability; base price $0.99 across 240 markets). That rules out
-both submission automation paths:
-
-| Path | Blocked by |
-|---|---|
-| `msstore` CLI / `microsoft-store-apppublisher` action | [Free products only](https://learn.microsoft.com/windows/apps/publish/msstore-dev-cli/github-actions) — paid explicitly unsupported |
-| Store submission API (`manage.devcenter.microsoft.com`) / StoreBroker | [Unusable on Pricing Version 2](https://learn.microsoft.com/windows/uwp/monetize/create-and-manage-submissions-using-windows-store-services) — returns an *unknown tier* for pricing |
-
-A third API (`api.store.microsoft.com`) *does* support `PAID` pricing, but covers **MSI/EXE
-installers only, not MSIX**, so it does not apply. It is easy to land on that doc and conclude
-automation is available — it is not, for this product.
-
-The Pricing Version 2 hazard is not theoretical: submission flows clone the previous submission
-and re-commit it, so an unknown pricing tier would be committed against a paid app in 240
-markets. **`store-publish.yml` therefore only validates that packaging still works** — it runs on
-`v*` tags, builds both architectures, and produces no downloadable output (see the public-artifact
-warning above). Build and upload the packages yourself.
-
-Re-evaluate only if Microsoft adds paid-product support to the msstore CLI, or the product moves
-off Pricing Version 2.
-
-The Entra credentials described below are consequently **unused**. They are kept because they
-cost nothing and would be needed on a re-enable; delete the app registration's client secret if
-you would rather not leave a dormant credential.
+For manual fallback, build both architectures with `build-msix.ps1 -Platform x64 -NoSign`
+and `-Platform ARM64 -NoSign`, then upload the individual `.msix` files in Partner Center.
+Do not upload the `.msixupload` container through the web UI.
 
 ## Runbook: creating the Store publishing credentials
 
 The secrets come from a Microsoft Entra **app registration** that Partner Center has been told to
-trust. Currently unused (see above), but this is the procedure if the restriction ever lifts —
-and the client secret expires after 24 months regardless.
+trust. CI uses these credentials; renew the client secret before its configured expiry.
 
 **Step 0 — do you have a tenant?** Partner Center → gear icon → **Account settings** →
 **Tenants**. Store dev accounts opened with a personal Microsoft account often have **none**,
@@ -334,29 +304,6 @@ settings). Copy **Seller ID** / **Publisher ID** → `SELLER_ID`.
 .\LittleLauncherMSIX\set-store-secrets.ps1
 ```
 
-**Step 6 — if the restriction ever lifts**, verify with a draft before trusting it: run the
-submission with `msstore publish ... -nc`, which stages a draft in Partner Center rather than
-shipping one, and confirm it in Partner Center before allowing an unattended run to commit.
-
-## If Microsoft adds paid-product support
-
-Microsoft's docs say paid products "will be supported in a future release" of the msstore CLI
-path. When that lands, re-enabling is small — the credentials and
-`LittleLauncherMSIX/set-store-secrets.ps1` already exist. Restore into
-`.github/workflows/store-publish.yml`:
-
-1. `SELLER_ID` (never set — the only missing secret).
-2. A bundling step: `msstore publish` takes a **single** file, so the two `.msix` must be zipped
-   into one `LittleLauncher.msixupload`. (That container is only for `msstore`; do not use it for
-   manual Partner Center uploads.)
-3. The submission steps: [`microsoft/microsoft-store-apppublisher@v1.1`](https://learn.microsoft.com/windows/apps/publish/msstore-dev-cli/overview)
-   → `msstore reconfigure --tenantId … --sellerId … --clientId … --clientSecret …`
-   → `msstore publish <upload> -id 9P3ZZBDQ6PJF`.
-4. Confirm the Entra app registration still holds the **Manager** role in Partner Center and the
-   client secret has not expired.
-
-Verify with `-nc` first (step 6 above). Still do **not** add an `upload-artifact` step — the
-public-repo exposure problem is independent of the submission question.
-
-This is separate from `build-msix.yml`, which builds the portable zips + GitHub Release and is
-fully automated today.
+**Step 6: validate a draft.** Manually dispatch `store-publish.yml` with `no_commit` enabled,
+then inspect the draft's packages and pricing in Partner Center before committing it.
+If the CLI reports `Base`, follow the pricing guidance above instead of forcing a tier.

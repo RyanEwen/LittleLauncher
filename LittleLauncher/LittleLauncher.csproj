@@ -32,7 +32,7 @@
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
 
     <!-- SSH/SFTP client for settings cloud sync -->
-    <PackageReference Include="SSH.NET" Version="2025.1.0" />
+    <PackageReference Include="SSH.NET" Version="2026.0.0" />
 
     <!-- Structured logging -->
     <PackageReference Include="NLog" Version="6.1.1" />

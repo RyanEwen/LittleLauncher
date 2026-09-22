@@ -916,6 +916,12 @@ public sealed partial class WebFlyoutWindow
         _webView = tab.View;
         _revealOnNavigationCompleted = false;
 
+        // Fullscreen belongs to the active page. A link opened in a new tab may leave the old
+        // page fullscreen, but its geometry must not trap the new tab's navigation controls.
+        bool tabFullscreen = tab.View.CoreWebView2?.ContainsFullScreenElement == true;
+        if (tabFullscreen != _isFullScreen)
+            ApplyFullScreen(tabFullscreen);
+
         ResumeWebView();
         ApplyZoom();
         UpdateNavigationButtons();

@@ -34,7 +34,9 @@ Pushing a tag matching `v*` triggers `.github/workflows/build-msix.yml` which:
 4. Creates a **GitHub Release** with auto-generated release notes (commit summary + full changelog link)
 5. Attaches two artifacts: `LittleLauncher-{x64,ARM64}-portable.zip`
 
-The Store package is **not** built or submitted by that workflow. `store-publish.yml` only proves the packaging still works; the `.msix` files you upload are built locally and submitted in Partner Center by hand — see [installer.md](installer.md).
+The separate `store-publish.yml` builds both unsigned Store packages and submits them on the
+same tag using CLI v0.4.3. Manual runs default to draft review. Pricing that the API reports
+as `Base` still blocks submission safely; see [installer.md](installer.md).
 
 Release-note filtering must succeed even when only version-bump commits remain, so the maintenance
 fallback can run. The workflow uses `awk` rather than `grep`, whose no-match exit status aborts Bash
@@ -47,7 +49,7 @@ packaged as portable ZIPs and published against the existing tag without rewriti
 2. Commit: `git commit -am "Bump version to vX.Y.Z"`
 3. Tag: `git tag -a vX.Y.Z -m "vX.Y.Z: <brief summary>"`
 4. Push both: `git push origin main vX.Y.Z`
-5. The GitHub Action publishes the release; build and upload the Store package separately
+5. Verify both workflows: the GitHub release and the Store submission (or resolve a pricing block in Partner Center)
 
 ## Version bump guidance
 

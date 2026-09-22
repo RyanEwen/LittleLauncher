@@ -130,14 +130,23 @@ public sealed partial class WebFlyoutWindow
     /// <summary>Asks the page to exit fullscreen so browser and host state change together.</summary>
     private async Task ExitPageFullscreenAsync()
     {
+        var core = _webView?.CoreWebView2;
         try
         {
-            if (_webView?.CoreWebView2 is { } core)
+            if (core != null)
                 await core.ExecuteScriptAsync("if (document.fullscreenElement) document.exitFullscreen();");
         }
         catch (Exception ex)
         {
             Logger.Debug(ex, "Exiting page fullscreen failed for launcher {Name}", _launcher.Name);
+        }
+        finally
+        {
+            // Navigation or a custom player's own fullscreen handling can leave the host
+            // fullscreen after the active document has changed. Restore the window on an
+            // explicit exit gesture even when the page cannot answer the script above.
+            if (_isFullScreen && (core == null || IsActiveCore(core)))
+                ApplyFullScreen(false);
         }
     }
 }

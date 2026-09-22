@@ -1025,7 +1025,10 @@ the contained fullscreen size from before expansion, so reopening is resizable a
 Tabs, address bar,
 and bookmarks remain hidden independently of titlebar visibility, so revealing it cannot
 change the browser viewport. The pointer watch uses screen coordinates because WebView2
-consumes pointer events, and stops on dismissal and fullscreen exit.
+consumes pointer events, and stops on dismissal and fullscreen exit. Switching to a tab that
+is not fullscreen restores the host's normal bounds immediately, even when the previous tab
+still has a fullscreen element. Navigation completion rechecks the active page's fullscreen
+state, and an explicit exit gesture restores the host even if page script cannot exit it.
 The overlay uses the opaque `SolidBackgroundFillColorBaseBrush` so page content cannot show
 through its controls. Dragging the revealed titlebar moves contained fullscreen without changing
 its size. Display fullscreen cannot be dragged or resized; Restore explicitly exits fullscreen
@@ -1034,13 +1037,15 @@ Dragging cancels pending video fitting, and the normal-size restore destination 
 fitted video's move.
 
 `WebFlyoutWindow.ContentFullscreen.cs` adds a fullscreen-video button to the normal header
-when the active document exposes a visible video and permits the standard Fullscreen API.
+when the active document exposes a visible video with native controls and permits the
+standard Fullscreen API. Custom players, including YouTube, use their own fullscreen button:
+requesting fullscreen on an internal video or player wrapper can hide or break their controls.
 Navigation/tab changes and titlebar hover refresh detection without polling hidden pages.
 The largest visible video is selected again at click time. The explicit click uses the
 DevTools `Runtime.evaluate` user-gesture flag to satisfy fullscreen activation requirements;
 availability checks never grant activation. Browser fullscreen events still own host geometry,
-so the existing contained/display policy applies. This targets the video itself, not custom
-player chrome. Cross-origin frames, shadow-root players, and non-video fullscreen widgets
+so the existing contained/display policy applies. Cross-origin frames, shadow-root players,
+and non-video fullscreen widgets
 continue to use their site's own controls. Stale results cannot update a different tab's header.
 
 **Fit fullscreen to video** in the same Advanced menu optionally fits the launcher's viewport to

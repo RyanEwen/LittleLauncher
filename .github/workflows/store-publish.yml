@@ -1,66 +1,46 @@
-name: Validate Store packaging
+name: Publish to Microsoft Store
 
-# Builds the unsigned MSIX packages (x64 + ARM64) to prove the Store packaging path still
-# works — manifest stamping, makepri, makeappx. It deliberately produces NO downloadable
-# output; the packages you actually submit are built locally.
-#
-# ── Why no artifact ──────────────────────────────────────────────────────────────
-# This repository is PUBLIC, and GitHub Actions artifacts only require *read* access to
-# download — which on a public repo means anyone. Uploading the Store build of a paid app
-# here published it. Do not add an upload-artifact step back.
-#
-# Build the packages you submit locally instead:
-#
-#   .\LittleLauncherMSIX\build-msix.ps1 -Platform x64   -NoSign
-#   .\LittleLauncherMSIX\build-msix.ps1 -Platform ARM64 -NoSign
-#
-# then upload the two individual .msix files in Partner Center. Do NOT bundle them into a
-# .msixupload — that container is what `msstore publish` consumes, and it does not upload
-# reliably through the Partner Center UI.
-#
-# ── Why this does NOT submit to the Store ────────────────────────────────────────
-# Little Launcher is a PAID product on Pricing Version 2, which rules out both
-# automated submission paths Microsoft offers:
-#
-#   1. msstore CLI / microsoft-store-apppublisher action
-#      Supported for FREE products only. Paid products are explicitly unsupported.
-#      https://learn.microsoft.com/windows/apps/publish/msstore-dev-cli/github-actions
-#
-#   2. Microsoft Store submission API (manage.devcenter.microsoft.com, StoreBroker)
-#      Cannot be used with products on "Pricing Version 2" — it returns an unknown
-#      tier for pricing. Little Launcher is on Pricing Version 2 (confirmed: the
-#      "Review price per market" button is present under Pricing and availability).
-#      Submission flows clone the previous submission and re-commit it, so an unknown
-#      pricing tier would be committed against a paid app across 240 markets.
-#      https://learn.microsoft.com/windows/uwp/monetize/create-and-manage-submissions-using-windows-store-services
-#
-# There is a third API (api.store.microsoft.com) that does support PAID pricing, but
-# it covers MSI/EXE installers only — not MSIX — so it does not apply here.
-#
-# So this workflow stops at producing the package. Download the artifact and upload it
-# in Partner Center by hand. Re-evaluate if Microsoft adds paid-product support to the
-# msstore CLI, or if the product moves off Pricing Version 2.
-#
-# The Store credential secrets (AZURE_AD_TENANT_ID, AZURE_AD_APPLICATION_CLIENT_ID,
-# AZURE_AD_APPLICATION_SECRET) are currently unused for the reasons above. They and the
-# Entra app registration can stay for a future re-enable, or be deleted as unused
-# credentials — see LittleLauncherMSIX/set-store-secrets.ps1 to reload them.
+# Tags submit both architectures directly to Partner Center with existing pricing.
+# Manual runs default to draft-only review. Never expose paid MSIX files as artifacts.
+# CLI 0.4.3 preserves round-trippable prices and refuses Base without an explicit tier.
 
 on:
   push:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      no_commit:
+        description: 'Stage a draft for review in Partner Center without submitting'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
 
 concurrency:
   group: store-package
   cancel-in-progress: false
 
 jobs:
-  package:
+  publish:
     runs-on: windows-2025
 
     steps:
+      - name: Check publishing credentials
+        shell: pwsh
+        env:
+          AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+          SELLER_ID: ${{ secrets.SELLER_ID }}
+          AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+          AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+        run: |
+          foreach ($name in @('AZURE_AD_TENANT_ID', 'SELLER_ID', 'AZURE_AD_APPLICATION_CLIENT_ID', 'AZURE_AD_APPLICATION_SECRET')) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "Missing GitHub Actions secret: $name"
+            }
+          }
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -81,15 +61,58 @@ jobs:
             Write-Host "::endgroup::"
           }
 
-      # No upload-artifact step, by design — see this workflow's header. Public-repo
-      # artifacts are downloadable by anyone, and these are the Store build of a paid app.
-      - name: Verify packaging output
+      # Keep paid Store packages on this runner; never upload public Actions artifacts.
+      - name: Bundle Store packages
         shell: pwsh
         run: |
-          $out = "$env:GITHUB_WORKSPACE\LittleLauncherMSIX\bin\msix-output"
-          $msix = @(Get-ChildItem "$out\LittleLauncher-*.msix" -ErrorAction SilentlyContinue)
-          if ($msix.Count -lt 2) { throw "Expected 2 .msix files, found $($msix.Count)" }
-          foreach ($m in $msix) {
-            "{0,-32} {1,8:N1} MB" -f $m.Name, ($m.Length / 1MB) | Write-Host
+          [xml]$props = Get-Content "$env:GITHUB_WORKSPACE/Directory.Build.props"
+          $version = $props.SelectSingleNode("//Version").InnerText
+          $out = "$env:GITHUB_WORKSPACE/LittleLauncherMSIX/bin/msix-output"
+          $packages = @('x64', 'ARM64') | ForEach-Object {
+            $path = Join-Path $out "LittleLauncher-$version-$_.msix"
+            if (!(Test-Path -LiteralPath $path)) { throw "Missing Store package: $path" }
+            $path
           }
-          Write-Host "::notice title=Store packaging OK::Both architectures packaged. Build locally with build-msix.ps1 -NoSign and upload the two .msix files in Partner Center; nothing is published from CI."
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $upload = [IO.Compression.ZipFile]::Open("$out/LittleLauncher.msixupload", [IO.Compression.ZipArchiveMode]::Create)
+          try {
+            foreach ($path in $packages) {
+              [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($upload, $path, [IO.Path]::GetFileName($path)) | Out-Null
+            }
+          } finally {
+            $upload.Dispose()
+          }
+
+      - name: Setup Microsoft Store CLI
+        uses: microsoft/microsoft-store-apppublisher@v1.1
+        with:
+          version: 'v0.4.3'
+
+      - name: Configure Store credentials
+        shell: pwsh
+        env:
+          AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+          SELLER_ID: ${{ secrets.SELLER_ID }}
+          AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+          AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+        run: |
+          msstore reconfigure --tenantId "$env:AZURE_AD_TENANT_ID" --sellerId "$env:SELLER_ID" --clientId "$env:AZURE_AD_APPLICATION_CLIENT_ID" --clientSecret "$env:AZURE_AD_APPLICATION_SECRET"
+          if ($LASTEXITCODE -ne 0) { throw "Store authentication configuration failed (exit $LASTEXITCODE)" }
+
+      - name: Publish to Microsoft Store
+        shell: pwsh
+        env:
+          NO_COMMIT: ${{ github.event_name == 'workflow_dispatch' && inputs.no_commit }}
+        run: |
+          $publishArgs = @('publish', "$env:GITHUB_WORKSPACE/LittleLauncherMSIX/bin/msix-output/LittleLauncher.msixupload", '-id', '9P3ZZBDQ6PJF')
+          if ($env:NO_COMMIT -eq 'true') { $publishArgs += '--noCommit' }
+          # Preserve existing pricing. If the API returns Base, stop rather than force a tier.
+          & msstore @publishArgs
+          if ($LASTEXITCODE -ne 0) {
+            throw "Store publishing failed (exit $LASTEXITCODE). If pricing is Base, use Partner Center; do not guess a priceId."
+          }
+          if ($env:NO_COMMIT -eq 'true') {
+            'Store draft uploaded. Review pricing and packages in Partner Center before committing.' >> $env:GITHUB_STEP_SUMMARY
+          } else {
+            'Store submission committed. Publication depends on Microsoft certification and the submission publishing settings.' >> $env:GITHUB_STEP_SUMMARY
+          }

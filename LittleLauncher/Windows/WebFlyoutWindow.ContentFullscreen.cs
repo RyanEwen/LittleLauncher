@@ -16,6 +16,9 @@ public sealed partial class WebFlyoutWindow
 
     // A page being fullscreen-enabled says nothing about whether it contains media.
     // Only offer a target that is visible in the viewport and supports the standard API.
+    // Custom players own their own fullscreen transition and controls. Invoking the Fullscreen
+    // API on one of their internal elements can hide or break those controls. Offer this action
+    // only for a video with native controls; custom players keep their own fullscreen button.
     // Cross-origin frames and closed shadow roots intentionally remain the site's responsibility.
     private const string FullscreenVideoTargetScript = """
         (() => {
@@ -27,7 +30,8 @@ public sealed partial class WebFlyoutWindow
                     Math.max(0, Math.min(r.bottom, innerHeight) - Math.max(r.top, 0));
             };
             return [...document.querySelectorAll('video')]
-                .filter(video => typeof video.requestFullscreen === 'function' && visibleArea(video) > 0)
+                .filter(video => video.controls && typeof video.requestFullscreen === 'function' &&
+                    visibleArea(video) > 0)
                 .sort((a, b) => visibleArea(b) - visibleArea(a))[0] ?? null;
         })()
         """;
