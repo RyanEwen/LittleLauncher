@@ -19,7 +19,7 @@ $token = Invoke-RestMethod -Method Post -Uri "https://login.microsoftonline.com/
 }
 $headers = @{ Authorization = "Bearer $($token.access_token)" }
 $app = Invoke-RestMethod -Uri $api -Headers $headers
-if ($app.pendingApplicationSubmission.id -ne $SubmissionId) {
+if (!$InspectOnly -and $app.pendingApplicationSubmission.id -ne $SubmissionId) {
     throw 'The requested submission is not the current pending submission.'
 }
 $uri = "$api/submissions/$SubmissionId"
