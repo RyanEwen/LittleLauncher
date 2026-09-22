@@ -236,6 +236,13 @@ override can replace per-market prices with one tier, so the workflow does not s
 Resolve that case in Partner Center or agree on a verified tier and pricing migration before
 changing CI. See [Microsoft PR #175](https://github.com/microsoft/msstore-cli/pull/175).
 
+The first live test, [v1.40.2 on September 22, 2026](https://github.com/RyanEwen/LittleLauncher/actions/runs/35759458540),
+built both packages and authenticated successfully. The CLI created a draft, retrieved it,
+and stopped because the API returned `Base`. No package update was committed and pricing
+was left unchanged. Paid-app support in v0.4.3 therefore does not unblock this product's
+current per-market pricing configuration. Complete the draft in Partner Center, or agree on
+a verified price-tier migration before enabling an override.
+
 Manual dispatch defaults `no_commit` to true, uploading a draft without submitting it.
 Use that first to verify credentials, both architectures and pricing in Partner Center.
 Tag pushes and manual runs with `no_commit` disabled commit the submission; certification
