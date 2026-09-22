@@ -244,6 +244,13 @@ was left unchanged. Paid-app support in v0.4.3 therefore does not unblock this p
 current per-market pricing configuration. The CLI attempts to delete its temporary draft
 on this pricing failure. Do not assume that failed run left a draft available.
 
+The [Tier2 draft test](https://github.com/RyanEwen/LittleLauncher/actions/runs/35764157124)
+passed the CLI pricing guard but the API rejected the update: `The size of Features must be
+20 or less`. The English listing contained 21 feature entries. Submission 42 remains an
+unchanged draft with the old packages; Tier2 pricing has not been accepted or verified.
+The workflow checks for pending submissions before invoking the CLI, so a retry stops rather
+than deleting this draft. Resolve the feature count and draft deliberately before retrying.
+
 Manual dispatch defaults `no_commit` to true, uploading a draft without submitting it.
 Use that first to verify credentials, both architectures and pricing in Partner Center.
 Tag pushes and manual runs with `no_commit` disabled commit the submission; certification
