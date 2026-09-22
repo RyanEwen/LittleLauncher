@@ -357,17 +357,19 @@ No publication occurred. Use Partner Center for a manual release or obtain a sup
 price identifier from Microsoft before another API pricing attempt.
 
 
-Use the inspect_only option of store-review.yml to read the submission's
-isAdvancedPricingModel flag without changing it. Microsoft documents Tier1012-Tier1424
-for advanced pricing and Tier2-Tier96 for the original model. The Partner Center
-price-tier table is needed to map a tier ID to US .99 and compare regional prices.
+Use the inspect_only option of store-review.yml to read the submission's pricing
+fields without changing it. Microsoft documents Tier1012-Tier1424 for advanced
+pricing and Tier2-Tier96 for the original model, but the msstore-cli maintainers
+measured the isAdvancedPricingModel flag flipping after a PUT and both ranges being
+accepted on the same product. Do not select a tier based on this flag. The Partner
+Center price-tier table is needed to map a tier ID to US $0.99 and compare regional prices.
 
 
 Read-only API inspections (Actions runs 35783439136 and 35783542100) showed that
 the published submission has priceId Base with isAdvancedPricingModel true, whereas
-the failed Tier2 draft reports isAdvancedPricingModel false. The live app therefore uses
-the advanced tier range. Microsoft documents Tier1012-Tier1424 for that range, but
-the exact ID for US .99 was not verified. The current Partner Center 'view
+the failed Tier2 draft reports isAdvancedPricingModel false. The differing flags
+do not establish a valid tier range for this app. The exact ID for US $0.99 was not
+verified. The current Partner Center 'view
 conversion table' link failed to load for both live and draft submissions. Do not
 substitute a tier until its USD and regional values are confirmed in the account table
 or by Microsoft support.
