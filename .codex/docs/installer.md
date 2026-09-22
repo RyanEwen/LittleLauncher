@@ -232,7 +232,8 @@ product `9P3ZZBDQ6PJF`. No Store package is uploaded as a public Actions artifac
 The workflow pins [Microsoft Store CLI v0.4.3](https://github.com/microsoft/msstore-cli/releases/tag/v0.4.3).
 It preserves existing round-trippable pricing. Little Launcher has used Pricing Version 2;
 if the API returns `PriceId: "Base"`, publishing still stops safely. The CLI's `--priceId`
-override can replace per-market prices with one tier, so the workflow does not supply one.
+override can replace per-market prices with one tier. The optional manual `price_id` input
+allows testing a tier only when `no_commit` is true; tag runs never supply an override.
 Resolve that case in Partner Center or agree on a verified tier and pricing migration before
 changing CI. See [Microsoft PR #175](https://github.com/microsoft/msstore-cli/pull/175).
 
@@ -240,8 +241,8 @@ The first live test, [v1.40.2 on September 22, 2026](https://github.com/RyanEwen
 built both packages and authenticated successfully. The CLI created a draft, retrieved it,
 and stopped because the API returned `Base`. No package update was committed and pricing
 was left unchanged. Paid-app support in v0.4.3 therefore does not unblock this product's
-current per-market pricing configuration. Complete the draft in Partner Center, or agree on
-a verified price-tier migration before enabling an override.
+current per-market pricing configuration. The CLI attempts to delete its temporary draft
+on this pricing failure. Do not assume that failed run left a draft available.
 
 Manual dispatch defaults `no_commit` to true, uploading a draft without submitting it.
 Use that first to verify credentials, both architectures and pricing in Partner Center.

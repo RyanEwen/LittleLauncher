@@ -14,6 +14,10 @@ on:
         description: 'Stage a draft for review in Partner Center without submitting'
         type: boolean
         default: true
+      price_id:
+        description: 'Optional price tier to test in a draft (for example Tier2)'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -98,15 +102,33 @@ jobs:
         run: |
           msstore reconfigure --tenantId "$env:AZURE_AD_TENANT_ID" --sellerId "$env:SELLER_ID" --clientId "$env:AZURE_AD_APPLICATION_CLIENT_ID" --clientSecret "$env:AZURE_AD_APPLICATION_SECRET"
           if ($LASTEXITCODE -ne 0) { throw "Store authentication configuration failed (exit $LASTEXITCODE)" }
+          # The CLI deletes pending submissions before publishing. Preserve any existing draft.
+          $token = Invoke-RestMethod -Method Post -Uri "https://login.microsoftonline.com/$env:AZURE_AD_TENANT_ID/oauth2/token" -Body @{
+            grant_type = 'client_credentials'
+            client_id = $env:AZURE_AD_APPLICATION_CLIENT_ID
+            client_secret = $env:AZURE_AD_APPLICATION_SECRET
+            resource = 'https://manage.devcenter.microsoft.com'
+          }
+          $app = Invoke-RestMethod -Uri 'https://manage.devcenter.microsoft.com/v1.0/my/applications/9P3ZZBDQ6PJF' -Headers @{ Authorization = "Bearer $($token.access_token)" }
+          if ($null -ne $app.pendingApplicationSubmission) {
+            throw 'An existing Store submission is pending. Review it in Partner Center before starting another run.'
+          }
+
 
       - name: Publish to Microsoft Store
         shell: pwsh
         env:
           NO_COMMIT: ${{ github.event_name == 'workflow_dispatch' && inputs.no_commit }}
+          PRICE_ID: ${{ inputs.price_id }}
         run: |
           $publishArgs = @('publish', "$env:GITHUB_WORKSPACE/LittleLauncherMSIX/bin/msix-output/LittleLauncher.msixupload", '-id', '9P3ZZBDQ6PJF')
           if ($env:NO_COMMIT -eq 'true') { $publishArgs += '--noCommit' }
-          # Preserve existing pricing. If the API returns Base, stop rather than force a tier.
+          # An explicit tier is only permitted in a draft until its prices are reviewed.
+          if (![string]::IsNullOrWhiteSpace($env:PRICE_ID)) {
+            if ($env:NO_COMMIT -ne 'true') { throw 'Price overrides require a draft run.' }
+            if ($env:PRICE_ID -notmatch '^Tier[0-9]+$') { throw 'Expected a price ID such as Tier2.' }
+            $publishArgs += @('--priceId', $env:PRICE_ID)
+          }
           & msstore @publishArgs
           if ($LASTEXITCODE -ne 0) {
             throw "Store publishing failed (exit $LASTEXITCODE). If pricing is Base, use Partner Center; do not guess a priceId."
