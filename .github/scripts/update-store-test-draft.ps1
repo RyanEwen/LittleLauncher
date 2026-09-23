@@ -47,18 +47,19 @@ foreach ($language in $draft.listings.PSObject.Properties) {
 }
 $draft.pricing.priceId = $PriceId
 
-# Match the bundle's two filenames exactly; do not carry old pending uploads forward.
+# The upload contains one real MSIX bundle with both architectures.
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zip = [IO.Compression.ZipFile]::OpenRead($UploadPath)
 try { $names = @($zip.Entries | ForEach-Object FullName) }
 finally { $zip.Dispose() }
-if ($names.Count -ne 2 -or @($names | Where-Object { $_ -notmatch '^LittleLauncher-[0-9.]+-(x64|ARM64)\.msix$' }).Count) {
-    throw 'Expected exactly the two versioned Store packages in the upload.'
+if ($names.Count -ne 1 -or $names[0] -notmatch '^LittleLauncher-[0-9.]+\.msixbundle$') {
+    throw 'Expected exactly one versioned MSIX bundle in the upload.'
 }
 $oldPackages = @($draft.applicationPackages | Where-Object { $_.fileStatus -ne 'PendingUpload' })
 foreach ($package in $oldPackages) { $package.fileStatus = 'PendingDelete' }
-$draft.applicationPackages = @($oldPackages) + @($names | ForEach-Object {
-    @{ fileName = $_; fileStatus = 'PendingUpload' }
+$draft.applicationPackages = @($oldPackages) + @(@{
+    fileName = [IO.Path]::GetFileName($UploadPath)
+    fileStatus = 'PendingUpload'
 })
 $updated = Invoke-RestMethod -Method Put -Uri $uri -Headers $headers -ContentType 'application/json' -Body ($draft | ConvertTo-Json -Depth 100)
 # Upload to the Store-provided SAS URL without printing credentials or the URL.
@@ -67,5 +68,5 @@ try {
 } catch { throw 'Store package upload failed. Inspect the pending draft before retrying.' }
 $verified = Invoke-RestMethod -Uri $uri -Headers $headers
 Write-Output "Draft $SubmissionId updated, NOT committed. PriceId: $($verified.pricing.priceId); English features: $(@($verified.listings.'en-us'.baseListing.features).Count)."
-Write-Output "Packages uploaded: $($names -join ', ')"
+Write-Output "Bundle uploaded: $($names[0])"
 if ($verified.pricing.priceId -ne $PriceId) { throw 'The Store did not retain the requested tier in its response.' }

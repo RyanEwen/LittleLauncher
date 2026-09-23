@@ -226,8 +226,11 @@ in the Action Center.
 
 `build-msix.yml` publishes portable ZIPs and the GitHub Release on `v*` tags.
 `store-publish.yml` builds unsigned x64 and ARM64 MSIX packages on one runner,
-zips them into `LittleLauncher.msixupload`, and submits directly to Partner Center for
+combines them with MakeAppx into one architecture-aware `.msixbundle`, wraps it in
+`LittleLauncher-{version}.msixupload`, and submits it to Partner Center for
 product `9P3ZZBDQ6PJF`. No Store package is uploaded as a public Actions artifact.
+Do not replace the bundle with a ZIP of two loose MSIX files: Partner Center
+ingested that shape as an x64-only update for the other Store apps.
 
 The workflow pins [Microsoft Store CLI v0.4.3](https://github.com/microsoft/msstore-cli/releases/tag/v0.4.3).
 The published submission reports `PriceId: "Base"`, which the CLI cannot round-trip.
@@ -240,8 +243,8 @@ CLI would otherwise delete an existing draft. See [Microsoft PR #175](https://gi
 The first live test, [v1.40.2 on September 22, 2026](https://github.com/RyanEwen/LittleLauncher/actions/runs/35759458540),
 built both packages and authenticated successfully. The CLI created a draft, retrieved it,
 and stopped because the API returned `Base`. No package update was committed and pricing
-was left unchanged. Paid-app support in v0.4.3 therefore does not unblock this product's
-current per-market pricing configuration. The CLI attempts to delete its temporary draft
+was left unchanged. Tier1012 was subsequently verified and accepted, with the
+regional price changes recorded below. The CLI attempts to delete its temporary draft
 on this pricing failure. Do not assume that failed run left a draft available.
 
 The initial Tier2 test hit the listing's 20-feature limit; a corrected draft then
@@ -261,7 +264,7 @@ and `SELLER_ID`. Presence does not verify expiry or the app registration's Manag
 
 For manual fallback, build both architectures with `build-msix.ps1 -Platform x64 -NoSign`
 and `-Platform ARM64 -NoSign`, then upload the individual `.msix` files in Partner Center.
-Do not upload the `.msixupload` container through the web UI.
+The workflow-generated `.msixupload` is also valid because it contains a real MSIX bundle.
 
 ## Runbook: creating the Store publishing credentials
 

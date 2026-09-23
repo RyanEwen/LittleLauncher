@@ -81,20 +81,7 @@ jobs:
           [xml]$props = Get-Content "$env:GITHUB_WORKSPACE/Directory.Build.props"
           $version = $props.SelectSingleNode("//Version").InnerText
           $out = "$env:GITHUB_WORKSPACE/LittleLauncherMSIX/bin/msix-output"
-          $packages = @('x64', 'ARM64') | ForEach-Object {
-            $path = Join-Path $out "LittleLauncher-$version-$_.msix"
-            if (!(Test-Path -LiteralPath $path)) { throw "Missing Store package: $path" }
-            $path
-          }
-          Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $upload = [IO.Compression.ZipFile]::Open("$out/LittleLauncher.msixupload", [IO.Compression.ZipArchiveMode]::Create)
-          try {
-            foreach ($path in $packages) {
-              [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($upload, $path, [IO.Path]::GetFileName($path)) | Out-Null
-            }
-          } finally {
-            $upload.Dispose()
-          }
+          & "$env:GITHUB_WORKSPACE/.github/scripts/build-store-upload.ps1" -AppName LittleLauncher -OutputDirectory $out -Version $version
 
       - name: Setup Microsoft Store CLI
         uses: microsoft/microsoft-store-apppublisher@v1.1
@@ -132,7 +119,9 @@ jobs:
           NO_COMMIT: ${{ github.event_name == 'workflow_dispatch' && inputs.no_commit }}
           PRICE_ID: ${{ inputs.price_id || 'Tier1012' }}
         run: |
-          $publishArgs = @('publish', "$env:GITHUB_WORKSPACE/LittleLauncherMSIX/bin/msix-output/LittleLauncher.msixupload", '-id', '9P3ZZBDQ6PJF')
+          [xml]$props = Get-Content "$env:GITHUB_WORKSPACE/Directory.Build.props"
+          $version = $props.SelectSingleNode("//Version").InnerText
+          $publishArgs = @('publish', "$env:GITHUB_WORKSPACE/LittleLauncherMSIX/bin/msix-output/LittleLauncher-$version.msixupload", '-id', '9P3ZZBDQ6PJF')
           if ($env:NO_COMMIT -eq 'true') { $publishArgs += '--noCommit' }
           # Tier1012 was accepted by API ingestion and its regional prices were reviewed.
           if (![string]::IsNullOrWhiteSpace($env:PRICE_ID)) {
@@ -166,7 +155,9 @@ jobs:
         run: |
           if ($env:NO_COMMIT -ne 'true') { throw 'Updating a test draft requires no_commit.' }
           if ($env:FAILED_DRAFT_TO_REPLACE) { throw 'Choose either existing_draft or failed_draft_to_replace.' }
-          & ./.github/scripts/update-store-test-draft.ps1 -SubmissionId $env:SUBMISSION_ID -PriceId $env:PRICE_ID -UploadPath "$env:GITHUB_WORKSPACE/LittleLauncherMSIX/bin/msix-output/LittleLauncher.msixupload"
+          [xml]$props = Get-Content "$env:GITHUB_WORKSPACE/Directory.Build.props"
+          $version = $props.SelectSingleNode("//Version").InnerText
+          & ./.github/scripts/update-store-test-draft.ps1 -SubmissionId $env:SUBMISSION_ID -PriceId $env:PRICE_ID -UploadPath "$env:GITHUB_WORKSPACE/LittleLauncherMSIX/bin/msix-output/LittleLauncher-$version.msixupload"
 
       - name: Replace the failed Tier2 test draft
         if: inputs.failed_draft_to_replace != ''
@@ -182,4 +173,6 @@ jobs:
         run: |
           if ($env:NO_COMMIT -ne 'true') { throw 'Replacing a test draft requires no_commit.' }
           if ($env:EXISTING_DRAFT) { throw 'Choose either existing_draft or failed_draft_to_replace.' }
-          & ./.github/scripts/replace-failed-store-test-draft.ps1 -FailedSubmissionId $env:FAILED_SUBMISSION_ID -PriceId $env:PRICE_ID -UploadPath "$env:GITHUB_WORKSPACE/LittleLauncherMSIX/bin/msix-output/LittleLauncher.msixupload"
+          [xml]$props = Get-Content "$env:GITHUB_WORKSPACE/Directory.Build.props"
+          $version = $props.SelectSingleNode("//Version").InnerText
+          & ./.github/scripts/replace-failed-store-test-draft.ps1 -FailedSubmissionId $env:FAILED_SUBMISSION_ID -PriceId $env:PRICE_ID -UploadPath "$env:GITHUB_WORKSPACE/LittleLauncherMSIX/bin/msix-output/LittleLauncher-$version.msixupload"
