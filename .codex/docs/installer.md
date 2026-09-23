@@ -244,12 +244,11 @@ was left unchanged. Paid-app support in v0.4.3 therefore does not unblock this p
 current per-market pricing configuration. The CLI attempts to delete its temporary draft
 on this pricing failure. Do not assume that failed run left a draft available.
 
-The [Tier2 draft test](https://github.com/RyanEwen/LittleLauncher/actions/runs/35764157124)
-passed the CLI pricing guard but the API rejected the update: `The size of Features must be
-20 or less`. The English listing contained 21 feature entries. Submission 42 remains an
-unchanged draft with the old packages; Tier2 pricing has not been accepted or verified.
-The workflow checks for pending submissions before invoking the CLI, so a retry stops rather
-than deleting this draft. Resolve the feature count and draft deliberately before retrying.
+The initial Tier2 test hit the listing's 20-feature limit; a corrected draft then
+passed upload validation but failed API commit ingestion with `Price Tier is not
+supported`. That failed draft was deleted and replaced by a Tier1012 submission.
+The workflow checks for pending submissions before invoking the CLI, so a retry
+cannot silently overwrite an existing draft or in-flight submission.
 
 Manual dispatch defaults `no_commit` to true, uploading a draft without submitting it.
 Use that first to verify credentials, both architectures and pricing in Partner Center.
@@ -333,11 +332,10 @@ and uploads the bundle. It never creates, deletes, or commits submissions. Revie
 regional prices and packages in Partner Center before any separate submission decision.
 
 
-The September 22 draft retry (Actions run 35766179842) succeeded: the API returned Tier2
-and 20 English features, and both 1.40.2 packages uploaded. The portal still showed the
-previous packages and unchanged prices in all 240 markets. This is not verification of
-Tier2's effective prices: Microsoft documents that submission changes appear after API
-commit ingestion. Keep this draft uncommitted until the publication decision is approved.
+The September 22 Tier2 draft retry (Actions run 35766179842) uploaded both 1.40.2
+packages and reduced the English features to 20. It failed at API commit ingestion
+and has since been replaced. Draft prices shown before ingestion did not establish
+effective regional pricing.
 
 
 ### Committing with publication held
@@ -349,12 +347,11 @@ commit reads status without committing again. Inspect ingested prices and packag
 separately authorizing publication.
 
 
-The approved held commit was attempted in Actions run 35767396785. Microsoft confirmed
+The earlier Tier2 held commit was attempted in Actions run 35767396785. Microsoft confirmed
 targetPublishMode Manual and accepted the commit request, then returned CommitFailed with
 InvalidOperation: Price Tier is not supported. Tier2 is therefore NOT a verified usable
 price for this app; accepting the initial PUT did not establish ingestion compatibility.
-No publication occurred. Use Partner Center for a manual release or obtain a supported
-price identifier from Microsoft before another API pricing attempt.
+No publication occurred from that attempt.
 
 
 Use the inspect_only option of store-review.yml to read the submission's pricing
@@ -362,27 +359,27 @@ fields without changing it. Microsoft documents Tier1012-Tier1424 for advanced
 pricing and Tier2-Tier96 for the original model, but the msstore-cli maintainers
 measured the isAdvancedPricingModel flag flipping after a PUT and both ranges being
 accepted on the same product. Do not select a tier based on this flag. The Partner
-Center price-tier table is needed to map a tier ID to US $0.99 and compare regional prices.
+Center price-tier table or a Microsoft maintainer's mapping is needed to identify a
+US price; regional prices still require review in Partner Center.
 
 
 Read-only API inspections (Actions runs 35783439136 and 35783542100) showed that
 the published submission has priceId Base with isAdvancedPricingModel true, whereas
 the failed Tier2 draft reports isAdvancedPricingModel false. The differing flags
-do not establish a valid tier range for this app. The exact ID for US $0.99 was not
-verified. The current Partner Center 'view
-conversion table' link failed to load for both live and draft submissions. Do not
-substitute a tier until its USD and regional values are confirmed in the account table
-or by Microsoft support.
+do not establish a valid tier range for this app. The current Partner Center
+'view conversion table' link failed to load for both live and draft submissions.
 
 On September 23, 2026, a Microsoft maintainer clarified in
 [PR #175](https://github.com/microsoft/msstore-cli/pull/175#issuecomment-5791491206)
 that Tier1012 is US $0.99. The reply lists the US price ranges and increments for
-the current Tier1012-Tier1424 sequence. This establishes the US mapping, but does
-not establish that its converted prices match all 240 existing market prices.
-To test it, dispatch store-publish.yml with no_commit true, price_id Tier1012,
-and failed_draft_to_replace set to the exact failed Tier2 submission ID. This
-removes only that failed submission, clones the live one, combines the approved
-feature pair, and uploads both release packages. Then use store-review.yml to
-commit with targetPublishMode Manual, and compare the ingested regional prices
-before any release.
+the current Tier1012-Tier1424 sequence. The
+[replacement draft run](https://github.com/RyanEwen/LittleLauncher/actions/runs/35877319754)
+used Tier1012, 20 English features, and both 1.40.2 packages. The
+[held commit run](https://github.com/RyanEwen/LittleLauncher/actions/runs/35878083671)
+passed price-tier ingestion and entered `PreProcessing` with `targetPublishMode:
+Manual`. Partner Center showed the update in certification, and says it will
+publish only after **Publish now** is selected. The U.S. price remains $0.99,
+but **36 of 240 market prices changed** compared with published Submission 41.
+See the [complete regional comparison](store-pricing-comparison-2026-09-23.md).
+Do not publish Submission 42 without a decision on those price changes.
 
