@@ -383,10 +383,11 @@ the current Tier1012-Tier1424 sequence. The
 used Tier1012, 20 English features, and both 1.40.2 packages. The
 [held commit run](https://github.com/RyanEwen/LittleLauncher/actions/runs/35878083671)
 passed price-tier ingestion and entered `PreProcessing` with `targetPublishMode:
-Manual`. Partner Center showed the update in certification, and says it will
-publish only after **Publish now** is selected. The U.S. price remains $0.99,
+Manual`. After the user accepted the regional price changes, Partner Center's
+publishing option was changed to publish as soon as certification passes.
+Submission 42 is in certification. The U.S. price remains $0.99,
 but **36 of 240 market prices changed** compared with published Submission 41.
 See the [complete regional comparison](store-pricing-comparison-2026-09-23.md).
 The user accepted those regional price changes on September 23, 2026.
-Submission 42 still needs certification to finish before manual publication.
+Submission 42 will publish automatically if it passes certification.
 
