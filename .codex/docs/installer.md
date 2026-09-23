@@ -226,9 +226,12 @@ in the Action Center.
 
 `build-msix.yml` publishes portable ZIPs and the GitHub Release on `v*` tags.
 `store-publish.yml` builds unsigned x64 and ARM64 MSIX packages on one runner,
-combines them with MakeAppx into one architecture-aware `.msixbundle`, wraps it in
+combines them with MakeAppx into one architecture-aware `.msixbundle` stamped with
+the app version, wraps it in
 `LittleLauncher-{version}.msixupload`, and submits it to Partner Center for
 product `9P3ZZBDQ6PJF`. No Store package is uploaded as a public Actions artifact.
+MakeAppx defaults to a date-based bundle version unless `/bv` is supplied; that
+could outrank the next app version and block normal Store updates.
 Do not replace the bundle with a ZIP of two loose MSIX files: Partner Center
 ingested that shape as an x64-only update for the other Store apps.
 
