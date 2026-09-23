@@ -374,3 +374,15 @@ conversion table' link failed to load for both live and draft submissions. Do no
 substitute a tier until its USD and regional values are confirmed in the account table
 or by Microsoft support.
 
+On September 23, 2026, a Microsoft maintainer clarified in
+[PR #175](https://github.com/microsoft/msstore-cli/pull/175#issuecomment-5791491206)
+that Tier1012 is US $0.99. The reply lists the US price ranges and increments for
+the current Tier1012-Tier1424 sequence. This establishes the US mapping, but does
+not establish that its converted prices match all 240 existing market prices.
+To test it, dispatch store-publish.yml with no_commit true, price_id Tier1012,
+and failed_draft_to_replace set to the exact failed Tier2 submission ID. This
+removes only that failed submission, clones the live one, combines the approved
+feature pair, and uploads both release packages. Then use store-review.yml to
+commit with targetPublishMode Manual, and compare the ingested regional prices
+before any release.
+

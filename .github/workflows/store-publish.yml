@@ -23,6 +23,10 @@ on:
         description: 'Existing API draft ID to repair and upload without committing'
         type: string
         default: ''
+      failed_draft_to_replace:
+        description: 'Exact failed Tier2 test draft ID to replace with a new draft'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -98,7 +102,7 @@ jobs:
           version: 'v0.4.3'
 
       - name: Configure Store credentials
-        if: inputs.existing_draft == ''
+        if: inputs.existing_draft == '' && inputs.failed_draft_to_replace == ''
         shell: pwsh
         env:
           AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
@@ -122,7 +126,7 @@ jobs:
 
 
       - name: Publish to Microsoft Store
-        if: inputs.existing_draft == ''
+        if: inputs.existing_draft == '' && inputs.failed_draft_to_replace == ''
         shell: pwsh
         env:
           NO_COMMIT: ${{ github.event_name == 'workflow_dispatch' && inputs.no_commit }}
@@ -153,9 +157,27 @@ jobs:
           SUBMISSION_ID: ${{ inputs.existing_draft }}
           PRICE_ID: ${{ inputs.price_id }}
           NO_COMMIT: ${{ inputs.no_commit }}
+          FAILED_DRAFT_TO_REPLACE: ${{ inputs.failed_draft_to_replace }}
           AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
           AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
           AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
         run: |
           if ($env:NO_COMMIT -ne 'true') { throw 'Updating a test draft requires no_commit.' }
+          if ($env:FAILED_DRAFT_TO_REPLACE) { throw 'Choose either existing_draft or failed_draft_to_replace.' }
           & ./.github/scripts/update-store-test-draft.ps1 -SubmissionId $env:SUBMISSION_ID -PriceId $env:PRICE_ID -UploadPath "$env:GITHUB_WORKSPACE/LittleLauncherMSIX/bin/msix-output/LittleLauncher.msixupload"
+
+      - name: Replace the failed Tier2 test draft
+        if: inputs.failed_draft_to_replace != ''
+        shell: pwsh
+        env:
+          FAILED_SUBMISSION_ID: ${{ inputs.failed_draft_to_replace }}
+          EXISTING_DRAFT: ${{ inputs.existing_draft }}
+          PRICE_ID: ${{ inputs.price_id }}
+          NO_COMMIT: ${{ inputs.no_commit }}
+          AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+          AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+          AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+        run: |
+          if ($env:NO_COMMIT -ne 'true') { throw 'Replacing a test draft requires no_commit.' }
+          if ($env:EXISTING_DRAFT) { throw 'Choose either existing_draft or failed_draft_to_replace.' }
+          & ./.github/scripts/replace-failed-store-test-draft.ps1 -FailedSubmissionId $env:FAILED_SUBMISSION_ID -PriceId $env:PRICE_ID -UploadPath "$env:GITHUB_WORKSPACE/LittleLauncherMSIX/bin/msix-output/LittleLauncher.msixupload"
