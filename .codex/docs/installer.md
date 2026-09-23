@@ -230,12 +230,12 @@ zips them into `LittleLauncher.msixupload`, and submits directly to Partner Cent
 product `9P3ZZBDQ6PJF`. No Store package is uploaded as a public Actions artifact.
 
 The workflow pins [Microsoft Store CLI v0.4.3](https://github.com/microsoft/msstore-cli/releases/tag/v0.4.3).
-It preserves existing round-trippable pricing. Little Launcher has used Pricing Version 2;
-if the API returns `PriceId: "Base"`, publishing still stops safely. The CLI's `--priceId`
-override can replace per-market prices with one tier. The optional manual `price_id` input
-allows testing a tier only when `no_commit` is true; tag runs never supply an override.
-Resolve that case in Partner Center or agree on a verified tier and pricing migration before
-changing CI. See [Microsoft PR #175](https://github.com/microsoft/msstore-cli/pull/175).
+The published submission reports `PriceId: "Base"`, which the CLI cannot round-trip.
+Tag runs now supply `Tier1012`, the verified US $0.99 tier, and may change converted
+prices in other markets. The user accepted the initial 36-market comparison below.
+Manual runs default to a draft; a different `price_id` can only be tested in a draft.
+The workflow checks for a pending submission before invoking the CLI, because the
+CLI would otherwise delete an existing draft. See [Microsoft PR #175](https://github.com/microsoft/msstore-cli/pull/175).
 
 The first live test, [v1.40.2 on September 22, 2026](https://github.com/RyanEwen/LittleLauncher/actions/runs/35759458540),
 built both packages and authenticated successfully. The CLI created a draft, retrieved it,
@@ -320,7 +320,7 @@ settings). Copy **Seller ID** / **Publisher ID** → `SELLER_ID`.
 
 **Step 6: validate a draft.** Manually dispatch `store-publish.yml` with `no_commit` enabled,
 then inspect the draft's packages and pricing in Partner Center before committing it.
-If the CLI reports `Base`, follow the pricing guidance above instead of forcing a tier.
+The workflow supplies Tier1012 by default; review the resulting regional prices.
 
 ### Repairing the existing pricing test draft
 
@@ -381,5 +381,6 @@ Manual`. Partner Center showed the update in certification, and says it will
 publish only after **Publish now** is selected. The U.S. price remains $0.99,
 but **36 of 240 market prices changed** compared with published Submission 41.
 See the [complete regional comparison](store-pricing-comparison-2026-09-23.md).
-Do not publish Submission 42 without a decision on those price changes.
+The user accepted those regional price changes on September 23, 2026.
+Submission 42 still needs certification to finish before manual publication.
 

@@ -1,8 +1,8 @@
 name: Publish to Microsoft Store
 
-# Tags submit both architectures directly to Partner Center with existing pricing.
+# Tags submit both architectures directly to Partner Center at the verified US $0.99 tier.
 # Manual runs default to draft-only review. Never expose paid MSIX files as artifacts.
-# CLI 0.4.3 preserves round-trippable prices and refuses Base without an explicit tier.
+# The published submission reports Base; CLI 0.4.3 needs Tier1012 for this product.
 
 on:
   push:
@@ -15,7 +15,7 @@ on:
         type: boolean
         default: true
       price_id:
-        description: 'Optional tier ID verified against this account pricing table'
+        description: 'Price tier (defaults to verified US $0.99 Tier1012)'
         type: string
         default: ''
 
@@ -130,14 +130,16 @@ jobs:
         shell: pwsh
         env:
           NO_COMMIT: ${{ github.event_name == 'workflow_dispatch' && inputs.no_commit }}
-          PRICE_ID: ${{ inputs.price_id }}
+          PRICE_ID: ${{ inputs.price_id || 'Tier1012' }}
         run: |
           $publishArgs = @('publish', "$env:GITHUB_WORKSPACE/LittleLauncherMSIX/bin/msix-output/LittleLauncher.msixupload", '-id', '9P3ZZBDQ6PJF')
           if ($env:NO_COMMIT -eq 'true') { $publishArgs += '--noCommit' }
-          # An explicit tier is only permitted in a draft until its prices are reviewed.
+          # Tier1012 was accepted by API ingestion and its regional prices were reviewed.
           if (![string]::IsNullOrWhiteSpace($env:PRICE_ID)) {
-            if ($env:NO_COMMIT -ne 'true') { throw 'Price overrides require a draft run.' }
             if ($env:PRICE_ID -notmatch '^Tier[0-9]+$') { throw 'Expected a numeric price tier ID.' }
+            if ($env:PRICE_ID -ne 'Tier1012' -and $env:NO_COMMIT -ne 'true') {
+              throw 'Unreviewed price tiers require a draft run.'
+            }
             $publishArgs += @('--priceId', $env:PRICE_ID)
           }
           & msstore @publishArgs

@@ -35,8 +35,8 @@ Pushing a tag matching `v*` triggers `.github/workflows/build-msix.yml` which:
 5. Attaches two artifacts: `LittleLauncher-{x64,ARM64}-portable.zip`
 
 The separate `store-publish.yml` builds both unsigned Store packages and submits them on the
-same tag using CLI v0.4.3. Manual runs default to draft review. Pricing that the API reports
-as `Base` still blocks submission safely; see [installer.md](installer.md).
+same tag using CLI v0.4.3 and the verified US $0.99 `Tier1012`. Manual runs default to draft
+review. See [installer.md](installer.md) for the regional price migration.
 
 Release-note filtering must succeed even when only version-bump commits remain, so the maintenance
 fallback can run. The workflow uses `awk` rather than `grep`, whose no-match exit status aborts Bash
